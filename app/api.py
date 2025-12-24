@@ -1,6 +1,6 @@
 """FastAPI backend with routes and WebSocket endpoint."""
 
-from fastapi import FastAPI, WebSocket, UploadFile, File, WebSocketDisconnect, Form
+from fastapi import FastAPI, WebSocket, UploadFile, File, WebSocketDisconnect, Form, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
 import shutil
@@ -22,10 +22,70 @@ app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
 alerts_path = Path(__file__).parent.parent / "alerts"
 app.mount("/alerts", StaticFiles(directory=str(alerts_path)), name="alerts")
 
-# Global state (simple for demo - would use proper state management in production)
+# Global state
 monitor = AttendanceMonitor()
 current_video_path = None
+active_connections = []
+current_background_task = None
+is_processing = False
+last_frame_data = None
 
+async def broadcast_update(data: dict):
+    """
+    Broadcast update to all connected clients.
+    """
+    global is_processing, last_frame_data
+    if "is_processing" in data:
+        is_processing = data["is_processing"]
+        
+    if data.get("type") == "frame_update":
+        last_frame_data = data
+        
+    disconnected = []
+    for connection in active_connections:
+        try:
+            await connection.send_json(data)
+        except Exception:
+            disconnected.append(connection)
+    
+    for connection in disconnected:
+        if connection in active_connections:
+            active_connections.remove(connection)
+
+async def _background_process_video(video_path: str):
+    """
+    Internal background task wrapper.
+    """
+    global is_processing, last_frame_data
+    is_processing = True
+    last_frame_data = None
+    processor = VideoProcessor(fps=5)
+    await processor.process_video(video_path, broadcast_update, monitor)
+    is_processing = False
+    last_frame_data = None
+
+@app.post("/api/start")
+async def start_processing(background_tasks: BackgroundTasks):
+    """
+    Start video processing in background.
+    """
+    global current_video_path, is_processing
+    
+    if current_video_path is None:
+        return {"status": "error", "message": "No video uploaded"}
+        
+    if not os.path.exists(current_video_path):
+        return {"status": "error", "message": "Video file not found"}
+        
+    if is_processing:
+        return {"status": "success", "message": "Already processing"}
+
+    background_tasks.add_task(_background_process_video, current_video_path)
+    
+    return {
+        "status": "success", 
+        "message": "Processing started in background"
+    }
 
 @app.get("/")
 async def root():
@@ -71,6 +131,7 @@ async def upload_video(file: UploadFile = File(...)):
 
 @app.post("/api/upload_chunk")
 async def upload_chunk(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     chunk_index: int = Form(...),
     total_chunks: int = Form(...),
@@ -92,12 +153,6 @@ async def upload_chunk(
     with open(chunk_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    # Check if all chunks are received
-    # This is a simple check. For production, we might want to track which chunks are received.
-    # Here we count files in temp dir.
-    # NOTE: This assumes sequential upload or at least all chunks arriving eventually.
-    # Ideally frontend sends sequential.
-    
     received_chunks = len(list(temp_dir.glob("chunk_*")))
     
     if received_chunks == total_chunks:
@@ -123,9 +178,12 @@ async def upload_chunk(
         current_video_path = str(final_path)
         print(f"Video fully uploaded: {final_path}")
         
+        # Auto-start processing
+        background_tasks.add_task(_background_process_video, current_video_path)
+        
         return {
             "status": "success",
-            "message": "Upload complete",
+            "message": "Upload complete, processing started",
             "video_path": str(final_path),
             "filename": filename
         }
@@ -169,7 +227,34 @@ async def get_status():
     return {
         "status": "success",
         **status,
-        "video_path": current_video_path
+        "video_path": current_video_path,
+        "is_processing": is_processing
+    }
+
+
+    return {
+        "status": "success",
+        **status,
+        "video_path": current_video_path,
+        "is_processing": is_processing
+    }
+
+
+@app.get("/api/alerts")
+async def get_alerts(limit: int = 50):
+    """
+    Get recent alerts.
+
+    Args:
+        limit: Max number of alerts to return
+
+    Returns:
+        List of recent alerts
+    """
+    alerts = monitor.get_recent_alerts(limit)
+    return {
+        "status": "success",
+        "alerts": alerts
     }
 
 
@@ -182,45 +267,39 @@ async def websocket_endpoint(websocket: WebSocket):
         websocket: WebSocket connection
     """
     await websocket.accept()
-
+    active_connections.append(websocket)
     print("WebSocket connection established")
 
-    if current_video_path is None:
-        await websocket.send_json({
-            "type": "error",
-            "message": "No video uploaded. Please upload a video first."
-        })
-        await websocket.close()
-        return
-
-    if not os.path.exists(current_video_path):
-        await websocket.send_json({
-            "type": "error",
-            "message": f"Video file not found: {current_video_path}"
-        })
-        await websocket.close()
-        return
-
-    # Create video processor
-    processor = VideoProcessor(fps=5)
-
     try:
-        # Process video and stream results
-        await processor.process_video(current_video_path, websocket, monitor)
+        if is_processing:
+             # Send processing status
+             await websocket.send_json({
+                "type": "status",
+                "message": "Processing in progress",
+                "is_processing": True
+            })
+             # Send last frame immediately if available
+             if last_frame_data:
+                 await websocket.send_json(last_frame_data)
+                 
+             # Send recent alerts
+             recent_alerts = monitor.get_recent_alerts(20)
+             for alert in reversed(recent_alerts): # Send oldest first to build log
+                 await websocket.send_json({
+                     "type": "alert",
+                     **alert
+                 })
+        
+        # Keep connection open
+        while True:
+            await websocket.receive_text()
+            
     except WebSocketDisconnect:
         print("WebSocket disconnected")
+        if websocket in active_connections:
+            active_connections.remove(websocket)
     except Exception as e:
         print(f"Error in WebSocket: {e}")
-        try:
-            await websocket.send_json({
-                "type": "error",
-                "message": f"Processing error: {str(e)}"
-            })
-        except:
-            pass
-    finally:
-        try:
-            await websocket.close()
-        except:
-            pass
-        print("WebSocket connection closed")
+        if websocket in active_connections:
+            active_connections.remove(websocket)
+

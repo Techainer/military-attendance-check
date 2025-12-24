@@ -3,7 +3,7 @@
 import cv2
 import base64
 import asyncio
-from fastapi import WebSocket
+
 import numpy as np
 
 from app.detector import PersonDetector
@@ -26,21 +26,21 @@ class VideoProcessor:
     async def process_video(
         self,
         video_path: str,
-        websocket: WebSocket,
+        on_update,
         monitor: AttendanceMonitor
     ) -> None:
         """
-        Process video file and stream results via WebSocket.
+        Process video file and stream results via callback.
 
         Args:
             video_path: Path to video file
-            websocket: WebSocket connection for sending updates
+            on_update: Async callback function for sending updates
             monitor: AttendanceMonitor instance
         """
         cap = cv2.VideoCapture(video_path)
 
         if not cap.isOpened():
-            await websocket.send_json({
+            await on_update({
                 'type': 'error',
                 'message': 'Failed to open video file'
             })
@@ -106,19 +106,20 @@ class VideoProcessor:
                 _, buffer = cv2.imencode('.jpg', display_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
                 frame_b64 = base64.b64encode(buffer).decode('utf-8')
 
-                # Send frame update to UI
-                await websocket.send_json({
+                # Send frame update
+                await on_update({
                     'type': 'frame_update',
                     'frame': frame_b64,
                     'count': detection['count'],
                     'boxes': detection['boxes'],
-                    'frame_number': frame_count
+                    'frame_number': frame_count,
+                    'is_processing': True
                 })
 
                 # Check for alerts
                 alert_result = monitor.update_count(detection['count'], frame)
                 if alert_result['alert_triggered']:
-                    await websocket.send_json({
+                    await on_update({
                         'type': 'alert',
                         **alert_result['alert_data']
                     })
@@ -128,14 +129,15 @@ class VideoProcessor:
 
         except Exception as e:
             print(f"Error processing video: {e}")
-            await websocket.send_json({
+            await on_update({
                 'type': 'error',
                 'message': f'Error processing video: {str(e)}'
             })
         finally:
             cap.release()
-            await websocket.send_json({
+            await on_update({
                 'type': 'processing_complete',
-                'total_frames': frame_count
+                'total_frames': frame_count,
+                'is_processing': False
             })
             print(f"Video processing complete: {frame_count} frames processed")

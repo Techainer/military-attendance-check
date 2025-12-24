@@ -4,12 +4,14 @@ from datetime import datetime
 from pathlib import Path
 import cv2
 import numpy as np
+import json
+import os
 
 
 class AttendanceMonitor:
     """Monitors person count and triggers alerts when attendance drops."""
 
-    ALERT_THRESHOLD_SECONDS = 60
+    ALERT_THRESHOLD_SECONDS = 30
 
     def __init__(self, alerts_dir: str = 'alerts'):
         """
@@ -23,6 +25,17 @@ class AttendanceMonitor:
         self.below_baseline_start = None
         self.alerts_dir = Path(alerts_dir)
         self.alerts_dir.mkdir(exist_ok=True)
+        self.alerts_dir.mkdir(exist_ok=True)
+        self.recent_alerts = []
+        
+        # Load alerts from disk
+        self.alerts_file = self.alerts_dir / "alerts.json"
+        if self.alerts_file.exists():
+            try:
+                with open(self.alerts_file, "r") as f:
+                    self.recent_alerts = json.load(f)
+            except Exception as e:
+                print(f"Error loading alerts: {e}")
 
     def set_baseline(self, count: int) -> None:
         """
@@ -63,7 +76,7 @@ class AttendanceMonitor:
 
             # Check if threshold exceeded
             elapsed = (datetime.now() - self.below_baseline_start).total_seconds()
-
+            print(elapsed)
             if elapsed >= self.ALERT_THRESHOLD_SECONDS:
                 # Trigger alert
                 alert_data = self._trigger_alert(frame, count)
@@ -99,13 +112,24 @@ class AttendanceMonitor:
         message = f"Attendance dropped to {count} (baseline: {self.baseline_count})"
         print(f"ALERT: {message}")
 
-        return {
+        alert_data = {
             'timestamp': timestamp.isoformat(),
             'image_path': str(filepath),
             'message': message,
             'count': count,
             'baseline': self.baseline_count
         }
+        
+        self.recent_alerts.append(alert_data)
+        
+        # Save to disk
+        try:
+            with open(self.alerts_file, "w") as f:
+                json.dump(self.recent_alerts, f, indent=2)
+        except Exception as e:
+            print(f"Error saving alerts: {e}")
+        
+        return alert_data
 
     def get_status(self) -> dict:
         """
@@ -123,3 +147,16 @@ class AttendanceMonitor:
             'current_count': self.current_count,
             'time_below_baseline': time_below
         }
+
+    def get_recent_alerts(self, limit: int = 50) -> list:
+        """
+        Get list of recent alerts.
+
+        Args:
+            limit: Maximum number of alerts to return
+
+        Returns:
+            List of alert dictionaries
+        """
+        # Sort by timestamp descending
+        return sorted(self.recent_alerts, key=lambda x: x['timestamp'], reverse=True)[:limit]

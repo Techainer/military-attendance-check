@@ -73,7 +73,8 @@ uploadForm.addEventListener('submit', async (e) => {
                 if (data.status === 'success') {
                     uploadStatus.textContent = `✓ Upload complete`;
                     uploadStatus.style.color = '#48bb78';
-                    startBtn.disabled = false;
+                    // Auto-connect to stream since backend auto-starts
+                    connectWebSocket();
                 } else {
                     throw new Error(data.message || 'Upload completed but returned error status');
                 }
@@ -87,22 +88,44 @@ uploadForm.addEventListener('submit', async (e) => {
 });
 
 // Start Processing
-startBtn.addEventListener('click', () => {
+startBtn.addEventListener('click', async () => {
     if (isProcessing) {
         console.log('Already processing');
         return;
     }
 
-    startProcessing();
+    // Trigger start explicitly if needed (though upload auto-starts)
+    try {
+        const response = await fetch('/api/start', { method: 'POST' });
+        const data = await response.json();
+
+        if (data.status === 'success') {
+            processingStatus.textContent = 'Processing started...';
+            processingStatus.style.color = '#48bb78';
+            connectWebSocket();
+        } else {
+            console.log(data.message);
+            // If already processing or just uploaded, connect anyway
+            connectWebSocket();
+        }
+    } catch (e) {
+        console.error("Error starting processing:", e);
+        connectWebSocket();
+    }
 });
 
-function startProcessing() {
+function connectWebSocket() {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        console.log("WebSocket already open");
+        return;
+    }
+
     isProcessing = true;
     startBtn.disabled = true;
-    processingStatus.textContent = 'Connecting...';
+    processingStatus.textContent = 'Connecting to stream...';
     processingStatus.style.color = '#667eea';
     loadingOverlay.style.display = 'flex';
-    loadingOverlay.querySelector('p').textContent = 'Starting video processing...';
+    loadingOverlay.querySelector('p').textContent = 'Connecting to video stream...';
 
     // Establish WebSocket connection
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -112,7 +135,7 @@ function startProcessing() {
 
     ws.onopen = () => {
         console.log('WebSocket connected');
-        processingStatus.textContent = 'Processing video...';
+        processingStatus.textContent = 'Connected to stream';
         processingStatus.style.color = '#48bb78';
         setBaselineBtn.disabled = false;
         loadingOverlay.style.display = 'none';
@@ -132,14 +155,18 @@ function startProcessing() {
 
     ws.onclose = () => {
         console.log('WebSocket closed');
+        // Auto-reconnect if we think it should be processing?
+        // For now just show disconnected
         if (isProcessing) {
-            processingStatus.textContent = 'Processing stopped';
+            processingStatus.textContent = 'Disconnected';
             processingStatus.style.color = '#666';
         }
         isProcessing = false;
+        startBtn.disabled = false;
         setBaselineBtn.disabled = true;
     };
 }
+
 
 // Handle WebSocket Messages
 function handleWebSocketMessage(data) {
@@ -160,8 +187,25 @@ function handleWebSocketMessage(data) {
             showError(data.message);
             break;
 
+        case 'status':
+            handleStatusMessage(data);
+            break;
+
         default:
             console.log('Unknown message type:', data.type);
+    }
+}
+
+function handleStatusMessage(data) {
+    if (data.is_processing) {
+        processingStatus.textContent = 'Processing in progress...';
+        processingStatus.style.color = '#48bb78';
+        startBtn.disabled = true;
+        isProcessing = true;
+
+        // Hide upload container or show it as disabled?
+        // Maybe just indicate in logs
+        console.log("Joined existing session");
     }
 }
 
@@ -213,17 +257,24 @@ function updateStatusIndicator() {
 
 // Show Alert
 function showAlert(data) {
-    // Update alert banner
-    alertMessage.textContent = `⚠️ ${data.message} at ${new Date(data.timestamp).toLocaleTimeString()}`;
-    alertBanner.style.display = 'flex';
+    // Only show banner for new alerts (e.g., within last 10 seconds)
+    const alertTime = new Date(data.timestamp).getTime();
+    const now = Date.now();
+    const isNew = (now - alertTime) < 10000;
+
+    if (isNew) {
+        // Update alert banner
+        alertMessage.textContent = `⚠️ ${data.message} at ${new Date(data.timestamp).toLocaleTimeString()}`;
+        alertBanner.style.display = 'flex';
+
+        // Auto-hide after 10 seconds
+        setTimeout(() => {
+            alertBanner.style.display = 'none';
+        }, 10000);
+    }
 
     // Add to event log
     addEventToLog(data);
-
-    // Auto-hide after 10 seconds
-    setTimeout(() => {
-        alertBanner.style.display = 'none';
-    }, 10000);
 }
 
 // Add Event to Log
@@ -231,6 +282,17 @@ function addEventToLog(data) {
     // Hide "no events" message
     if (noEventsEl) {
         noEventsEl.style.display = 'none';
+    }
+
+    // Check for duplicates
+    const existingRows = eventLogBody.getElementsByTagName('tr');
+    const timestampStr = new Date(data.timestamp).toLocaleString();
+
+    for (let i = 0; i < existingRows.length; i++) {
+        if (existingRows[i].cells[0].textContent === timestampStr &&
+            existingRows[i].cells[1].textContent === data.message) {
+            return; // Duplicate
+        }
     }
 
     const row = eventLogBody.insertRow(0);
@@ -321,3 +383,26 @@ function closeAlert() {
 
 // Initialize
 console.log('Military Attendance Check - Frontend Ready');
+
+// Check initial status
+fetch('/api/status')
+    .then(r => r.json())
+    .then(data => {
+        if (data.is_processing) {
+            console.log("Restoring session...");
+            connectWebSocket();
+        }
+    })
+    .catch(e => console.error("Error checking status:", e));
+
+// Fetch recent alerts
+fetch('/api/alerts')
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success' && data.alerts) {
+            data.alerts.forEach(alert => {
+                showAlert(alert);
+            });
+        }
+    })
+    .catch(e => console.error("Error fetching alerts:", e));
