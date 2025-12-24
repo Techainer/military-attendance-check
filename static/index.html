@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Military Attendance Check</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Military Attendance Check System</h1>
+            <p>Real-time student attendance monitoring with YOLO</p>
+        </header>
+
+        <!-- Alert Banner (hidden by default) -->
+        <div id="alert-banner" class="alert-banner" style="display: none;">
+            <span id="alert-message"></span>
+            <button onclick="closeAlert()">×</button>
+        </div>
+
+        <div class="main-content">
+            <!-- Left Panel: Controls -->
+            <div class="control-panel">
+                <div class="section">
+                    <h2>1. Upload Video</h2>
+                    <form id="upload-form">
+                        <input type="file" id="video-file" accept="video/*" required>
+                        <button type="submit">Upload</button>
+                    </form>
+                    <p id="upload-status" class="status-message"></p>
+                </div>
+
+                <div class="section">
+                    <h2>2. Start Processing</h2>
+                    <button id="start-btn" class="primary-btn" disabled>Start Processing</button>
+                    <p id="processing-status" class="status-message"></p>
+                </div>
+
+                <div class="section">
+                    <h2>3. Set Baseline</h2>
+                    <button id="set-baseline-btn" class="secondary-btn" disabled>Set Baseline</button>
+                    <p class="help-text">Click when all students are present</p>
+                </div>
+
+                <div class="section stats">
+                    <h2>Attendance Stats</h2>
+                    <div class="stat-item">
+                        <span class="stat-label">Current Count:</span>
+                        <span id="current-count" class="stat-value">-</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Baseline:</span>
+                        <span id="baseline-count" class="stat-value">-</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Status:</span>
+                        <span id="status-indicator" class="stat-value status-ok">OK</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Panel: Video Display -->
+            <div class="video-panel">
+                <div class="video-container">
+                    <canvas id="video-canvas"></canvas>
+                    <div id="loading-overlay" class="loading-overlay">
+                        <p>Upload a video to begin</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Event Log -->
+        <div class="event-log-section">
+            <h2>Alert Event Log</h2>
+            <div class="event-log-container">
+                <table id="event-log" class="event-log">
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>Message</th>
+                            <th>Count</th>
+                            <th>Captured Frame</th>
+                        </tr>
+                    </thead>
+                    <tbody id="event-log-body">
+                        <!-- Events will be added here dynamically -->
+                    </tbody>
+                </table>
+                <p id="no-events" class="no-events">No alerts yet</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

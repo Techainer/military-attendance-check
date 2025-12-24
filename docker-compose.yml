@@ -1,0 +1,7 @@
+services: 
+  frpc:
+    image: snowdreamtech/frpc:0.49.0
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./frpc.ini:/etc/frp/frpc.ini
