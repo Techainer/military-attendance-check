@@ -3,11 +3,64 @@
 import cv2
 import base64
 import asyncio
-
+import threading
+import time
 import numpy as np
 
 from app.detector import PersonDetector
 from app.monitor import AttendanceMonitor
+
+
+class RTSPStreamReader:
+    """Continuously reads frames from an RTSP / network stream in a background thread."""
+
+    def __init__(self, rtsp_url: str):
+        self.rtsp_url = rtsp_url
+        self.cap = cv2.VideoCapture(rtsp_url)
+        self.ret = False
+        self.frame = None
+        self.started = False
+        self.read_lock = threading.Lock()
+        self.thread = None
+
+    def start(self):
+        if self.started:
+            return self
+        if not self.cap.isOpened():
+            print(f"Error: Unable to open RTSP stream source: {self.rtsp_url}")
+            return self
+        self.started = True
+        self.thread = threading.Thread(target=self.update, args=())
+        self.thread.daemon = True
+        self.thread.start()
+        return self
+
+    def update(self):
+        while self.started:
+            if not self.cap.isOpened():
+                time.sleep(0.1)
+                continue
+            ret, frame = self.cap.read()
+            if not ret:
+                time.sleep(0.01)
+                continue
+            with self.read_lock:
+                self.ret = ret
+                self.frame = frame
+            time.sleep(0.005)
+
+    def read(self):
+        with self.read_lock:
+            if self.frame is None:
+                return False, None
+            return self.ret, self.frame.copy()
+
+    def stop(self):
+        self.started = False
+        if self.thread:
+            self.thread.join(timeout=1.0)
+        if self.cap.isOpened():
+            self.cap.release()
 
 
 class VideoProcessor:
@@ -22,6 +75,11 @@ class VideoProcessor:
         """
         self.detector = PersonDetector(model_name="yolo11s.pt")
         self.fps = fps
+        self._stop_requested = False
+
+    def stop(self) -> None:
+        """Request the processing pipeline to stop."""
+        self._stop_requested = True
 
     async def process_video(
         self,
@@ -30,46 +88,87 @@ class VideoProcessor:
         monitor: AttendanceMonitor
     ) -> None:
         """
-        Process video file and stream results via callback.
+        Process video file or RTSP stream and stream results via callback.
 
         Args:
-            video_path: Path to video file
+            video_path: Path to video file or RTSP stream URL
             on_update: Async callback function for sending updates
             monitor: AttendanceMonitor instance
         """
-        cap = cv2.VideoCapture(video_path)
+        is_rtsp = "://" in video_path
+        reader = None
+        cap = None
 
-        if not cap.isOpened():
-            await on_update({
-                'type': 'error',
-                'message': 'Failed to open video file'
-            })
-            return
+        if is_rtsp:
+            print(f"Connecting to RTSP/Network stream: {video_path}")
+            reader = RTSPStreamReader(video_path)
+            reader.start()
+            if not reader.started:
+                await on_update({
+                    'type': 'error',
+                    'message': 'Failed to connect to RTSP/Network stream'
+                })
+                return
+        else:
+            print(f"Opening video file: {video_path}")
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                await on_update({
+                    'type': 'error',
+                    'message': 'Failed to open video file'
+                })
+                return
 
         # Get video FPS to calculate frame skip
-        video_fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if not is_rtsp:
+            video_fps = cap.get(cv2.CAP_PROP_FPS)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            if video_fps == 0:
+                video_fps = 30  # Default if detection fails
+            frame_skip = max(1, int(video_fps / self.fps))
+            print(f"Processing video: {total_frames} frames at {video_fps} FPS")
+            print(f"Processing rate: {self.fps} FPS (skipping every {frame_skip} frames)")
+        else:
+            print(f"Processing RTSP stream at target rate: {self.fps} FPS")
 
-        if video_fps == 0:
-            video_fps = 30  # Default if detection fails
-
-        frame_skip = max(1, int(video_fps / self.fps))
         frame_count = 0
-
-        print(f"Processing video: {total_frames} frames at {video_fps} FPS")
-        print(f"Processing rate: {self.fps} FPS (skipping every {frame_skip} frames)")
+        empty_frames_count = 0
 
         try:
-            while cap.isOpened():
-                ret, frame = cap.read()
-                if not ret:
-                    break
+            while not self._stop_requested:
+                if is_rtsp:
+                    # check if reader thread is still alive
+                    if not reader.thread or not reader.thread.is_alive():
+                        print("RTSP reader thread is not running.")
+                        break
+
+                    ret, frame = reader.read()
+                    if not ret or frame is None:
+                        empty_frames_count += 1
+                        if empty_frames_count > 100:  # 100 * 0.05s = 5 seconds
+                            print("RTSP stream timeout: no frames received for 5 seconds")
+                            await on_update({
+                                'type': 'error',
+                                'message': 'RTSP stream timeout: lost connection'
+                            })
+                            break
+                        await asyncio.sleep(0.05)
+                        continue
+                    else:
+                        empty_frames_count = 0
+                else:
+                    if not cap.isOpened():
+                        break
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
 
                 frame_count += 1
 
-                # Skip frames to achieve target FPS
-                if frame_count % frame_skip != 0:
-                    continue
+                # Skip frames to achieve target FPS for files
+                if not is_rtsp:
+                    if frame_count % frame_skip != 0:
+                        continue
 
                 # Detect persons in frame
                 detection = self.detector.detect_persons(frame)
@@ -134,7 +233,11 @@ class VideoProcessor:
                 'message': f'Error processing video: {str(e)}'
             })
         finally:
-            cap.release()
+            if is_rtsp and reader:
+                reader.stop()
+            elif cap:
+                cap.release()
+
             await on_update({
                 'type': 'processing_complete',
                 'total_frames': frame_count,

@@ -316,6 +316,96 @@ button:disabled {
     font-style: italic;
 }
 
+/* Input Mode Selector - Segmented control */
+.input-mode-selector {
+    display: flex;
+    background: #f1f3f9;
+    border-radius: 8px;
+    padding: 4px;
+    gap: 4px;
+    margin-top: 5px;
+}
+
+.mode-tab {
+    flex: 1;
+    background: none;
+    border: none;
+    padding: 8px 12px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #4a5568;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.mode-tab:hover {
+    color: #2d3748;
+    background: rgba(255, 255, 255, 0.5);
+}
+
+.mode-tab.active {
+    background: #ffffff;
+    color: #667eea;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+/* RTSP Config Styling */
+.rtsp-input-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.text-input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 2px solid #e2e8f0;
+    border-radius: 6px;
+    font-size: 0.95rem;
+    outline: none;
+    transition: border-color 0.2s;
+    background: #f8fafc;
+}
+
+.text-input:focus {
+    border-color: #667eea;
+    background: #ffffff;
+}
+
+.preset-container {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.8rem;
+    margin-top: 2px;
+}
+
+.preset-link {
+    color: #667eea;
+    text-decoration: none;
+    font-weight: 600;
+    transition: color 0.15s;
+}
+
+.preset-link:hover {
+    color: #5568d3;
+    text-decoration: underline;
+}
+
+/* Stop Button state */
+.stop-btn {
+    background: #e53e3e;
+    color: white;
+    width: 100%;
+}
+
+.stop-btn:hover:not(:disabled) {
+    background: #c53030;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(229, 62, 62, 0.3);
+}
+
 /* Responsive Design */
 @media (max-width: 1024px) {
     .main-content {

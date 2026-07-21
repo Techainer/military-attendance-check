@@ -22,6 +22,8 @@ app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
 alerts_path = Path(__file__).parent.parent / "alerts"
 app.mount("/alerts", StaticFiles(directory=str(alerts_path)), name="alerts")
 
+from typing import Optional
+
 # Global state
 monitor = AttendanceMonitor()
 current_video_path = None
@@ -29,6 +31,7 @@ active_connections = []
 current_background_task = None
 is_processing = False
 last_frame_data = None
+current_processor = None
 
 async def broadcast_update(data: dict):
     """
@@ -56,26 +59,36 @@ async def _background_process_video(video_path: str):
     """
     Internal background task wrapper.
     """
-    global is_processing, last_frame_data
+    global is_processing, last_frame_data, current_processor
     is_processing = True
     last_frame_data = None
-    processor = VideoProcessor(fps=5)
-    await processor.process_video(video_path, broadcast_update, monitor)
+    current_processor = VideoProcessor(fps=5)
+    await current_processor.process_video(video_path, broadcast_update, monitor)
     is_processing = False
     last_frame_data = None
+    current_processor = None
 
 @app.post("/api/start")
-async def start_processing(background_tasks: BackgroundTasks):
+async def start_processing(
+    background_tasks: BackgroundTasks,
+    mode: str = "video",
+    rtsp_url: Optional[str] = None
+):
     """
     Start video processing in background.
     """
     global current_video_path, is_processing
     
-    if current_video_path is None:
-        return {"status": "error", "message": "No video uploaded"}
-        
-    if not os.path.exists(current_video_path):
-        return {"status": "error", "message": "Video file not found"}
+    if mode == "rtsp":
+        if not rtsp_url:
+            return {"status": "error", "message": "RTSP URL is required"}
+        current_video_path = rtsp_url
+    else:
+        if current_video_path is None:
+            return {"status": "error", "message": "No video uploaded"}
+            
+        if "://" in current_video_path or not os.path.exists(current_video_path):
+            return {"status": "error", "message": "Video file not found. Please upload again."}
         
     if is_processing:
         return {"status": "success", "message": "Already processing"}
@@ -84,7 +97,24 @@ async def start_processing(background_tasks: BackgroundTasks):
     
     return {
         "status": "success", 
-        "message": "Processing started in background"
+        "message": "Processing started in background",
+        "mode": mode,
+        "video_path": current_video_path
+    }
+
+@app.post("/api/stop")
+async def stop_processing():
+    """
+    Stop the current video or RTSP processing.
+    """
+    global current_processor, is_processing
+    if not is_processing or current_processor is None:
+        return {"status": "success", "message": "Not processing"}
+        
+    current_processor.stop()
+    return {
+        "status": "success",
+        "message": "Stop request submitted"
     }
 
 @app.get("/")
@@ -224,19 +254,13 @@ async def get_status():
         Current baseline, count, and monitoring state
     """
     status = monitor.get_status()
+    input_mode = "rtsp" if current_video_path and "://" in current_video_path else "video"
     return {
         "status": "success",
         **status,
         "video_path": current_video_path,
-        "is_processing": is_processing
-    }
-
-
-    return {
-        "status": "success",
-        **status,
-        "video_path": current_video_path,
-        "is_processing": is_processing
+        "is_processing": is_processing,
+        "input_mode": input_mode
     }
 
 

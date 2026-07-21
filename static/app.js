@@ -3,6 +3,7 @@
 let ws = null;
 let currentCount = 0;
 let isProcessing = false;
+let currentMode = 'video';
 
 // DOM Elements
 const uploadForm = document.getElementById('upload-form');
@@ -20,6 +21,41 @@ const alertBanner = document.getElementById('alert-banner');
 const alertMessage = document.getElementById('alert-message');
 const eventLogBody = document.getElementById('event-log-body');
 const noEventsEl = document.getElementById('no-events');
+
+// Mode selectors
+const videoSourcePanel = document.getElementById('video-source-panel');
+const rtspSourcePanel = document.getElementById('rtsp-source-panel');
+const rtspUrlInput = document.getElementById('rtsp-url');
+const modeVideoBtn = document.getElementById('mode-video-btn');
+const modeRtspBtn = document.getElementById('mode-rtsp-btn');
+
+function switchMode(mode) {
+    if (isProcessing) {
+        alert("Cannot switch input mode while processing is active. Stop the current process first.");
+        return;
+    }
+    currentMode = mode;
+    if (mode === 'video') {
+        videoSourcePanel.style.display = 'block';
+        rtspSourcePanel.style.display = 'none';
+        modeVideoBtn.classList.add('active');
+        modeRtspBtn.classList.remove('active');
+        startBtn.disabled = true;
+    } else {
+        videoSourcePanel.style.display = 'none';
+        rtspSourcePanel.style.display = 'block';
+        modeVideoBtn.classList.remove('active');
+        modeRtspBtn.classList.add('active');
+        startBtn.disabled = false;
+    }
+}
+window.switchMode = switchMode;
+
+function setRtspDemo(event) {
+    event.preventDefault();
+    rtspUrlInput.value = 'rtsp://wowzaec2demo.streamlock.net/vod/mp4:BigBuckBunny_115k.mov';
+}
+window.setRtspDemo = setRtspDemo;
 
 // Upload Video
 uploadForm.addEventListener('submit', async (e) => {
@@ -87,16 +123,43 @@ uploadForm.addEventListener('submit', async (e) => {
     }
 });
 
-// Start Processing
+// Start / Stop Processing
 startBtn.addEventListener('click', async () => {
     if (isProcessing) {
-        console.log('Already processing');
+        // Stop logic
+        processingStatus.textContent = 'Stopping processing...';
+        processingStatus.style.color = '#667eea';
+        try {
+            const response = await fetch('/api/stop', { method: 'POST' });
+            const data = await response.json();
+            console.log("Stop requested:", data);
+        } catch (e) {
+            console.error("Error stopping processing:", e);
+        }
+        if (ws) {
+            ws.close();
+            ws = null;
+        }
         return;
     }
 
-    // Trigger start explicitly if needed (though upload auto-starts)
+    // Start logic
+    let url = '/api/start';
+    if (currentMode === 'rtsp') {
+        const rtspUrl = rtspUrlInput.value.trim();
+        if (!rtspUrl) {
+            alert('Please enter an RTSP URL or click Wowza Test Stream preset');
+            return;
+        }
+        url += `?mode=rtsp&rtsp_url=${encodeURIComponent(rtspUrl)}`;
+    } else {
+        url += '?mode=video';
+    }
+
     try {
-        const response = await fetch('/api/start', { method: 'POST' });
+        processingStatus.textContent = 'Starting processing...';
+        processingStatus.style.color = '#667eea';
+        const response = await fetch(url, { method: 'POST' });
         const data = await response.json();
 
         if (data.status === 'success') {
@@ -104,13 +167,14 @@ startBtn.addEventListener('click', async () => {
             processingStatus.style.color = '#48bb78';
             connectWebSocket();
         } else {
-            console.log(data.message);
-            // If already processing or just uploaded, connect anyway
-            connectWebSocket();
+            alert('Error: ' + data.message);
+            processingStatus.textContent = 'Error: ' + data.message;
+            processingStatus.style.color = '#f56565';
         }
     } catch (e) {
         console.error("Error starting processing:", e);
-        connectWebSocket();
+        processingStatus.textContent = 'Error: ' + e.message;
+        processingStatus.style.color = '#f56565';
     }
 });
 
@@ -121,7 +185,9 @@ function connectWebSocket() {
     }
 
     isProcessing = true;
-    startBtn.disabled = true;
+    startBtn.textContent = 'Stop Processing';
+    startBtn.className = 'stop-btn';
+    startBtn.disabled = false;
     processingStatus.textContent = 'Connecting to stream...';
     processingStatus.style.color = '#667eea';
     loadingOverlay.style.display = 'flex';
@@ -151,18 +217,21 @@ function connectWebSocket() {
         processingStatus.textContent = '✗ Connection error';
         processingStatus.style.color = '#f56565';
         isProcessing = false;
+        startBtn.textContent = 'Start Processing';
+        startBtn.className = 'primary-btn';
+        startBtn.disabled = (currentMode === 'video');
     };
 
     ws.onclose = () => {
         console.log('WebSocket closed');
-        // Auto-reconnect if we think it should be processing?
-        // For now just show disconnected
         if (isProcessing) {
             processingStatus.textContent = 'Disconnected';
             processingStatus.style.color = '#666';
         }
         isProcessing = false;
-        startBtn.disabled = false;
+        startBtn.textContent = 'Start Processing';
+        startBtn.className = 'primary-btn';
+        startBtn.disabled = (currentMode === 'video');
         setBaselineBtn.disabled = true;
     };
 }
@@ -327,10 +396,12 @@ function addEventToLog(data) {
 
 // Processing Complete
 function onProcessingComplete(data) {
-    processingStatus.textContent = `✓ Processing complete (${data.total_frames} frames)`;
+    processingStatus.textContent = `✓ Processing complete (${data.total_frames || 0} frames)`;
     processingStatus.style.color = '#48bb78';
     isProcessing = false;
-    startBtn.disabled = false;
+    startBtn.textContent = 'Start Processing';
+    startBtn.className = 'primary-btn';
+    startBtn.disabled = (currentMode === 'video');
     setBaselineBtn.disabled = true;
 
     if (ws) {
@@ -344,7 +415,9 @@ function showError(message) {
     processingStatus.textContent = `✗ Error: ${message}`;
     processingStatus.style.color = '#f56565';
     isProcessing = false;
-    startBtn.disabled = false;
+    startBtn.textContent = 'Start Processing';
+    startBtn.className = 'primary-btn';
+    startBtn.disabled = (currentMode === 'video');
 
     loadingOverlay.style.display = 'flex';
     loadingOverlay.querySelector('p').textContent = message;
@@ -390,7 +463,16 @@ fetch('/api/status')
     .then(data => {
         if (data.is_processing) {
             console.log("Restoring session...");
+            if (data.input_mode) {
+                switchMode(data.input_mode);
+            }
+            if (data.video_path && data.input_mode === 'rtsp') {
+                rtspUrlInput.value = data.video_path;
+            }
             connectWebSocket();
+        } else {
+            // Adjust startBtn disabled state based on default mode
+            switchMode('video');
         }
     })
     .catch(e => console.error("Error checking status:", e));

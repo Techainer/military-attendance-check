@@ -22,8 +22,18 @@
         <div class="main-content">
             <!-- Left Panel: Controls -->
             <div class="control-panel">
+                <!-- Step 1: Select Input Source -->
                 <div class="section">
-                    <h2>1. Upload Video</h2>
+                    <h2>1. Select Input Source</h2>
+                    <div class="input-mode-selector">
+                        <button type="button" class="mode-tab active" id="mode-video-btn" onclick="switchMode('video')">Video File</button>
+                        <button type="button" class="mode-tab" id="mode-rtsp-btn" onclick="switchMode('rtsp')">RTSP Stream</button>
+                    </div>
+                </div>
+
+                <!-- Step 2: Upload Video (for video mode) -->
+                <div class="section" id="video-source-panel">
+                    <h2>2. Upload Video</h2>
                     <form id="upload-form">
                         <input type="file" id="video-file" accept="video/*" required>
                         <button type="submit">Upload</button>
@@ -31,14 +41,28 @@
                     <p id="upload-status" class="status-message"></p>
                 </div>
 
+                <!-- Step 2: RTSP Settings (for RTSP mode) -->
+                <div class="section" id="rtsp-source-panel" style="display: none;">
+                    <h2>2. RTSP Stream Settings</h2>
+                    <div class="rtsp-input-container">
+                        <input type="text" id="rtsp-url" placeholder="rtsp://host:port/path" class="text-input">
+                        <div class="preset-container">
+                            <span class="help-text">Try demo URL:</span>
+                            <a href="#" onclick="setRtspDemo(event)" class="preset-link">Wowza Test Stream</a>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 3: Start/Stop Processing -->
                 <div class="section">
-                    <h2>2. Start Processing</h2>
+                    <h2>3. Control Processing</h2>
                     <button id="start-btn" class="primary-btn" disabled>Start Processing</button>
                     <p id="processing-status" class="status-message"></p>
                 </div>
 
+                <!-- Step 4: Set Baseline -->
                 <div class="section">
-                    <h2>3. Set Baseline</h2>
+                    <h2>4. Set Baseline</h2>
                     <button id="set-baseline-btn" class="secondary-btn" disabled>Set Baseline</button>
                     <p class="help-text">Click when all students are present</p>
                 </div>
