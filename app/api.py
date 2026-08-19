@@ -4,6 +4,8 @@ from fastapi import FastAPI, WebSocket, UploadFile, File, Form, WebSocketDisconn
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 import shutil
+import time
+from datetime import datetime
 import os
 import json
 import cv2
@@ -15,6 +17,7 @@ from typing import Optional, List
 from app.video_processor import VideoProcessor
 from app.monitor import AttendanceMonitor
 from app.face_engine import FaceEngine
+from app.attendance import AttendanceManager
 
 
 # Initialize FastAPI app
@@ -39,6 +42,7 @@ app.mount("/data/face_avatars", StaticFiles(directory=str(avatars_path)), name="
 # Global instances
 monitor = AttendanceMonitor(alerts_dir=str(alerts_path))
 face_engine = FaceEngine(data_dir=str(data_path))
+attendance = AttendanceManager(data_dir=str(data_path), face_engine=face_engine)
 
 current_video_path = None
 active_connections: List[WebSocket] = []
@@ -73,7 +77,7 @@ async def _background_process_video(video_path: str):
     global is_processing, last_frame_data, current_processor
     is_processing = True
     last_frame_data = None
-    current_processor = VideoProcessor(fps=5, face_engine=face_engine)
+    current_processor = VideoProcessor(fps=5, face_engine=face_engine, attendance=attendance)
     await current_processor.process_video(video_path, broadcast_update, monitor)
     is_processing = False
     last_frame_data = None
@@ -361,6 +365,28 @@ async def get_attendance_logs(unit: Optional[str] = None):
         except Exception as e:
             print(f"Error loading attendance logs: {e}")
     return {"status": "success", "data": []}
+
+
+# ----------------- Roll-call (Điểm danh) Endpoints -----------------
+
+@app.post("/api/attendance/start")
+async def start_attendance(schedule_id: Optional[str] = None, window_mins: Optional[int] = None):
+    """Mở phiên điểm danh ngay lập tức, không chờ tới giờ ca."""
+    if attendance.session is not None:
+        return {"status": "error", "message": "Đang có phiên điểm danh chạy dở"}
+
+    session = attendance.start_manual(datetime.now(), schedule_id=schedule_id, window_mins=window_mins)
+    return {
+        "status": "success",
+        "message": f"Đã mở phiên điểm danh {session.window_mins} phút cho {session.schedule.get('unit', 'toàn đơn vị')}",
+        "data": attendance.status(datetime.now())
+    }
+
+
+@app.get("/api/attendance/status")
+async def attendance_status():
+    """Trạng thái phiên điểm danh hiện tại."""
+    return {"status": "success", "data": attendance.status(datetime.now())}
 
 
 # ----------------- Video & Stream Controls -----------------

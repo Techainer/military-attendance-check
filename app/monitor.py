@@ -2,6 +2,8 @@
 
 from datetime import datetime
 from pathlib import Path
+from collections import deque
+from statistics import median
 import cv2
 import numpy as np
 import json
@@ -12,6 +14,10 @@ class AttendanceMonitor:
     """Monitors person count and triggers alerts when attendance drops."""
 
     ALERT_THRESHOLD_SECONDS = 30
+    # Lấy trung vị N lượt quét gần nhất để sĩ số không nhảy khi YOLO miss lẻ tẻ
+    SMOOTHING_WINDOW = 5
+    # Không bắn lại cảnh báo trong khoảng này
+    ALERT_COOLDOWN_SECONDS = 60
 
     def __init__(self, alerts_dir: str = 'alerts'):
         """
@@ -25,8 +31,9 @@ class AttendanceMonitor:
         self.below_baseline_start = None
         self.alerts_dir = Path(alerts_dir)
         self.alerts_dir.mkdir(exist_ok=True)
-        self.alerts_dir.mkdir(exist_ok=True)
         self.recent_alerts = []
+        self.recent_counts = deque(maxlen=self.SMOOTHING_WINDOW)
+        self.last_alert_at = None
         
         # Load alerts from disk
         self.alerts_file = self.alerts_dir / "alerts.json"
@@ -46,6 +53,7 @@ class AttendanceMonitor:
         """
         self.baseline_count = count
         self.below_baseline_start = None
+        self.last_alert_at = None
         print(f"Baseline set to {count} persons")
 
     def update_count(self, count: int, frame: np.ndarray) -> dict:
@@ -61,11 +69,14 @@ class AttendanceMonitor:
                 - alert_triggered: bool
                 - alert_data: dict or None (timestamp, image_path, message)
         """
+        # Làm mượt: dùng trung vị các lượt quét gần nhất thay vì số tức thời
+        self.recent_counts.append(count)
+        count = int(median(self.recent_counts))
         self.current_count = count
 
         # Can't trigger alerts without baseline
         if self.baseline_count is None:
-            return {'alert_triggered': False, 'alert_data': None}
+            return {'alert_triggered': False, 'alert_data': None, 'recovered': False}
 
         # Check if count is below baseline
         if count < self.baseline_count:
@@ -75,21 +86,29 @@ class AttendanceMonitor:
                 print(f"Count dropped below baseline: {count} < {self.baseline_count}")
 
             # Check if threshold exceeded
-            elapsed = (datetime.now() - self.below_baseline_start).total_seconds()
-            print(elapsed)
-            if elapsed >= self.ALERT_THRESHOLD_SECONDS:
+            now = datetime.now()
+            elapsed = (now - self.below_baseline_start).total_seconds()
+            in_cooldown = (
+                self.last_alert_at is not None
+                and (now - self.last_alert_at).total_seconds() < self.ALERT_COOLDOWN_SECONDS
+            )
+            if elapsed >= self.ALERT_THRESHOLD_SECONDS and not in_cooldown:
                 # Trigger alert
                 alert_data = self._trigger_alert(frame, count)
+                self.last_alert_at = now
                 # Reset timer to avoid repeated alerts
                 self.below_baseline_start = None
-                return {'alert_triggered': True, 'alert_data': alert_data}
+                return {'alert_triggered': True, 'alert_data': alert_data, 'recovered': False}
         else:
             # Count recovered, reset timer
-            if self.below_baseline_start is not None:
+            recovered = self.below_baseline_start is not None or self.last_alert_at is not None
+            if recovered:
                 print(f"Count recovered: {count} >= {self.baseline_count}")
             self.below_baseline_start = None
+            self.last_alert_at = None
+            return {'alert_triggered': False, 'alert_data': None, 'recovered': recovered}
 
-        return {'alert_triggered': False, 'alert_data': None}
+        return {'alert_triggered': False, 'alert_data': None, 'recovered': False}
 
     def _trigger_alert(self, frame: np.ndarray, count: int) -> dict:
         """

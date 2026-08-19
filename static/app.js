@@ -294,6 +294,27 @@ async function lockBaselineManual() {
 }
 window.lockBaselineManual = lockBaselineManual;
 
+async function startAttendanceNow() {
+    try {
+        const res = await fetch('/api/attendance/start', { method: 'POST' });
+        const data = await res.json();
+        if (data.status !== 'success') {
+            alert(data.message || 'Không mở được phiên điểm danh');
+            return;
+        }
+        addEventFeedCard({
+            category: 'SYSTEM',
+            time: new Date().toLocaleTimeString(),
+            desc: data.message,
+            location: 'CAM-01 SÂN TẬP TRUNG',
+            isProcessed: true
+        });
+    } catch (e) {
+        alert('Lỗi mở phiên điểm danh: ' + e.message);
+    }
+}
+window.startAttendanceNow = startAttendanceNow;
+
 function takeQuickSnapshot() {
     if (!videoCanvas) return;
     const link = document.createElement('a');
@@ -527,6 +548,18 @@ function handleWebSocketMessage(data) {
         case 'alert':
             handleStreamAlert(data);
             break;
+        case 'attendance_complete':
+            handleAttendanceComplete(data.log);
+            break;
+        case 'system_event':
+            addEventFeedCard({
+                category: 'SYSTEM',
+                time: new Date(data.timestamp).toLocaleTimeString(),
+                desc: data.message,
+                location: 'CAM-01 SÂN TẬP TRUNG',
+                isProcessed: true
+            });
+            break;
         case 'processing_complete':
             if (loadingOverlay) loadingOverlay.style.display = 'flex';
             if (overlayStatusText) overlayStatusText.textContent = 'Đã hoàn tất ca giám sát';
@@ -552,8 +585,41 @@ function updateFrame(data) {
     if (data.baseline) baselineCount = data.baseline;
 
     if (topbarAttendanceStat) {
-        topbarAttendanceStat.textContent = `Quân số: ${currentCount}/${baselineCount}`;
+        const unknown = data.unidentified_count || 0;
+        const suffix = unknown > 0 ? ` (${unknown} chưa định danh)` : '';
+        topbarAttendanceStat.textContent = `Quân số: ${currentCount}/${baselineCount}${suffix}`;
     }
+
+    const attBtn = document.getElementById('attendance-btn-text');
+    if (attBtn) {
+        const att = data.attendance;
+        if (att && att.active) {
+            const remain = att.remaining_seconds || 0;
+            const mm = String(Math.floor(remain / 60)).padStart(2, '0');
+            const ss = String(remain % 60).padStart(2, '0');
+            attBtn.textContent = `Đang điểm danh ${mm}:${ss} · ${att.present}/${att.roster_size}`;
+        } else {
+            attBtn.textContent = 'Điểm danh ngay';
+        }
+    }
+}
+
+function handleAttendanceComplete(log) {
+    if (!log) return;
+
+    const desc = log.absent > 0
+        ? `Chốt điểm danh ${log.unit}: có mặt ${log.present}/${log.required}, vắng ${log.absent} — ${log.absent_personnel.join(', ')}`
+        : `Chốt điểm danh ${log.unit}: đủ quân số ${log.present}/${log.required}`;
+
+    addEventFeedCard({
+        category: log.absent > 0 ? 'ABSENT' : 'SYSTEM',
+        time: `${log.date} ${log.time}`,
+        desc: desc,
+        location: 'CAM-01 SÂN TẬP TRUNG',
+        isProcessed: log.absent === 0
+    });
+
+    loadAttendanceLogs();
 }
 
 function handleStreamAlert(data) {
@@ -1193,8 +1259,8 @@ function renderSchedulesTable(schedules) {
             <td><strong>${sch.name}</strong></td>
             <td>${sch.unit}</td>
             <td class="font-mono">${sch.start_time} - ${sch.end_time}</td>
-            <td class="font-mono" style="color: #059669; font-weight: 700;">${sch.check_time}</td>
-            <td>±${sch.tolerance_mins || 10} phút</td>
+            <td class="font-mono" style="color: #059669; font-weight: 700;">${sch.start_time} + ${sch.check_window_mins || 5}'</td>
+            <td>${sch.check_window_mins || 5} phút</td>
             <td><strong>${sch.required_count || 45}</strong> quân nhân</td>
             <td><span class="status-tag status-ok">${sch.status || 'Active'}</span></td>
             <td>
@@ -1212,7 +1278,7 @@ async function handleCreateSchedule(e) {
     const unit = document.getElementById('sch-unit-select').value;
     const startTime = document.getElementById('sch-start-time').value;
     const endTime = document.getElementById('sch-end-time').value;
-    const checkTime = document.getElementById('sch-check-time').value;
+    const windowMins = parseInt(document.getElementById('sch-window-input').value) || 5;
     const requiredCount = parseInt(document.getElementById('sch-count-input').value) || 45;
 
     const payload = {
@@ -1221,8 +1287,7 @@ async function handleCreateSchedule(e) {
         unit,
         start_time: startTime,
         end_time: endTime,
-        check_time: checkTime,
-        tolerance_mins: 10,
+        check_window_mins: windowMins,
         required_count: requiredCount
     };
 

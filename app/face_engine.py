@@ -24,6 +24,7 @@ class FaceEngine:
         self.avatars_dir = self.data_dir / "face_avatars"
         self.db_file = self.data_dir / "registered_faces.json"
         self._last_db_mtime = 0
+        self._matrix_cache = None
 
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.avatars_dir.mkdir(parents=True, exist_ok=True)
@@ -66,6 +67,7 @@ class FaceEngine:
                     with open(self.db_file, "r", encoding="utf-8") as f:
                         self.registered_faces = json.load(f)
                     self._last_db_mtime = mtime
+                    self._matrix_cache = None
                     print(f"[FaceEngine] Loaded {len(self.registered_faces)} registered personnel from DB.")
             except Exception as e:
                 print(f"[FaceEngine] Error reading face database: {e}")
@@ -77,6 +79,7 @@ class FaceEngine:
         try:
             with open(self.db_file, "w", encoding="utf-8") as f:
                 json.dump(self.registered_faces, f, ensure_ascii=False, indent=2)
+            self._matrix_cache = None
             if self.db_file.exists():
                 self._last_db_mtime = self.db_file.stat().st_mtime
         except Exception as e:
@@ -252,18 +255,19 @@ class FaceEngine:
         if self.app is None or frame is None or len(self.registered_faces) == 0:
             return []
 
-        # Prepare registered embeddings matrix
-        reg_embeddings = []
-        reg_persons = []
-        for p in self.registered_faces:
-            if "embedding" in p and p["embedding"] and len(p["embedding"]) > 0:
-                reg_embeddings.append(p["embedding"])
-                reg_persons.append(p)
+        # Ma trận embedding chỉ dựng lại khi CSDL đổi, không dựng mỗi frame
+        if self._matrix_cache is None:
+            reg_embeddings = []
+            reg_persons = []
+            for p in self.registered_faces:
+                if "embedding" in p and p["embedding"] and len(p["embedding"]) > 0:
+                    reg_embeddings.append(p["embedding"])
+                    reg_persons.append(p)
+            if not reg_embeddings:
+                return []
+            self._matrix_cache = (np.array(reg_embeddings, dtype=np.float32), reg_persons)
 
-        if not reg_embeddings:
-            return []
-
-        reg_matrix = np.array(reg_embeddings, dtype=np.float32)  # Shape: (N, 512)
+        reg_matrix, reg_persons = self._matrix_cache  # Shape: (N, 512)
         h_img, w_img = frame.shape[:2]
 
         all_detected_faces = []
