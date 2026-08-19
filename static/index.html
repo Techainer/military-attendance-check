@@ -1,120 +1,725 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="vi">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Military Attendance Check</title>
+    <title>HORUS AI WEB - V1.0 · MILITARY EDITION</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>Military Attendance Check System</h1>
-            <p>Real-time student attendance monitoring</p>
-        </header>
+    <div class="app-layout">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="brand-header">
+                <div class="brand-logo">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon>
+                    </svg>
+                </div>
+                <div class="brand-info">
+                    <span class="brand-title">HORUS AI WEB</span>
+                    <span class="brand-subtitle">V1.0 · MILITARY EDITION</span>
+                </div>
+                <button class="sidebar-toggle" title="Thu gọn menu">‹</button>
+            </div>
 
-        <!-- Alert Banner (hidden by default) -->
-        <div id="alert-banner" class="alert-banner" style="display: none;">
-            <span id="alert-message"></span>
-            <button onclick="closeAlert()">×</button>
-        </div>
+            <div class="nav-section-title">TÁC CHIẾN (CHÍNH)</div>
+            <nav class="sidebar-nav">
+                <a href="#monitoring" class="nav-item active" id="nav-monitoring" onclick="switchNavTab('monitoring')">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                        <line x1="8" y1="21" x2="16" y2="21"></line>
+                        <line x1="12" y1="17" x2="12" y2="21"></line>
+                    </svg>
+                    <span>Giám sát trực tiếp</span>
+                </a>
+                <a href="#zones" class="nav-item" id="nav-zones" onclick="switchNavTab('zones')">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+                        <polyline points="2 17 12 22 22 17"></polyline>
+                        <polyline points="2 12 12 17 22 12"></polyline>
+                    </svg>
+                    <span>Quản lý Vùng & Luật (F-06)</span>
+                </a>
+                <a href="#registration" class="nav-item" id="nav-registration" onclick="switchNavTab('registration')">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="8.5" cy="7" r="4"></circle>
+                        <line x1="20" y1="8" x2="20" y2="14"></line>
+                        <line x1="23" y1="11" x2="17" y2="11"></line>
+                    </svg>
+                    <span>Đăng ký Khuôn mặt</span>
+                </a>
+                <a href="#schedule" class="nav-item" id="nav-schedule" onclick="switchNavTab('schedule')">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                        <line x1="16" y1="2" x2="16" y2="6"></line>
+                        <line x1="8" y1="2" x2="8" y2="6"></line>
+                        <line x1="3" y1="10" x2="21" y2="10"></line>
+                    </svg>
+                    <span>Cấu hình Thời khóa biểu</span>
+                </a>
+                <a href="#logs" class="nav-item" id="nav-logs" onclick="switchNavTab('logs')">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <line x1="16" y1="13" x2="8" y2="13"></line>
+                        <line x1="16" y1="17" x2="8" y2="17"></line>
+                        <polyline points="10 9 9 9 8 9"></polyline>
+                    </svg>
+                    <span>Nhật ký & Điểm danh</span>
+                </a>
+            </nav>
+        </aside>
 
-        <div class="main-content">
-            <!-- Left Panel: Controls -->
-            <div class="control-panel">
-                <!-- Step 1: Select Input Source -->
-                <div class="section">
-                    <h2>1. Select Input Source</h2>
-                    <div class="input-mode-selector">
-                        <button type="button" class="mode-tab active" id="mode-video-btn" onclick="switchMode('video')">Video File</button>
-                        <button type="button" class="mode-tab" id="mode-rtsp-btn" onclick="switchMode('rtsp')">RTSP Stream</button>
+        <!-- Main Content Area -->
+        <main class="main-wrapper">
+            <!-- Top Navbar -->
+            <header class="top-header">
+                <div class="breadcrumb-container">
+                    <span class="breadcrumb-icon">⊞</span>
+                    <span class="breadcrumb-root">Horus AI</span>
+                    <span class="breadcrumb-separator">/</span>
+                    <span class="breadcrumb-current" id="current-page-title">Giám sát trực tiếp</span>
+                </div>
+
+                <div class="header-badges">
+                    <div class="status-pill pill-online">
+                        <span class="pill-dot"></span>
+                        <span>Camera: 1/1 Trực tuyến</span>
+                    </div>
+                    <div class="status-pill pill-attendance">
+                        <span class="pill-icon">📈</span>
+                        <span id="topbar-attendance-stat">Quân số: 45/45</span>
+                    </div>
+                    <div class="status-pill pill-neutral">
+                        <span class="pill-icon">💡</span>
+                        <span id="topbar-alert-stat">Cảnh báo: 0</span>
                     </div>
                 </div>
 
-                <!-- Step 2: Upload Video (for video mode) -->
-                <div class="section" id="video-source-panel">
-                    <h2>2. Upload Video</h2>
+                <div class="header-right">
+                    <div class="live-clock-container">
+                        <span id="live-time" class="live-time">23:18:13</span>
+                        <span id="live-date" class="live-date">17/08/2026</span>
+                    </div>
+                    <button class="notification-btn" title="Thông báo cảnh báo">
+                        🔔
+                        <span class="noti-badge" id="header-noti-badge">0</span>
+                    </button>
+                    <div class="user-badge">
+                        <div class="avatar-letter">H</div>
+                        <span class="user-name">Đại úy Nguyễn Văn Hùng</span>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Global Alert Banner -->
+            <div id="alert-banner" class="alert-banner" style="display: none;">
+                <span id="alert-message"></span>
+                <button onclick="closeAlert()">×</button>
+            </div>
+
+            <!-- Page Views Container -->
+            <div class="content-container">
+                <!-- VIEW 1: MAIN VIEW - GIÁM SÁT TRỰC TIẾP -->
+                <section id="view-monitoring" class="page-view active">
+                    <div class="main-monitoring-grid">
+                        <!-- Left Main Column: Surveillance Video & Controls -->
+                        <div class="surveillance-column">
+                            <!-- Top Surveillance Bar -->
+                            <div class="surveillance-top-bar">
+                                <div class="cam-current-badge">
+                                    <strong>ĐANG XEM: CAM-01 · SÂN TẬP TRUNG</strong>
+                                </div>
+                                <div class="top-bar-actions">
+                                    <div class="source-control-btn-group">
+                                        <button class="btn-source-config" onclick="toggleSourceModal()" title="Cấu hình nguồn Camera / Video">
+                                            ⚙️ Nguồn Camera
+                                        </button>
+                                    </div>
+                                    <div class="mute-siren-toggle">
+                                        <span class="toggle-label">🔊 Tắt tiếng còi</span>
+                                        <label class="switch">
+                                            <input type="checkbox" id="mute-siren-cb" onchange="toggleMuteSiren(this.checked)">
+                                            <span class="slider round"></span>
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Surveillance Screen Viewport -->
+                            <div class="surveillance-screen-card">
+                                <div class="video-container" id="main-video-container">
+                                    <canvas id="video-canvas"></canvas>
+                                    <div id="loading-overlay" class="loading-overlay">
+                                        <div class="overlay-msg-box">
+                                            <div class="radar-spinner"></div>
+                                            <p id="overlay-status-text">Đang nhận luồng dữ liệu tác chiến CAM-01...</p>
+                                            <button class="btn-primary-green btn-overlay-start" id="overlay-start-btn" onclick="quickStartStream()">Bắt đầu Giám sát</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Bottom Control Toolbar -->
+                            <div class="surveillance-bottom-toolbar">
+                                <div class="toolbar-left-actions">
+                                    <button class="btn-toolbar-primary" id="btn-lock-baseline" onclick="lockBaselineManual()">
+                                        <span class="btn-icon">🔒</span> Chốt sĩ số (Thủ công)
+                                    </button>
+                                    <button class="btn-toolbar-neutral" id="btn-toggle-ai-overlay" onclick="toggleAiOverlay()">
+                                        <span class="btn-icon">🥞</span> <span id="ai-overlay-btn-text">Tắt lớp phủ AI</span>
+                                    </button>
+                                    <button class="btn-toolbar-neutral" id="btn-quick-snapshot" onclick="takeQuickSnapshot()">
+                                        <span class="btn-icon">📷</span> Chụp nhanh
+                                    </button>
+                                </div>
+
+                                <div class="toolbar-right-toggles">
+                                    <button class="stream-type-btn active" id="btn-optical-stream" onclick="switchStreamType('optical')">
+                                        Luồng quang học
+                                    </button>
+                                    <button class="stream-type-btn" id="btn-thermal-stream" onclick="switchStreamType('thermal')">
+                                        🌡️ Ảnh nhiệt IR
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Right Column: Live Event Stream (DÒNG SỰ KIỆN TRỰC TIẾP) -->
+                        <div class="events-feed-column">
+                            <div class="glass-card events-feed-card">
+                                <div class="events-feed-header">
+                                    <h2>DÒNG SỰ KIỆN TRỰC TIẾP</h2>
+                                    <span class="pending-badge" id="pending-events-badge">2 chờ xử lý</span>
+                                </div>
+
+                                <div class="events-list" id="events-list-container">
+                                    <!-- Event 1: SYSTEM -->
+                                    <div class="event-card event-system" id="event-system-1">
+                                        <div class="event-card-header">
+                                            <span class="event-category cat-system">SYSTEM</span>
+                                            <span class="event-time">06:42:11</span>
+                                        </div>
+                                        <p class="event-desc">Baseline điểm danh ca sáng đã được khoá: 45 quân nhân.</p>
+                                        <div class="event-location">CAM-01 SÂN TẬP TRUNG</div>
+                                        <div class="event-card-actions">
+                                            <button class="btn-event-clip" onclick="viewEventClip('clip1')">▶️ Xem clip 10s</button>
+                                            <button class="btn-event-processed" disabled>✓ Đã xử lý</button>
+                                        </div>
+                                    </div>
+
+                                    <!-- Event 2: ABSENT -->
+                                    <div class="event-card event-absent" id="event-absent-1">
+                                        <div class="event-card-header">
+                                            <span class="event-category cat-absent">ABSENT</span>
+                                            <span class="event-time">06:58:03</span>
+                                        </div>
+                                        <p class="event-desc">Phát hiện thiếu 05 quân nhân so với baseline (45/50).</p>
+                                        <div class="event-location">CAM-01 SÂN TẬP TRUNG</div>
+                                        <div class="event-card-actions">
+                                            <button class="btn-event-clip" onclick="viewEventClip('clip2')">▶️ Xem clip 10s</button>
+                                            <button class="btn-event-confirm" onclick="confirmEventResolution('event-absent-1')">Xác nhận xử lý</button>
+                                        </div>
+                                    </div>
+
+                                    <!-- Event 3: SAFETY -->
+                                    <div class="event-card event-safety" id="event-safety-1">
+                                        <div class="event-card-header">
+                                            <span class="event-category cat-safety">SAFETY</span>
+                                            <span class="event-time">07:14:52</span>
+                                        </div>
+                                        <p class="event-desc">Người vượt vạch an toàn trong thời gian tập trung.</p>
+                                        <div class="event-location">CAM-01 SÂN TẬP TRUNG</div>
+                                        <div class="event-card-actions">
+                                            <button class="btn-event-clip" onclick="viewEventClip('clip3')">▶️ Xem clip 10s</button>
+                                            <button class="btn-event-confirm" onclick="confirmEventResolution('event-safety-1')">Xác nhận xử lý</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- VIEW 2: FACE REGISTRATION TAB -->
+                <section id="view-registration" class="page-view">
+                    <div class="two-column-layout">
+                        <!-- Left Card: Registration Form -->
+                        <div class="glass-card registration-card">
+                            <div class="card-header">
+                                <h2>Đăng ký Khuôn mặt</h2>
+                                <p class="card-subtitle">THU NHẬN SINH TRẮC HỌC FACE ID</p>
+                            </div>
+
+                            <form id="face-reg-form" onsubmit="handleFaceRegister(event)">
+                                <div class="form-group">
+                                    <label for="reg-name">Họ và tên</label>
+                                    <input type="text" id="reg-name" placeholder="Nguyễn Văn A" required class="form-input">
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="reg-military-id">Số hiệu quân nhân</label>
+                                    <input type="text" id="reg-military-id" placeholder="QN-10231" required class="form-input">
+                                </div>
+
+                                <div class="form-row-two">
+                                    <div class="form-group">
+                                        <label for="reg-rank">Cấp bậc</label>
+                                        <select id="reg-rank" required class="form-input form-select">
+                                            <option value="">Chọn cấp bậc</option>
+                                            <option value="Binh nhì">Binh nhì</option>
+                                            <option value="Binh nhất">Binh nhất</option>
+                                            <option value="Hạ sĩ">Hạ sĩ</option>
+                                            <option value="Trung sĩ">Trung sĩ</option>
+                                            <option value="Thượng sĩ">Thượng sĩ</option>
+                                            <option value="Chuẩn úy">Chuẩn úy</option>
+                                            <option value="Thiếu úy">Thiếu úy</option>
+                                            <option value="Trung úy">Trung úy</option>
+                                            <option value="Thượng úy">Thượng úy</option>
+                                            <option value="Đại úy">Đại úy</option>
+                                            <option value="Thiếu tá">Thiếu tá</option>
+                                            <option value="Trung tá">Trung tá</option>
+                                            <option value="Thượng tá">Thượng tá</option>
+                                            <option value="Đại tá">Đại tá</option>
+                                        </select>
+                                    </div>
+
+                                    <div class="form-group">
+                                        <label for="reg-unit">Đơn vị</label>
+                                        <select id="reg-unit" required class="form-input form-select">
+                                            <option value="">Chọn đơn vị</option>
+                                            <option value="Đại đội 1">Đại đội 1</option>
+                                            <option value="Đại đội 2">Đại đội 2</option>
+                                            <option value="Đại đội 3">Đại đội 3</option>
+                                            <option value="Tiểu đoàn 1">Tiểu đoàn 1</option>
+                                            <option value="Tiểu đoàn 2">Tiểu đoàn 2</option>
+                                            <option value="Tiểu đoàn 3">Tiểu đoàn 3</option>
+                                            <option value="Chỉ huy sở">Chỉ huy sở</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div class="media-source-tabs">
+                                    <button type="button" class="source-tab active" id="tab-webcam" onclick="switchMediaMode('webcam')">📷 Webcam</button>
+                                    <button type="button" class="source-tab" id="tab-upload" onclick="switchMediaMode('upload')">📤 Tải ảnh</button>
+                                </div>
+
+                                <div class="face-capture-viewport" id="viewport-webcam">
+                                    <video id="webcam-video" autoplay playsinline muted></video>
+                                    <canvas id="capture-canvas" style="display: none;"></canvas>
+                                    <div class="face-guide-circle">
+                                        <span class="guide-text" id="guide-status-text">BẬT WEBCAM ĐỂ THU NHẬN KHUÔN MẶT</span>
+                                    </div>
+                                </div>
+
+                                <div class="face-capture-viewport" id="viewport-upload" style="display: none;">
+                                    <input type="file" id="photo-upload-input" accept="image/*" onchange="previewUploadedPhoto(event)" style="display: none;">
+                                    <div class="upload-dropzone" onclick="document.getElementById('photo-upload-input').click()">
+                                        <img id="photo-preview-img" style="display: none;" alt="Preview">
+                                        <div id="upload-placeholder-content">
+                                            <div class="drop-icon">📁</div>
+                                            <p>Nhấp vào đây để chọn ảnh chân dung rõ nét</p>
+                                            <span class="help-text">Hỗ trợ JPG, PNG, WEBP</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="capture-actions" id="webcam-actions">
+                                    <button type="button" class="btn-action-capture" onclick="captureWebcamSnapshot()">
+                                        📷 Chụp ảnh khuôn mặt
+                                    </button>
+                                </div>
+
+                                <button type="submit" class="btn-primary-green" id="btn-save-face">
+                                    👤+ Lưu thông tin & Đăng ký Face ID
+                                </button>
+                                <p id="reg-status-msg" class="status-message"></p>
+                            </form>
+                        </div>
+
+                        <!-- Right Card: Registered Personnel Table -->
+                        <div class="glass-card personnel-card">
+                            <div class="card-header personnel-header">
+                                <div class="title-with-count">
+                                    <h2>DANH SÁCH QUÂN NHÂN ĐÃ ĐĂNG KÝ</h2>
+                                    <span class="count-badge" id="registered-count-badge">5</span>
+                                </div>
+
+                                <div class="table-filters">
+                                    <div class="search-box">
+                                        <span class="search-icon">🔍</span>
+                                        <input type="text" id="search-personnel" placeholder="Tìm tên / số hiệu" oninput="filterPersonnelTable()">
+                                    </div>
+                                    <select id="filter-unit" class="filter-select" onchange="filterPersonnelTable()">
+                                        <option value="all">Tất cả đơn vị</option>
+                                        <option value="Đại đội 1">Đại đội 1</option>
+                                        <option value="Đại đội 2">Đại đội 2</option>
+                                        <option value="Đại đội 3">Đại đội 3</option>
+                                        <option value="Tiểu đoàn 1">Tiểu đoàn 1</option>
+                                        <option value="Tiểu đoàn 2">Tiểu đoàn 2</option>
+                                        <option value="Tiểu đoàn 3">Tiểu đoàn 3</option>
+                                        <option value="Chỉ huy sở">Chỉ huy sở</option>
+                                    </select>
+                                    <select id="filter-rank" class="filter-select" onchange="filterPersonnelTable()">
+                                        <option value="all">Tất cả cấp bậc</option>
+                                        <option value="Binh nhì">Binh nhì</option>
+                                        <option value="Binh nhất">Binh nhất</option>
+                                        <option value="Hạ sĩ">Hạ sĩ</option>
+                                        <option value="Trung sĩ">Trung sĩ</option>
+                                        <option value="Thượng sĩ">Thượng sĩ</option>
+                                        <option value="Chuẩn úy">Chuẩn úy</option>
+                                        <option value="Thiếu úy">Thiếu úy</option>
+                                        <option value="Trung úy">Trung úy</option>
+                                        <option value="Thượng úy">Thượng úy</option>
+                                        <option value="Đại úy">Đại úy</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="table-responsive">
+                                <table class="personnel-table">
+                                    <thead>
+                                        <tr>
+                                            <th>ẢNH</th>
+                                            <th>HỌ VÀ TÊN</th>
+                                            <th>SỐ HIỆU</th>
+                                            <th>CẤP BẬC</th>
+                                            <th>ĐƠN VỊ</th>
+                                            <th>NGÀY ĐĂNG KÝ</th>
+                                            <th>TRẠNG THÁI</th>
+                                            <th>THAO TÁC</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="personnel-tbody"></tbody>
+                                </table>
+                                <div id="table-empty-msg" class="empty-table-state" style="display: none;">
+                                    Chưa có quân nhân nào được đăng ký
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- VIEW 3: QUẢN LÝ VÙNG & LUẬT (F-06) -->
+                <section id="view-zones" class="page-view">
+                    <div class="two-column-layout roi-layout">
+                        <!-- Left Column: Drawing Tools & Interactive Canvas -->
+                        <div class="roi-canvas-column">
+                            <div class="roi-toolbar">
+                                <div class="roi-tools-group">
+                                    <button type="button" class="btn-roi-tool active" id="tool-polygon" onclick="setDrawingMode('polygon')">
+                                        <span class="tool-icon">☖</span> Vẽ Vùng Polygon
+                                    </button>
+                                    <button type="button" class="btn-roi-tool" id="tool-tripwire" onclick="setDrawingMode('tripwire')">
+                                        <span class="tool-icon">✎</span> Vẽ Đường Ranh Giới Tripwire
+                                    </button>
+                                    <button type="button" class="btn-roi-tool" id="tool-snapshot" onclick="captureFrameForRoi()">
+                                        <span class="tool-icon">📸</span> Lấy khung hình Camera
+                                    </button>
+                                    <button type="button" class="btn-roi-reset" onclick="resetRoiCanvas()">
+                                        <span class="tool-icon">⟲</span> Xóa Vùng
+                                    </button>
+                                </div>
+                                <div class="roi-cam-tag">
+                                    CAM-01 · SÂN TẬP TRUNG
+                                </div>
+                            </div>
+
+                            <div class="roi-canvas-card">
+                                <div class="roi-canvas-header">
+                                    <span>KHUNG HÌNH TĨNH · CAM-01 · SÂN TẬP TRUNG</span>
+                                    <span id="roi-mode-label">CHẾ ĐỘ: POLYGON</span>
+                                </div>
+                                <div class="roi-canvas-wrapper" id="roi-canvas-wrapper">
+                                    <canvas id="roi-canvas"></canvas>
+                                </div>
+                            </div>
+                            <p class="roi-helper-text">Nhấp chuột lên khung hình để thêm điểm. Polygon cần tối thiểu 3 điểm; tripwire gồm 2 điểm.</p>
+                        </div>
+
+                        <!-- Right Column: Rules & Coordinates Form -->
+                        <div class="glass-card roi-rules-card">
+                            <div class="card-header">
+                                <h2>CẤU HÌNH LUẬT & TỌA ĐỘ</h2>
+                            </div>
+
+                            <form id="roi-config-form" onsubmit="saveZoneRules(event)">
+                                <div class="form-group">
+                                    <label for="zone-name-input">Tên vùng</label>
+                                    <input type="text" id="zone-name-input" value="Khu vực tập trung" required class="form-input">
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="zone-rule-type">Loại luật</label>
+                                    <select id="zone-rule-type" class="form-input form-select">
+                                        <option value="Cảnh báo Xâm nhập 24/7">Cảnh báo Xâm nhập 24/7</option>
+                                        <option value="Giám sát quân số tập trung">Giám sát quân số tập trung</option>
+                                        <option value="Vượt vạch an toàn (Tripwire)">Vượt vạch an toàn (Tripwire)</option>
+                                        <option value="Khu vực hạn chế F-06">Khu vực hạn chế F-06</option>
+                                    </select>
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Đối tượng phát hiện</label>
+                                    <div class="checkbox-group">
+                                        <label class="custom-checkbox">
+                                            <input type="checkbox" id="detect-human-cb" checked>
+                                            <span class="checkmark"></span>
+                                            <span>Người (Human)</span>
+                                        </label>
+                                        <label class="custom-checkbox">
+                                            <input type="checkbox" id="detect-object-cb" checked>
+                                            <span class="checkmark"></span>
+                                            <span>Động vật / Vật thể</span>
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="zone-coords-json">Tọa độ chuẩn hóa (JSON)</label>
+                                    <textarea id="zone-coords-json" rows="11" class="form-input form-textarea font-mono" readonly></textarea>
+                                </div>
+
+                                <button type="submit" class="btn-primary-green" id="btn-save-zone">
+                                    💾 Lưu Cấu Hình Zone
+                                </button>
+                                <p id="zone-save-status" class="status-message"></p>
+                            </form>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- VIEW 4: CẤU HÌNH THỜI KHÓA BIỂU -->
+                <section id="view-schedule" class="page-view">
+                    <div class="glass-card section-card">
+                        <div class="card-header flex-between">
+                            <div>
+                                <h2>CẤU HÌNH THỜI KHÓA BIỂU & CA ĐIỂM DANH TÁC CHIẾN</h2>
+                                <p class="card-subtitle">LẬP LỊCH TRỰC, HUẤN LUYỆN VÀ TỰ ĐỘNG ĐIỂM DANH QUÂN SỐ THEO CA</p>
+                            </div>
+                            <button class="btn-primary-green" onclick="toggleScheduleModal()">
+                                ➕ Thêm Ca Điểm Danh
+                            </button>
+                        </div>
+
+                        <div class="table-responsive" style="margin-top: 16px;">
+                            <table class="personnel-table">
+                                <thead>
+                                    <tr>
+                                        <th>CA TRỰC</th>
+                                        <th>TÊN NHIỆM VỤ / NỘI DUNG</th>
+                                        <th>ĐƠN VỊ ÁP DỤNG</th>
+                                        <th>KHUNG GIỜ CA</th>
+                                        <th>GIỜ ĐIỂM DANH</th>
+                                        <th>DUNG SAI</th>
+                                        <th>SĨ SỐ CHUẨN</th>
+                                        <th>TRẠNG THÁI</th>
+                                        <th>THAO TÁC</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="schedules-tbody">
+                                    <!-- Dynamic rows from API -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- VIEW 5: NHẬT KÝ & ĐIỂM DANH -->
+                <section id="view-logs" class="page-view">
+                    <div class="glass-card section-card">
+                        <div class="card-header flex-between">
+                            <div>
+                                <h2>NHẬT KÝ & LỊCH SỬ ĐIỂM DANH QUÂN SỐ</h2>
+                                <p class="card-subtitle">DỮ LIỆU TỰ ĐỘNG LƯU TRỮ TỪ CAMERA TÁC CHIẾN CAM-01 VÀ CÁC CA HUẤN LUYỆN</p>
+                            </div>
+                            <button class="btn-toolbar-neutral" onclick="exportAttendanceLogsCsv()">
+                                📄 Xuất Báo Cáo CSV
+                            </button>
+                        </div>
+
+                        <div class="log-metrics-grid">
+                            <div class="metric-card">
+                                <span class="metric-label">Tổng lượt điểm danh</span>
+                                <span class="metric-val" id="metric-total-logs">4</span>
+                            </div>
+                            <div class="metric-card">
+                                <span class="metric-label">Tỷ lệ đủ quân số</span>
+                                <span class="metric-val text-green" id="metric-pass-rate">75%</span>
+                            </div>
+                            <div class="metric-card">
+                                <span class="metric-label">Lượt vắng mặt / Cảnh báo</span>
+                                <span class="metric-val text-amber" id="metric-absent-logs">2</span>
+                            </div>
+                        </div>
+
+                        <div class="table-filters" style="margin: 16px 0 12px;">
+                            <select id="log-filter-unit" class="filter-select" onchange="loadAttendanceLogs()">
+                                <option value="all">Tất cả đơn vị</option>
+                                <option value="Đại đội 1">Đại đội 1</option>
+                                <option value="Đại đội 2">Đại đội 2</option>
+                                <option value="Tiểu đoàn 3">Tiểu đoàn 3</option>
+                            </select>
+                            <select id="log-filter-status" class="filter-select" onchange="filterAttendanceLogsByStatus()">
+                                <option value="all">Tất cả trạng thái</option>
+                                <option value="success">Đủ quân số</option>
+                                <option value="warning">Thiếu quân số</option>
+                            </select>
+                        </div>
+
+                        <div class="table-responsive">
+                            <table class="personnel-table">
+                                <thead>
+                                    <tr>
+                                        <th>THỜI GIAN</th>
+                                        <th>CA ĐIỂM DANH</th>
+                                        <th>ĐƠN VỊ</th>
+                                        <th>SĨ SỐ YÊU CẦU</th>
+                                        <th>HIỆN DIỆN</th>
+                                        <th>VẮNG MẶT</th>
+                                        <th>QUÂN NHÂN VẮNG</th>
+                                        <th>TRẠNG THÁI</th>
+                                        <th>CHỈ HUY DUYỆT</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="attendance-logs-tbody">
+                                    <!-- Dynamic rows from API -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <!-- 10-Second Event Clip Replay Modal -->
+    <div id="clip-modal" class="modal-backdrop" style="display: none;">
+        <div class="modal-content clip-player-modal">
+            <div class="modal-header">
+                <div>
+                    <h3 id="clip-modal-title">▶️ Bản Ghi Đoạn 10s Sự Kiện Tác Chiến</h3>
+                    <span class="modal-subtitle" id="clip-modal-subtitle">CAM-01 · SÂN TẬP TRUNG</span>
+                </div>
+                <button class="btn-close-modal" onclick="closeClipModal()">✕</button>
+            </div>
+            <div class="clip-viewport-container">
+                <canvas id="clip-player-canvas"></canvas>
+                <div class="clip-hud-watermark">
+                    <span>RECORDING REPLAY · 10.0s BUFFER</span>
+                    <span id="clip-timer-label">00:00 / 00:10</span>
+                </div>
+            </div>
+            <div class="clip-controls-bar">
+                <button class="btn-clip-ctrl" id="btn-clip-play-toggle" onclick="toggleClipPlayback()">⏸ Tạm dừng</button>
+                <input type="range" id="clip-timeline-slider" min="0" max="100" value="0" class="clip-slider" oninput="seekClipFrame(this.value)">
+                <span id="clip-fps-label" class="clip-fps-tag">5 FPS</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Schedule Add Modal -->
+    <div id="schedule-modal" class="modal-backdrop" style="display: none;">
+        <div class="modal-content glass-card">
+            <div class="modal-header">
+                <h3>Thêm Ca Điểm Danh & Thời Khóa Biểu Mới</h3>
+                <button class="btn-close-modal" onclick="toggleScheduleModal()">✕</button>
+            </div>
+            <form id="add-schedule-form" onsubmit="handleCreateSchedule(event)">
+                <div class="form-group">
+                    <label>Tên nhiệm vụ / Nội dung</label>
+                    <input type="text" id="sch-name-input" placeholder="Huấn luyện tác chiến ban đêm" required class="form-input">
+                </div>
+                <div class="form-row-two">
+                    <div class="form-group">
+                        <label>Ca trực</label>
+                        <select id="sch-shift-select" required class="form-input form-select">
+                            <option value="Ca sáng">Ca sáng</option>
+                            <option value="Ca chiều">Ca chiều</option>
+                            <option value="Ca đêm">Ca đêm</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Đơn vị áp dụng</label>
+                        <select id="sch-unit-select" required class="form-input form-select">
+                            <option value="Đại đội 1">Đại đội 1</option>
+                            <option value="Đại đội 2">Đại đội 2</option>
+                            <option value="Đại đội 3">Đại đội 3</option>
+                            <option value="Tiểu đoàn 3">Tiểu đoàn 3</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row-two">
+                    <div class="form-group">
+                        <label>Giờ bắt đầu</label>
+                        <input type="time" id="sch-start-time" value="07:00" required class="form-input">
+                    </div>
+                    <div class="form-group">
+                        <label>Giờ kết thúc</label>
+                        <input type="time" id="sch-end-time" value="11:30" required class="form-input">
+                    </div>
+                </div>
+                <div class="form-row-two">
+                    <div class="form-group">
+                        <label>Giờ chốt điểm danh</label>
+                        <input type="time" id="sch-check-time" value="07:15" required class="form-input">
+                    </div>
+                    <div class="form-group">
+                        <label>Sĩ số chuẩn</label>
+                        <input type="number" id="sch-count-input" value="45" min="1" required class="form-input">
+                    </div>
+                </div>
+                <button type="submit" class="btn-primary-green" style="margin-top: 12px;">
+                    Lưu Ca Thời Khóa Biểu
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Camera Source Modal -->
+    <div id="source-modal" class="modal-backdrop" style="display: none;">
+        <div class="modal-content glass-card">
+            <div class="modal-header">
+                <h3>Cấu hình Nguồn Camera Giám sát</h3>
+                <button class="btn-close-modal" onclick="toggleSourceModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="input-mode-selector">
+                    <button type="button" class="mode-tab active" id="mode-video-btn" onclick="switchMode('video')">Tệp Video</button>
+                    <button type="button" class="mode-tab" id="mode-rtsp-btn" onclick="switchMode('rtsp')">RTSP Stream</button>
+                </div>
+
+                <div id="video-source-panel" class="source-subpanel">
                     <form id="upload-form">
-                        <input type="file" id="video-file" accept="video/*" required>
-                        <button type="submit">Upload</button>
+                        <label class="form-label">Tải tệp video (.mp4, .avi, .mov):</label>
+                        <input type="file" id="video-file" accept="video/*" class="form-input">
+                        <button type="submit" class="btn-primary-green" style="margin-top: 10px;">Tải lên & Khởi chạy</button>
                     </form>
                     <p id="upload-status" class="status-message"></p>
                 </div>
 
-                <!-- Step 2: RTSP Settings (for RTSP mode) -->
-                <div class="section" id="rtsp-source-panel" style="display: none;">
-                    <h2>2. RTSP Stream Settings</h2>
-                    <div class="rtsp-input-container">
-                        <input type="text" id="rtsp-url" placeholder="rtsp://host:port/path" class="text-input">
-                        <div class="preset-container">
-                            <span class="help-text">Try demo URL:</span>
-                            <a href="#" onclick="setRtspDemo(event)" class="preset-link">Wowza Test Stream</a>
-                        </div>
+                <div id="rtsp-source-panel" class="source-subpanel" style="display: none;">
+                    <label class="form-label">Địa chỉ RTSP Stream:</label>
+                    <input type="text" id="rtsp-url" placeholder="rtsp://user:pass@ip:port/stream" class="form-input">
+                    <div class="preset-container">
+                        <span class="help-text">Demo test:</span>
+                        <a href="#" onclick="setRtspDemo(event)" class="preset-link">Wowza Test Stream</a>
                     </div>
-                </div>
-
-                <!-- Step 3: Start/Stop Processing -->
-                <div class="section">
-                    <h2>3. Control Processing</h2>
-                    <button id="start-btn" class="primary-btn" disabled>Start Processing</button>
-                    <p id="processing-status" class="status-message"></p>
-                </div>
-
-                <!-- Step 4: Set Baseline -->
-                <div class="section">
-                    <h2>4. Set Baseline</h2>
-                    <button id="set-baseline-btn" class="secondary-btn" disabled>Set Baseline</button>
-                    <p class="help-text">Click when all students are present</p>
-                </div>
-
-                <div class="section stats">
-                    <h2>Attendance Stats</h2>
-                    <div class="stat-item">
-                        <span class="stat-label">Current Count:</span>
-                        <span id="current-count" class="stat-value">-</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="stat-label">Baseline:</span>
-                        <span id="baseline-count" class="stat-value">-</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="stat-label">Status:</span>
-                        <span id="status-indicator" class="stat-value status-ok">OK</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Right Panel: Video Display -->
-            <div class="video-panel">
-                <div class="video-container">
-                    <canvas id="video-canvas"></canvas>
-                    <div id="loading-overlay" class="loading-overlay">
-                        <p>Upload a video to begin</p>
-                    </div>
+                    <button type="button" class="btn-primary-green" onclick="startRtspStream()" style="margin-top: 10px;">Kết nối Camera</button>
                 </div>
             </div>
         </div>
+    </div>
 
-        <!-- Event Log -->
-        <div class="event-log-section">
-            <h2>Alert Event Log</h2>
-            <div class="event-log-container">
-                <table id="event-log" class="event-log">
-                    <thead>
-                        <tr>
-                            <th>Timestamp</th>
-                            <th>Message</th>
-                            <th>Count</th>
-                            <th>Captured Frame</th>
-                        </tr>
-                    </thead>
-                    <tbody id="event-log-body">
-                        <!-- Events will be added here dynamically -->
-                    </tbody>
-                </table>
-                <p id="no-events" class="no-events">No alerts yet</p>
-            </div>
-        </div>
+    <!-- Floating Alarm Button -->
+    <div class="floating-mockup-btn">
+        <button onclick="triggerMockAlarm()" class="btn-alarm-demo">🚨 Mô phỏng cảnh báo xâm nhập</button>
     </div>
 
     <script src="/static/app.js"></script>

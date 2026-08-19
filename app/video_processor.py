@@ -1,14 +1,24 @@
-"""Video processing pipeline for attendance monitoring."""
+"""Video processing pipeline for attendance monitoring and face recognition with Horus HUD and 10s clip buffer."""
 
 import cv2
 import base64
 import asyncio
 import threading
 import time
+import json
 import numpy as np
+from pathlib import Path
+from collections import deque
+from typing import Optional, List, Dict, Tuple
 
 from app.detector import PersonDetector
 from app.monitor import AttendanceMonitor
+from app.face_engine import FaceEngine
+
+
+# Global rolling buffer for 10-second clip replay (stores last 60 frames ~ 12 seconds at 5fps)
+global_clip_buffer = deque(maxlen=60)
+latest_event_clips: Dict[str, List[str]] = {}
 
 
 class RTSPStreamReader:
@@ -64,16 +74,11 @@ class RTSPStreamReader:
 
 
 class VideoProcessor:
-    """Processes video frames for person detection and attendance monitoring."""
+    """Processes video frames for person detection, face recognition, and attendance monitoring."""
 
-    def __init__(self, fps: int = 5):
-        """
-        Initialize the video processor.
-
-        Args:
-            fps: Frames per second to process (lower = less CPU intensive)
-        """
+    def __init__(self, fps: int = 5, face_engine: Optional[FaceEngine] = None):
         self.detector = PersonDetector(model_name="yolo11s.pt")
+        self.face_engine = face_engine or FaceEngine()
         self.fps = fps
         self._stop_requested = False
 
@@ -89,12 +94,8 @@ class VideoProcessor:
     ) -> None:
         """
         Process video file or RTSP stream and stream results via callback.
-
-        Args:
-            video_path: Path to video file or RTSP stream URL
-            on_update: Async callback function for sending updates
-            monitor: AttendanceMonitor instance
         """
+        global global_clip_buffer, latest_event_clips
         is_rtsp = "://" in video_path
         reader = None
         cap = None
@@ -106,7 +107,7 @@ class VideoProcessor:
             if not reader.started:
                 await on_update({
                     'type': 'error',
-                    'message': 'Failed to connect to RTSP/Network stream'
+                    'message': 'Không thể kết nối tới luồng camera RTSP'
                 })
                 return
         else:
@@ -115,21 +116,19 @@ class VideoProcessor:
             if not cap.isOpened():
                 await on_update({
                     'type': 'error',
-                    'message': 'Failed to open video file'
+                    'message': 'Không thể mở tệp video'
                 })
                 return
 
-        # Get video FPS to calculate frame skip
         if not is_rtsp:
             video_fps = cap.get(cv2.CAP_PROP_FPS)
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             if video_fps == 0:
-                video_fps = 30  # Default if detection fails
+                video_fps = 30
             frame_skip = max(1, int(video_fps / self.fps))
-            print(f"Processing video: {total_frames} frames at {video_fps} FPS")
-            print(f"Processing rate: {self.fps} FPS (skipping every {frame_skip} frames)")
         else:
-            print(f"Processing RTSP stream at target rate: {self.fps} FPS")
+            video_fps = 30
+            frame_skip = 1
 
         frame_count = 0
         empty_frames_count = 0
@@ -137,19 +136,16 @@ class VideoProcessor:
         try:
             while not self._stop_requested:
                 if is_rtsp:
-                    # check if reader thread is still alive
                     if not reader.thread or not reader.thread.is_alive():
-                        print("RTSP reader thread is not running.")
                         break
 
                     ret, frame = reader.read()
                     if not ret or frame is None:
                         empty_frames_count += 1
-                        if empty_frames_count > 100:  # 100 * 0.05s = 5 seconds
-                            print("RTSP stream timeout: no frames received for 5 seconds")
+                        if empty_frames_count > 100:
                             await on_update({
                                 'type': 'error',
-                                'message': 'RTSP stream timeout: lost connection'
+                                'message': 'Mất tín hiệu camera RTSP'
                             })
                             break
                         await asyncio.sleep(0.05)
@@ -165,72 +161,217 @@ class VideoProcessor:
 
                 frame_count += 1
 
-                # Skip frames to achieve target FPS for files
-                if not is_rtsp:
-                    if frame_count % frame_skip != 0:
-                        continue
+                if not is_rtsp and frame_count % frame_skip != 0:
+                    continue
 
-                # Detect persons in frame
+                # 1. Person Detection via YOLO
                 detection = self.detector.detect_persons(frame)
+                person_count = detection['count']
+                person_boxes = detection['boxes']
+                confidences = detection['confidences']
 
-                # Draw bounding boxes on frame copy
+                # 2. Face Recognition via InsightFace (passing person boxes for deep crop recognition)
+                recognized_faces = self.face_engine.recognize_faces_in_frame(frame, person_boxes=person_boxes)
+                
+                present_personnel = []
+                seen_ids = set()
+                person_to_face_match = {}
+
+                # Match recognized faces to closest YOLO person box
+                for rf in recognized_faces:
+                    if rf.get("is_recognized") and rf.get("person"):
+                        p_info = rf["person"]
+                        if p_info["id"] not in seen_ids:
+                            seen_ids.add(p_info["id"])
+                            present_personnel.append(p_info)
+
+                        # Find which person bounding box contains this face
+                        fx1, fy1, fx2, fy2 = rf['bbox']
+                        fcx, fcy = (fx1 + fx2) // 2, (fy1 + fy2) // 2
+                        for p_idx, pbox in enumerate(person_boxes):
+                            px1, py1, px2, py2 = pbox
+                            if px1 - 20 <= fcx <= px2 + 20 and py1 - 20 <= fcy <= py2 + 40:
+                                person_to_face_match[p_idx] = p_info
+                                break
+
+                # 3. Clean Frame + Annotated HUD Frame
+                h_img, w_img = frame.shape[:2]
                 display_frame = frame.copy()
-                for box in detection['boxes']:
+
+                # Load Dynamic Zone Rules from data/zone_rules.json
+                zone_file = Path("data/zone_rules.json")
+                np_pts = None
+                if zone_file.exists():
+                    try:
+                        with open(zone_file, "r", encoding="utf-8") as f:
+                            z_data = json.load(f)
+                            # Draw polygon
+                            poly_pts = z_data.get("polygon_points", [])
+                            if len(poly_pts) >= 3:
+                                raw_pts = [[int(pt["x"] * w_img), int(pt["y"] * h_img)] for pt in poly_pts]
+                                np_pts = np.array(raw_pts, np.int32)
+                                # Semi-transparent green polygon fill + solid boundary
+                                overlay = display_frame.copy()
+                                cv2.fillPoly(overlay, [np_pts], (20, 160, 60))
+                                cv2.addWeighted(overlay, 0.15, display_frame, 0.85, 0, display_frame)
+                                cv2.polylines(display_frame, [np_pts], isClosed=True, color=(30, 220, 90), thickness=2)
+                            
+                            # Draw tripwire
+                            tw_pts = z_data.get("tripwire_points", [])
+                            if len(tw_pts) >= 2:
+                                p1 = (int(tw_pts[0]["x"] * w_img), int(tw_pts[0]["y"] * h_img))
+                                p2 = (int(tw_pts[1]["x"] * w_img), int(tw_pts[1]["y"] * h_img))
+                                cv2.line(display_frame, p1, p2, (0, 140, 255), 2, cv2.LINE_AA)
+                    except Exception:
+                        pass
+                
+                if np_pts is None:
+                    # Default Fallback Zone
+                    raw_pts = [
+                        [int(w_img * 0.08), int(h_img * 0.75)],
+                        [int(w_img * 0.35), int(h_img * 0.60)],
+                        [int(w_img * 0.70), int(h_img * 0.62)],
+                        [int(w_img * 0.92), int(h_img * 0.85)],
+                        [int(w_img * 0.12), int(h_img * 0.90)]
+                    ]
+                    np_pts = np.array(raw_pts, np.int32)
+                    cv2.polylines(display_frame, [np_pts], isClosed=True, color=(30, 220, 90), thickness=2)
+
+                # Filter persons inside ROI zone
+                in_zone_indices = set()
+                for p_idx, box in enumerate(person_boxes):
                     x1, y1, x2, y2 = box
-                    # Draw green rectangle
-                    cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    # Add person label
-                    cv2.putText(
-                        display_frame,
-                        'Person',
-                        (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.5,
-                        (0, 255, 0),
-                        2
-                    )
+                    # Test feet (ground point) or center point against the polygon
+                    feet_pt = ((x1 + x2) / 2.0, float(y2 - 2))
+                    center_pt = ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+                    
+                    in_feet = cv2.pointPolygonTest(np_pts, feet_pt, False) >= 0
+                    in_center = cv2.pointPolygonTest(np_pts, center_pt, False) >= 0
 
-                # Add count overlay
-                cv2.putText(
-                    display_frame,
-                    f"Count: {detection['count']}",
-                    (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1.0,
-                    (0, 255, 0),
-                    2
-                )
+                    if in_feet or in_center:
+                        in_zone_indices.add(p_idx)
 
-                # Encode frame to base64 JPEG
-                _, buffer = cv2.imencode('.jpg', display_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                # Official counted personnel = only persons INSIDE the configured zone
+                person_count = len(in_zone_indices) if np_pts is not None else len(person_boxes)
+
+                # Draw Person Bounding Boxes with In-Zone / Out-of-Zone distinction
+                for p_idx, (box, conf) in enumerate(zip(person_boxes, confidences)):
+                    x1, y1, x2, y2 = box
+                    is_in_zone = p_idx in in_zone_indices
+
+                    if is_in_zone:
+                        if p_idx in person_to_face_match:
+                            # RECOGNIZED SOLDIER IN ZONE: Bright glowing green box & identification banner
+                            p_info = person_to_face_match[p_idx]
+                            cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 120), 2)
+                            
+                            rank_str = p_info.get('rank', '')
+                            name_str = p_info.get('name', '')
+                            mid_str = p_info.get('military_id', '')
+                            id_label = f"[{rank_str}] {name_str} ({mid_str})" if rank_str else f"{name_str} ({mid_str})"
+                            
+                            (tw, th), _ = cv2.getTextSize(id_label, cv2.FONT_HERSHEY_DUPLEX, 0.45, 1)
+                            cv2.rectangle(display_frame, (x1, max(0, y1 - th - 8)), (x1 + tw + 6, y1), (0, 180, 70), -1)
+                            cv2.putText(
+                                display_frame,
+                                id_label,
+                                (x1 + 3, max(12, y1 - 4)),
+                                cv2.FONT_HERSHEY_DUPLEX,
+                                0.45,
+                                (255, 255, 255),
+                                1
+                            )
+                        else:
+                            # UNIDENTIFIED SOLDIER IN ZONE: Active green detection box
+                            cv2.rectangle(display_frame, (x1, y1), (x2, y2), (20, 220, 80), 2)
+                            tag_text = f"Trong vung: {int(conf * 100)}%"
+                            (tw, th), _ = cv2.getTextSize(tag_text, cv2.FONT_HERSHEY_DUPLEX, 0.4, 1)
+                            cv2.rectangle(display_frame, (x1, max(0, y1 - th - 6)), (x1 + tw + 4, y1), (10, 140, 50), -1)
+                            cv2.putText(
+                                display_frame,
+                                tag_text,
+                                (x1 + 2, max(10, y1 - 3)),
+                                cv2.FONT_HERSHEY_DUPLEX,
+                                0.4,
+                                (255, 255, 255),
+                                1
+                            )
+                    else:
+                        # SOLDIER OUTSIDE ZONE (FAR AWAY): Subtle grey/dimmed box, not counted
+                        cv2.rectangle(display_frame, (x1, y1), (x2, y2), (120, 130, 140), 1)
+                        tag_text = "Ngoai vung"
+                        (tw, th), _ = cv2.getTextSize(tag_text, cv2.FONT_HERSHEY_DUPLEX, 0.35, 1)
+                        cv2.rectangle(display_frame, (x1, max(0, y1 - th - 4)), (x1 + tw + 4, y1), (60, 65, 75), -1)
+                        cv2.putText(
+                            display_frame,
+                            tag_text,
+                            (x1 + 2, max(8, y1 - 2)),
+                            cv2.FONT_HERSHEY_DUPLEX,
+                            0.35,
+                            (200, 205, 215),
+                            1
+                        )
+
+                # Draw any standalone recognized face tags
+                for rf in recognized_faces:
+                    fx1, fy1, fx2, fy2 = rf['bbox']
+                    if rf['is_recognized'] and rf['person']:
+                        cv2.rectangle(display_frame, (fx1, fy1), (fx2, fy2), (0, 255, 120), 2)
+
+                # 4. Top & Bottom HUD Overlays
+                cv2.circle(display_frame, (25, 28), 6, (0, 0, 240), -1)
+                cv2.putText(display_frame, "CAM-01 . SAN TAP TRUNG", (38, 33), cv2.FONT_HERSHEY_DUPLEX, 0.55, (230, 230, 230), 1)
+
+                baseline_val = monitor.baseline_count if monitor.baseline_count is not None else 45
+                hud_stat = f"SI SO CHUAN: {baseline_val} | PHAT HIEN: {person_count}"
+                (hw, hh), _ = cv2.getTextSize(hud_stat, cv2.FONT_HERSHEY_DUPLEX, 0.5, 1)
+                cv2.rectangle(display_frame, (w_img - hw - 30, 12), (w_img - 10, 44), (15, 30, 20), -1)
+                cv2.rectangle(display_frame, (w_img - hw - 30, 12), (w_img - 10, 44), (20, 180, 70), 1)
+                cv2.putText(display_frame, hud_stat, (w_img - hw - 20, 32), cv2.FONT_HERSHEY_DUPLEX, 0.5, (0, 255, 120), 1)
+
+                rtsp_label = "RTSP://10.24.4.1:554 . QUANG HOC" if is_rtsp else f"TIEP VIDEO: {Path(video_path).name} . QUANG HOC"
+                cv2.putText(display_frame, rtsp_label, (20, h_img - 18), cv2.FONT_HERSHEY_DUPLEX, 0.45, (160, 175, 190), 1)
+
+                # Encode to base64 JPEG
+                _, buffer = cv2.imencode('.jpg', display_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
                 frame_b64 = base64.b64encode(buffer).decode('utf-8')
 
-                # Send frame update
+                # Store into global 10-second rolling clip buffer
+                global_clip_buffer.append(frame_b64)
+
+                # Send frame update over WebSocket
                 await on_update({
                     'type': 'frame_update',
                     'frame': frame_b64,
-                    'count': detection['count'],
-                    'boxes': detection['boxes'],
+                    'count': person_count,
+                    'baseline': baseline_val,
+                    'recognized_count': len(present_personnel),
+                    'present_personnel': present_personnel,
+                    'boxes': person_boxes,
                     'frame_number': frame_count,
                     'is_processing': True
                 })
 
-                # Check for alerts
-                alert_result = monitor.update_count(detection['count'], frame)
+                # Check for baseline drop alerts
+                alert_result = monitor.update_count(person_count, frame)
                 if alert_result['alert_triggered']:
+                    event_clip_id = f"clip_{int(time.time())}"
+                    latest_event_clips[event_clip_id] = list(global_clip_buffer)
+
                     await on_update({
                         'type': 'alert',
+                        'category': 'ABSENT',
+                        'clip_id': event_clip_id,
                         **alert_result['alert_data']
                     })
 
-                # Control processing speed
                 await asyncio.sleep(1.0 / self.fps)
 
         except Exception as e:
             print(f"Error processing video: {e}")
             await on_update({
                 'type': 'error',
-                'message': f'Error processing video: {str(e)}'
+                'message': f'Lỗi luồng xử lý video: {str(e)}'
             })
         finally:
             if is_rtsp and reader:
@@ -243,4 +384,3 @@ class VideoProcessor:
                 'total_frames': frame_count,
                 'is_processing': False
             })
-            print(f"Video processing complete: {frame_count} frames processed")
