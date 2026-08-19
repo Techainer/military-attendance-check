@@ -1,14 +1,17 @@
 """Roll-call session logic: điểm danh trong N phút đầu giờ học."""
 
-import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
+
+from app.storage import read_json_list, write_json_list
 
 
 DEFAULT_WINDOW_MINS = 5
 # Số lượt quét tối thiểu để coi là có mặt (chống nhận nhầm 1 frame)
 MIN_SIGHTINGS = 3
+# Cửa sổ còn lại ít hơn ngần này thì không mở phiên nữa (mở ra cũng không kịp đếm)
+MIN_OPEN_REMAINING_SECONDS = 30
 
 
 def _schedule_window_mins(schedule: dict) -> int:
@@ -112,24 +115,28 @@ class AttendanceManager:
         self.face_engine = face_engine
         self.session: Optional[AttendanceSession] = None
         self.completed_keys = self._load_completed_keys()
+        self._schedules_cache: List[dict] = []
+        self._schedules_mtime = None
 
     # ---------- persistence ----------
 
-    def _read_json(self, path: Path) -> list:
-        if not path.exists():
-            return []
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return data if isinstance(data, list) else []
-        except Exception as e:
-            print(f"[Attendance] Lỗi đọc {path.name}: {e}")
-            return []
+    def _load_schedules(self) -> List[dict]:
+        """Đọc lại schedules.json chỉ khi file đổi (hàm này bị gọi mỗi frame)."""
+        if not self.schedules_file.exists():
+            self._schedules_cache = []
+            self._schedules_mtime = None
+            return self._schedules_cache
+
+        mtime = self.schedules_file.stat().st_mtime
+        if mtime != self._schedules_mtime:
+            self._schedules_cache = read_json_list(self.schedules_file)
+            self._schedules_mtime = mtime
+        return self._schedules_cache
 
     def _load_completed_keys(self) -> set:
         """Ca nào đã điểm danh trong ngày rồi thì không chạy lại."""
         keys = set()
-        for log in self._read_json(self.logs_file):
+        for log in read_json_list(self.logs_file):
             sch_id = log.get("schedule_id")
             started = log.get("started_at", "")
             if sch_id and started:
@@ -137,30 +144,23 @@ class AttendanceManager:
         return keys
 
     def _write_log(self, log: dict) -> None:
-        logs = self._read_json(self.logs_file)
+        logs = read_json_list(self.logs_file)
         logs.insert(0, log)
-        try:
-            with open(self.logs_file, "w", encoding="utf-8") as f:
-                json.dump(logs, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"[Attendance] Lỗi ghi nhật ký điểm danh: {e}")
+        write_json_list(self.logs_file, logs)
 
     # ---------- roster ----------
 
     def _roster_for(self, unit: Optional[str]) -> List[dict]:
-        """Danh sách quân nhân của đơn vị áp dụng cho ca."""
-        self.face_engine._load_database()
-        people = self.face_engine.registered_faces
-        if unit and unit not in ("all", "Tất cả đơn vị"):
-            scoped = [p for p in people if p.get("unit") == unit]
-            if scoped:
-                return [{k: v for k, v in p.items() if k != "embedding"} for p in scoped]
-        return [{k: v for k, v in p.items() if k != "embedding"} for p in people]
+        """Danh sách quân nhân của đơn vị áp dụng cho ca.
+
+        Đơn vị chưa đăng ký ai thì roster rỗng, không rơi về toàn bộ CSDL.
+        """
+        return self.face_engine.get_registered_faces(unit=unit)
 
     # ---------- session lifecycle ----------
 
     def open_session(self, schedule: dict, now: datetime, window_mins: Optional[int] = None) -> AttendanceSession:
-        mins = window_mins or _schedule_window_mins(schedule)
+        mins = window_mins if (window_mins and window_mins > 0) else _schedule_window_mins(schedule)
         roster = self._roster_for(schedule.get("unit"))
         self.session = AttendanceSession(schedule, roster, now, mins)
         print(f"[Attendance] Mở phiên điểm danh '{schedule.get('name', 'thủ công')}' "
@@ -170,13 +170,13 @@ class AttendanceManager:
     def start_manual(self, now: datetime, schedule_id: Optional[str] = None,
                      window_mins: Optional[int] = None) -> AttendanceSession:
         """Điểm danh đột xuất / dùng khi demo, không chờ tới giờ ca."""
-        schedules = self._read_json(self.schedules_file)
         schedule = None
         if schedule_id:
-            schedule = next((s for s in schedules if s.get("id") == schedule_id), None)
+            schedule = next((s for s in self._load_schedules() if s.get("id") == schedule_id), None)
         if schedule is None:
-            schedule = schedules[0] if schedules else {
-                "id": "manual",
+            # Phiên đột xuất mang id riêng, không được đánh dấu ca nào đã điểm danh xong
+            schedule = {
+                "id": f"manual_{int(now.timestamp())}",
                 "name": "Điểm danh đột xuất",
                 "shift": "Đột xuất",
                 "unit": "Tất cả đơn vị",
@@ -188,12 +188,17 @@ class AttendanceManager:
         if self.session is not None:
             return None
 
-        for schedule in self._read_json(self.schedules_file):
+        for schedule in self._load_schedules():
             start = _start_datetime(schedule, now)
             if start is None:
                 continue
             mins = _schedule_window_mins(schedule)
-            if not (start <= now < start + timedelta(minutes=mins)):
+            ends = start + timedelta(minutes=mins)
+            if not (start <= now < ends):
+                continue
+            if (ends - now).total_seconds() < MIN_OPEN_REMAINING_SECONDS:
+                # Hệ thống vào quá muộn: không chốt biên bản nửa vời, cũng không
+                # đánh dấu ca này đã xong để còn chạy lại nếu mở sớm hơn
                 continue
             key = f"{schedule.get('id')}:{now.date().isoformat()}"
             if key in self.completed_keys:
@@ -222,6 +227,12 @@ class AttendanceManager:
               f"vắng {log['absent']}")
         self.session = None
         return log
+
+    def cancel_session(self) -> None:
+        """Bỏ phiên đang mở mà không ghi biên bản (dừng luồng giữa chừng)."""
+        if self.session is not None:
+            print(f"[Attendance] Huỷ phiên điểm danh '{self.session.schedule.get('name', '')}' giữa chừng")
+            self.session = None
 
     def status(self, now: datetime) -> dict:
         if self.session is None:

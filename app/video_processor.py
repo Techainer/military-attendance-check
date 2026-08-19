@@ -178,8 +178,12 @@ class VideoProcessor:
                 if not is_rtsp and frame_count % frame_skip != 0:
                     continue
 
-                # 1. Person Detection via YOLO
-                detection = self.detector.detect_persons(frame)
+                # 1. Hai model chạy song song trên cùng khung hình, mỗi model một thread
+                #    nên vòng lặp sự kiện không bị chặn trong lúc inference.
+                detection, recognized_faces = await asyncio.gather(
+                    asyncio.to_thread(self.detector.detect_persons, frame),
+                    asyncio.to_thread(self.face_engine.recognize_faces_in_frame, frame),
+                )
                 person_boxes = detection['boxes']
                 confidences = detection['confidences']
 
@@ -243,32 +247,21 @@ class VideoProcessor:
                 # Sĩ số trong vùng = chỉ những người NẰM TRONG vùng đã cấu hình
                 person_count = len(in_zone_indices)
 
-                # 4. Nhận diện khuôn mặt — chỉ chạy trên người TRONG vùng
-                in_zone_boxes = [person_boxes[i] for i in sorted(in_zone_indices)]
-                recognized_faces = self.face_engine.recognize_faces_in_frame(
-                    frame, person_boxes=in_zone_boxes
-                )
-                # Lượt quét toàn khung có thể bắt được mặt ngoài vùng -> loại bỏ
-                recognized_faces = [
-                    rf for rf in recognized_faces
-                    if cv2.pointPolygonTest(np_pts, _bbox_center(rf['bbox']), False) >= 0
-                ]
-
+                # 4. Gắn khuôn mặt đã quét được vào người trong vùng
                 present_personnel = []
                 seen_ids = set()
                 person_to_face_match = {}
                 claimed_boxes = set()
+                matched_face_boxes = []
 
                 for rf in recognized_faces:
                     if not (rf.get("is_recognized") and rf.get("person")):
                         continue
 
-                    p_info = rf["person"]
-                    if p_info["id"] not in seen_ids:
-                        seen_ids.add(p_info["id"])
-                        present_personnel.append(p_info)
-
-                    # Gán mặt vào box người NHỎ NHẤT có chứa mặt; mỗi box chỉ nhận một người
+                    # Gán mặt vào box người TRONG VÙNG nhỏ nhất có chứa mặt; mỗi box chỉ
+                    # nhận một người. Không dùng polygon để lọc mặt: polygon là vùng mặt
+                    # đất nên tâm khuôn mặt luôn nằm phía trên nó. Mặt không gắn được vào
+                    # ai trong vùng thì không tính điểm danh.
                     fcx, fcy = _bbox_center(rf['bbox'])
                     best_idx = None
                     best_area = None
@@ -283,9 +276,17 @@ class VideoProcessor:
                             best_area = area
                             best_idx = p_idx
 
-                    if best_idx is not None:
-                        person_to_face_match[best_idx] = p_info
-                        claimed_boxes.add(best_idx)
+                    if best_idx is None:
+                        continue
+
+                    p_info = rf["person"]
+                    person_to_face_match[best_idx] = p_info
+                    claimed_boxes.add(best_idx)
+                    matched_face_boxes.append(rf['bbox'])
+
+                    if p_info["id"] not in seen_ids:
+                        seen_ids.add(p_info["id"])
+                        present_personnel.append(p_info)
 
                 # Draw Person Bounding Boxes with In-Zone / Out-of-Zone distinction
                 for p_idx, (box, conf) in enumerate(zip(person_boxes, confidences)):
@@ -346,16 +347,26 @@ class VideoProcessor:
                         )
 
                 # Draw any standalone recognized face tags
-                for rf in recognized_faces:
-                    fx1, fy1, fx2, fy2 = rf['bbox']
-                    if rf['is_recognized'] and rf['person']:
-                        cv2.rectangle(display_frame, (fx1, fy1), (fx2, fy2), (0, 255, 120), 2)
+                for fbox in matched_face_boxes:
+                    fx1, fy1, fx2, fy2 = fbox
+                    cv2.rectangle(display_frame, (fx1, fy1), (fx2, fy2), (0, 255, 120), 2)
+
+                # Phiên điểm danh: mở theo thời khoá biểu, gom người nhận diện được, chốt khi hết giờ
+                now = datetime.now()
+                if self.attendance is not None:
+                    if self.attendance.session is None:
+                        self.attendance.maybe_open_scheduled(now)
+                    if self.attendance.session is not None:
+                        self.attendance.record([p["id"] for p in present_personnel])
+                    closed_log = self.attendance.close_if_due(now)
+                    if closed_log:
+                        await on_update({'type': 'attendance_complete', 'log': closed_log})
 
                 # 4. Top & Bottom HUD Overlays
                 cv2.circle(display_frame, (25, 28), 6, (0, 0, 240), -1)
                 cv2.putText(display_frame, "CAM-01 . SAN TAP TRUNG", (38, 33), cv2.FONT_HERSHEY_DUPLEX, 0.55, (230, 230, 230), 1)
 
-                att_status = self.attendance.status(datetime.now()) if self.attendance else {"active": False}
+                att_status = self.attendance.status(now) if self.attendance else {"active": False}
 
                 baseline_val = monitor.baseline_count
                 if baseline_val is None and att_status.get("active"):
@@ -402,17 +413,6 @@ class VideoProcessor:
                     'is_processing': True
                 })
 
-                # Phiên điểm danh: mở theo thời khoá biểu, gom người nhận diện được, chốt khi hết giờ
-                if self.attendance is not None:
-                    now = datetime.now()
-                    if self.attendance.session is None:
-                        self.attendance.maybe_open_scheduled(now)
-                    if self.attendance.session is not None:
-                        self.attendance.record([p["id"] for p in present_personnel])
-                    closed_log = self.attendance.close_if_due(now)
-                    if closed_log:
-                        await on_update({'type': 'attendance_complete', 'log': closed_log})
-
                 # Check for baseline drop alerts
                 alert_result = monitor.update_count(person_count, frame)
                 if alert_result['alert_triggered']:
@@ -430,7 +430,7 @@ class VideoProcessor:
                         'type': 'system_event',
                         'category': 'SYSTEM',
                         'message': f'Quân số đã đủ trở lại ({person_count} quân nhân)',
-                        'timestamp': datetime.now().isoformat()
+                        'timestamp': now.isoformat()
                     })
 
                 await asyncio.sleep(1.0 / self.fps)
@@ -448,9 +448,13 @@ class VideoProcessor:
                 cap.release()
 
             if self.attendance is not None and self.attendance.session is not None:
-                closed_log = self.attendance.close_if_due(datetime.now(), force=True)
-                if closed_log:
-                    await on_update({'type': 'attendance_complete', 'log': closed_log})
+                if self._stop_requested:
+                    # Người dùng bấm dừng giữa phiên -> huỷ, không chốt biên bản vắng giả
+                    self.attendance.cancel_session()
+                else:
+                    closed_log = self.attendance.close_if_due(datetime.now(), force=True)
+                    if closed_log:
+                        await on_update({'type': 'attendance_complete', 'log': closed_log})
 
             await on_update({
                 'type': 'processing_complete',

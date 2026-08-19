@@ -54,6 +54,7 @@ class AttendanceMonitor:
         self.baseline_count = count
         self.below_baseline_start = None
         self.last_alert_at = None
+        self.recent_counts.clear()
         print(f"Baseline set to {count} persons")
 
     def update_count(self, count: int, frame: np.ndarray) -> dict:
@@ -101,7 +102,9 @@ class AttendanceMonitor:
                 return {'alert_triggered': True, 'alert_data': alert_data, 'recovered': False}
         else:
             # Count recovered, reset timer
-            recovered = self.below_baseline_start is not None or self.last_alert_at is not None
+            # Chỉ báo phục hồi khi trước đó đã thực sự bắn cảnh báo,
+            # tránh việc tụt sĩ số thoáng qua cũng sinh ra thông báo
+            recovered = self.last_alert_at is not None
             if recovered:
                 print(f"Count recovered: {count} >= {self.baseline_count}")
             self.below_baseline_start = None

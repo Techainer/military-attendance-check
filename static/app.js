@@ -582,7 +582,7 @@ function updateFrame(data) {
     img.src = 'data:image/jpeg;base64,' + data.frame;
 
     currentCount = data.count;
-    if (data.baseline) baselineCount = data.baseline;
+    if (typeof data.baseline === 'number') baselineCount = data.baseline;
 
     if (topbarAttendanceStat) {
         const unknown = data.unidentified_count || 0;

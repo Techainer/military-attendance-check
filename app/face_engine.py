@@ -244,10 +244,13 @@ class FaceEngine:
                 return {k: v for k, v in person.items() if k != "embedding"}
         return None
 
-    def recognize_faces_in_frame(self, frame: np.ndarray, person_boxes: Optional[List[Tuple[int, int, int, int]]] = None) -> List[Dict]:
+    def recognize_faces_in_frame(self, frame: np.ndarray) -> List[Dict]:
         """
-        Detect all faces in frame (and inside detected person crops) and match with registered database.
-        
+        Quét khuôn mặt trên TOÀN khung hình một lượt duy nhất rồi so với CSDL.
+
+        Chạy độc lập với YOLO nên hai model có thể xử lý song song; việc gắn mặt
+        vào từng người do phía gọi đảm nhiệm.
+
         Returns:
             List of detected faces with bbox and match info
         """
@@ -268,74 +271,20 @@ class FaceEngine:
             self._matrix_cache = (np.array(reg_embeddings, dtype=np.float32), reg_persons)
 
         reg_matrix, reg_persons = self._matrix_cache  # Shape: (N, 512)
-        h_img, w_img = frame.shape[:2]
 
         all_detected_faces = []
 
-        # 1. First pass: detect faces in whole frame
         try:
-            full_faces = self.app.get(frame)
-            if full_faces:
-                for f in full_faces:
-                    all_detected_faces.append({
-                        "bbox": f.bbox.astype(int),
-                        "embedding": f.embedding,
-                        "det_score": float(f.det_score) if hasattr(f, 'det_score') else 1.0
-                    })
+            for f in self.app.get(frame):
+                all_detected_faces.append({
+                    "bbox": f.bbox.astype(int),
+                    "embedding": f.embedding,
+                    "det_score": float(f.det_score) if hasattr(f, 'det_score') else 1.0
+                })
         except Exception as e:
-            print(f"[FaceEngine] Full frame recognition error: {e}")
+            print(f"[FaceEngine] Lỗi quét khuôn mặt: {e}")
 
-        # 2. Second pass: detect inside cropped person regions for enhanced sensitivity
-        if person_boxes:
-            for pbox in person_boxes:
-                px1, py1, px2, py2 = pbox
-                # Crop upper body (head region)
-                hx1 = max(0, px1 - 10)
-                hy1 = max(0, py1 - 10)
-                hx2 = min(w_img, px2 + 10)
-                hy2 = min(h_img, py1 + int((py2 - py1) * 0.65))
-                
-                if (hx2 - hx1) < 25 or (hy2 - hy1) < 25:
-                    continue
-
-                head_crop = frame[hy1:hy2, hx1:hx2]
-                try:
-                    crop_faces = self.app.get(head_crop)
-                    if crop_faces:
-                        for cf in crop_faces:
-                            cbx1, cby1, cbx2, cby2 = cf.bbox.astype(int)
-                            # Translate back to global frame coordinates
-                            global_bbox = np.array([hx1 + cbx1, hy1 + cby1, hx1 + cbx2, hy1 + cby2])
-                            
-                            # Check overlap with existing detected faces to avoid duplicates
-                            is_dup = False
-                            for existing in all_detected_faces:
-                                e_bx1, e_by1, e_bx2, e_by2 = existing["bbox"]
-                                # Compute IoU or distance
-                                inter_x1 = max(global_bbox[0], e_bx1)
-                                inter_y1 = max(global_bbox[1], e_by1)
-                                inter_x2 = min(global_bbox[2], e_bx2)
-                                inter_y2 = min(global_bbox[3], e_by2)
-                                inter_w = max(0, inter_x2 - inter_x1)
-                                inter_h = max(0, inter_y2 - inter_y1)
-                                inter_area = inter_w * inter_h
-                                
-                                area1 = max(1, (global_bbox[2] - global_bbox[0]) * (global_bbox[3] - global_bbox[1]))
-                                if inter_area / area1 > 0.4:
-                                    is_dup = True
-                                    break
-                            
-                            if not is_dup:
-                                all_detected_faces.append({
-                                    "bbox": global_bbox,
-                                    "embedding": cf.embedding,
-                                    "det_score": float(cf.det_score) if hasattr(cf, 'det_score') else 1.0,
-                                    "associated_person_box": pbox
-                                })
-                except Exception:
-                    pass
-
-        # 3. Match embeddings against registered database
+        # Match embeddings against registered database
         results = []
         for face_dict in all_detected_faces:
             bx1, by1, bx2, by2 = face_dict["bbox"]
@@ -355,7 +304,6 @@ class FaceEngine:
                     "is_recognized": True,
                     "similarity": round(best_sim, 2),
                     "det_score": face_dict["det_score"],
-                    "associated_person_box": face_dict.get("associated_person_box"),
                     "person": {
                         "id": matched_person.get("id"),
                         "name": matched_person.get("name"),
@@ -371,7 +319,6 @@ class FaceEngine:
                     "is_recognized": False,
                     "similarity": round(best_sim, 2),
                     "det_score": face_dict["det_score"],
-                    "associated_person_box": face_dict.get("associated_person_box"),
                     "person": None
                 })
 

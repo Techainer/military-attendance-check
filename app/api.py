@@ -18,6 +18,7 @@ from app.video_processor import VideoProcessor
 from app.monitor import AttendanceMonitor
 from app.face_engine import FaceEngine
 from app.attendance import AttendanceManager
+from app.storage import read_json_list, write_json_list
 
 
 # Initialize FastAPI app
@@ -302,34 +303,20 @@ async def get_event_clip(clip_id: Optional[str] = None):
 async def get_schedules():
     """Get list of military shift schedules."""
     sch_file = data_path / "schedules.json"
-    if sch_file.exists():
-        try:
-            with open(sch_file, "r", encoding="utf-8") as f:
-                return {"status": "success", "data": json.load(f)}
-        except Exception as e:
-            print(f"Error loading schedules: {e}")
-    return {"status": "success", "data": []}
+    return {"status": "success", "data": read_json_list(sch_file)}
 
 
 @app.post("/api/schedules")
 async def create_schedule(schedule_data: dict):
     """Create a new military shift schedule."""
     sch_file = data_path / "schedules.json"
-    schedules = []
-    if sch_file.exists():
-        try:
-            with open(sch_file, "r", encoding="utf-8") as f:
-                schedules = json.load(f)
-        except Exception:
-            schedules = []
-            
+    schedules = read_json_list(sch_file)
+
     schedule_data["id"] = f"sch_{int(time.time() * 1000)}"
     schedule_data["status"] = "Active"
     schedules.append(schedule_data)
-    
-    with open(sch_file, "w", encoding="utf-8") as f:
-        json.dump(schedules, f, ensure_ascii=False, indent=2)
-        
+    write_json_list(sch_file, schedules)
+
     return {"status": "success", "message": "Đã thêm ca thời khóa biểu mới!", "data": schedule_data}
 
 
@@ -339,32 +326,20 @@ async def delete_schedule(sch_id: str):
     sch_file = data_path / "schedules.json"
     if not sch_file.exists():
         raise HTTPException(status_code=404, detail="Không tìm thấy thời khóa biểu")
-        
-    with open(sch_file, "r", encoding="utf-8") as f:
-        schedules = json.load(f)
-        
-    schedules = [s for s in schedules if s.get("id") != sch_id]
-    
-    with open(sch_file, "w", encoding="utf-8") as f:
-        json.dump(schedules, f, ensure_ascii=False, indent=2)
-        
+
+    schedules = [s for s in read_json_list(sch_file) if s.get("id") != sch_id]
+    write_json_list(sch_file, schedules)
+
     return {"status": "success", "message": "Đã xóa ca thời khóa biểu"}
 
 
 @app.get("/api/attendance-logs")
 async def get_attendance_logs(unit: Optional[str] = None):
     """Get history of attendance roll-call logs."""
-    log_file = data_path / "attendance_logs.json"
-    if log_file.exists():
-        try:
-            with open(log_file, "r", encoding="utf-8") as f:
-                logs = json.load(f)
-                if unit and unit != "all" and unit != "Tất cả đơn vị":
-                    logs = [l for l in logs if l.get("unit") == unit]
-                return {"status": "success", "data": logs}
-        except Exception as e:
-            print(f"Error loading attendance logs: {e}")
-    return {"status": "success", "data": []}
+    logs = read_json_list(data_path / "attendance_logs.json")
+    if unit and unit != "all" and unit != "Tất cả đơn vị":
+        logs = [l for l in logs if l.get("unit") == unit]
+    return {"status": "success", "data": logs}
 
 
 # ----------------- Roll-call (Điểm danh) Endpoints -----------------
@@ -372,15 +347,28 @@ async def get_attendance_logs(unit: Optional[str] = None):
 @app.post("/api/attendance/start")
 async def start_attendance(schedule_id: Optional[str] = None, window_mins: Optional[int] = None):
     """Mở phiên điểm danh ngay lập tức, không chờ tới giờ ca."""
+    now = datetime.now()
     if attendance.session is not None:
-        return {"status": "error", "message": "Đang có phiên điểm danh chạy dở"}
+        if not attendance.session.is_due(now):
+            return {"status": "error", "message": "Đang có phiên điểm danh chạy dở"}
+        # Phiên cũ đã quá giờ mà chưa chốt (luồng video không chạy) -> bỏ đi
+        attendance.cancel_session()
 
-    session = attendance.start_manual(datetime.now(), schedule_id=schedule_id, window_mins=window_mins)
+    session = attendance.start_manual(now, schedule_id=schedule_id, window_mins=window_mins)
     return {
         "status": "success",
         "message": f"Đã mở phiên điểm danh {session.window_mins} phút cho {session.schedule.get('unit', 'toàn đơn vị')}",
-        "data": attendance.status(datetime.now())
+        "data": attendance.status(now)
     }
+
+
+@app.post("/api/attendance/cancel")
+async def cancel_attendance():
+    """Huỷ phiên điểm danh đang mở, không ghi biên bản."""
+    if attendance.session is None:
+        return {"status": "success", "message": "Không có phiên điểm danh nào đang mở"}
+    attendance.cancel_session()
+    return {"status": "success", "message": "Đã huỷ phiên điểm danh"}
 
 
 @app.get("/api/attendance/status")
