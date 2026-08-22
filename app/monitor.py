@@ -1,6 +1,5 @@
 """Attendance monitoring and alert logic."""
 
-from datetime import datetime
 from pathlib import Path
 from collections import deque
 from statistics import median
@@ -8,6 +7,8 @@ import cv2
 import numpy as np
 import json
 import os
+
+from app import clock
 
 
 class AttendanceMonitor:
@@ -83,11 +84,11 @@ class AttendanceMonitor:
         if count < self.baseline_count:
             # Start timer if not already started
             if self.below_baseline_start is None:
-                self.below_baseline_start = datetime.now()
+                self.below_baseline_start = clock.now()
                 print(f"Count dropped below baseline: {count} < {self.baseline_count}")
 
             # Check if threshold exceeded
-            now = datetime.now()
+            now = clock.now()
             elapsed = (now - self.below_baseline_start).total_seconds()
             in_cooldown = (
                 self.last_alert_at is not None
@@ -124,7 +125,7 @@ class AttendanceMonitor:
         Returns:
             Alert data dictionary
         """
-        timestamp = datetime.now()
+        timestamp = clock.now()
         filename = f"alert_{timestamp.strftime('%Y%m%d_%H%M%S')}.jpg"
         filepath = self.alerts_dir / filename
 
@@ -162,7 +163,7 @@ class AttendanceMonitor:
         """
         time_below = None
         if self.below_baseline_start is not None:
-            time_below = (datetime.now() - self.below_baseline_start).total_seconds()
+            time_below = (clock.now() - self.below_baseline_start).total_seconds()
 
         return {
             'baseline_count': self.baseline_count,

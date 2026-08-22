@@ -1586,3 +1586,108 @@ input:checked + .slider:before {
 .text-green { color: #059669; }
 .text-amber { color: #d97706; }
 .text-red { color: #dc2626; }
+
+/* ---------- ĐIỂM DANH: TRẠNG THÁI CA, BẰNG CHỨNG ĐẦU/CUỐI GIỜ ---------- */
+
+.status-warning {
+    background: #fef3c7;
+    color: #b45309;
+}
+
+.status-neutral {
+    background: #eef2f7;
+    color: #64748b;
+}
+
+.cell-subtext {
+    font-size: 11px;
+    color: #94a3b8;
+    margin-top: 2px;
+}
+
+.check-badges {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.check-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.check-done {
+    background: var(--status-active-bg);
+    color: var(--status-active-text);
+}
+
+.check-pending {
+    background: #f1f5f9;
+    color: #94a3b8;
+}
+
+.phase-tag {
+    display: inline-block;
+    padding: 1px 6px;
+    margin-right: 4px;
+    border-radius: 8px;
+    background: #f1f5f9;
+    color: #475569;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.evidence-thumb {
+    width: 108px;
+    height: 62px;
+    object-fit: cover;
+    border-radius: 6px;
+    border: 1px solid var(--card-border);
+    cursor: zoom-in;
+    display: block;
+    transition: transform 0.15s, border-color 0.15s;
+}
+
+.evidence-thumb:hover {
+    transform: scale(1.04);
+    border-color: var(--primary-green);
+}
+
+.evidence-modal {
+    width: 900px;
+    max-width: 94vw;
+}
+
+.evidence-viewport {
+    background: #0f172a;
+    border-radius: 8px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.evidence-viewport img {
+    max-width: 100%;
+    max-height: 68vh;
+    display: block;
+}
+
+.evidence-caption {
+    margin-top: 12px;
+    font-size: 12px;
+    color: var(--military-muted);
+    font-family: var(--font-mono);
+}
+
+.clock-drift-warning {
+    font-size: 10px;
+    color: var(--warning-orange);
+    font-weight: 600;
+    margin-top: 2px;
+}

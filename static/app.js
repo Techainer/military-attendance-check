@@ -58,9 +58,49 @@ const filterRankSelect = document.getElementById('filter-rank');
 const tableEmptyMsg = document.getElementById('table-empty-msg');
 
 
-// ----------------- LIVE CLOCK -----------------
+// ----------------- LIVE CLOCK (bám theo giờ máy chủ) -----------------
+// Máy chủ có thể chạy múi giờ khác máy của người dùng. Đồng hồ trên thanh tiêu đề
+// phải trùng với dấu thời gian in trên khung hình camera nên lấy chênh lệch so với
+// giờ máy chủ rồi hiển thị theo giờ đó.
+let serverClockOffsetMs = 0;
+
+function serverNow() {
+    return new Date(Date.now() + serverClockOffsetMs);
+}
+window.serverNow = serverNow;
+
+function syncServerClock(isoString) {
+    if (!isoString) return;
+    const parsed = new Date(isoString).getTime();
+    if (Number.isNaN(parsed)) return;
+    serverClockOffsetMs = parsed - Date.now();
+
+    const warnEl = document.getElementById('clock-drift-warning');
+    if (warnEl) {
+        const driftSec = Math.round(Math.abs(serverClockOffsetMs) / 1000);
+        if (driftSec >= 60) {
+            const driftMin = Math.round(driftSec / 60);
+            warnEl.textContent = `⚠ Máy trạm lệch ${driftMin} phút so với giờ hệ thống`;
+            warnEl.style.display = 'block';
+        } else {
+            warnEl.style.display = 'none';
+        }
+    }
+    updateLiveClock();
+}
+
+async function fetchServerClock() {
+    try {
+        const res = await fetch('/api/time');
+        const data = await res.json();
+        syncServerClock(data.server_time);
+    } catch (e) {
+        console.error('Không lấy được giờ máy chủ:', e);
+    }
+}
+
 function updateLiveClock() {
-    const now = new Date();
+    const now = serverNow();
     const pad = (n) => String(n).padStart(2, '0');
     if (liveTimeEl) {
         liveTimeEl.textContent = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
@@ -71,9 +111,14 @@ function updateLiveClock() {
 }
 setInterval(updateLiveClock, 1000);
 updateLiveClock();
+fetchServerClock();
+// Đồng bộ lại định kỳ phòng khi máy trạm bị trôi giờ
+setInterval(fetchServerClock, 5 * 60 * 1000);
 
 
 // ----------------- NAVIGATION TABS -----------------
+let scheduleRefreshTimer = null;
+
 function switchNavTab(tabName) {
     document.querySelectorAll('.sidebar-nav .nav-item').forEach(item => item.classList.remove('active'));
     const activeNav = document.getElementById(`nav-${tabName}`);
@@ -107,8 +152,14 @@ function switchNavTab(tabName) {
         }, 50);
     }
 
+    // Trạng thái ca đổi theo giờ thực nên phải làm mới định kỳ khi đang xem bảng
+    if (scheduleRefreshTimer) {
+        clearInterval(scheduleRefreshTimer);
+        scheduleRefreshTimer = null;
+    }
     if (tabName === 'schedule') {
         loadSchedules();
+        scheduleRefreshTimer = setInterval(loadSchedules, 30000);
     }
 
     if (tabName === 'logs') {
@@ -581,6 +632,8 @@ function updateFrame(data) {
     };
     img.src = 'data:image/jpeg;base64,' + data.frame;
 
+    if (data.server_time) syncServerClock(data.server_time);
+
     currentCount = data.count;
     if (typeof data.baseline === 'number') baselineCount = data.baseline;
 
@@ -597,7 +650,9 @@ function updateFrame(data) {
             const remain = att.remaining_seconds || 0;
             const mm = String(Math.floor(remain / 60)).padStart(2, '0');
             const ss = String(remain % 60).padStart(2, '0');
-            attBtn.textContent = `Đang điểm danh ${mm}:${ss} · ${att.present}/${att.roster_size}`;
+            const phaseLabel = att.phase_label || 'Điểm danh';
+            const total = att.required || att.roster_size || 0;
+            attBtn.textContent = `${phaseLabel} ${mm}:${ss} · ${att.present}/${total}`;
         } else {
             attBtn.textContent = 'Điểm danh ngay';
         }
@@ -1243,26 +1298,55 @@ async function loadSchedules() {
 }
 window.loadSchedules = loadSchedules;
 
+// Ca chỉ "đang hoạt động" trong khung giờ của nó, hết giờ phải chuyển sang đã kết thúc
+const SCHEDULE_STATE_CLASS = {
+    upcoming: 'status-neutral',
+    check_start: 'status-active',
+    running: 'status-ok',
+    check_end: 'status-active',
+    finished: 'status-neutral'
+};
+
+function addMinutesToClock(hhmm, mins) {
+    const parts = String(hhmm || '').split(':');
+    if (parts.length < 2) return '--:--';
+    const total = (parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10) + mins + 1440) % 1440;
+    return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+}
+
+function checkedBadge(done, label) {
+    return done
+        ? `<span class="check-badge check-done">✓ ${label}</span>`
+        : `<span class="check-badge check-pending">○ ${label}</span>`;
+}
+
 function renderSchedulesTable(schedules) {
     if (!schedulesTbody) return;
     schedulesTbody.innerHTML = '';
 
     if (schedules.length === 0) {
-        schedulesTbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: #94a3b8; padding: 24px;">Chưa có ca thời khóa biểu nào được thiết lập</td></tr>`;
+        schedulesTbody.innerHTML = `<tr><td colspan="10" style="text-align: center; color: #94a3b8; padding: 24px;">Chưa có ca thời khóa biểu nào được thiết lập</td></tr>`;
         return;
     }
 
     schedules.forEach(sch => {
+        const win = sch.check_window_mins || 5;
+        const done = sch.checked_today || {};
+        const stateClass = SCHEDULE_STATE_CLASS[sch.state] || 'status-neutral';
         const row = document.createElement('tr');
         row.innerHTML = `
             <td><span class="status-tag status-active">${sch.shift}</span></td>
             <td><strong>${sch.name}</strong></td>
             <td>${sch.unit}</td>
             <td class="font-mono">${sch.start_time} - ${sch.end_time}</td>
-            <td class="font-mono" style="color: #059669; font-weight: 700;">${sch.start_time} + ${sch.check_window_mins || 5}'</td>
-            <td>${sch.check_window_mins || 5} phút</td>
+            <td class="font-mono" style="color: #059669; font-weight: 700;">${sch.start_time} → ${addMinutesToClock(sch.start_time, win)}</td>
+            <td class="font-mono" style="color: #0369a1; font-weight: 700;">${addMinutesToClock(sch.end_time, -win)} → ${sch.end_time}</td>
             <td><strong>${sch.required_count || 45}</strong> quân nhân</td>
-            <td><span class="status-tag status-ok">${sch.status || 'Active'}</span></td>
+            <td><span class="status-tag ${stateClass}">${sch.state_label || sch.status || 'Active'}</span></td>
+            <td class="check-badges">
+                ${checkedBadge(done.start, 'Đầu giờ')}
+                ${checkedBadge(done.end, 'Cuối giờ')}
+            </td>
             <td>
                 <button class="icon-btn icon-btn-delete" title="Xóa ca" onclick="deleteSchedule('${sch.id}')">🗑️</button>
             </td>
@@ -1345,36 +1429,106 @@ async function loadAttendanceLogs() {
 }
 window.loadAttendanceLogs = loadAttendanceLogs;
 
+// Bản ghi cũ chỉ có một mốc đầu giờ ở cấp ngoài cùng, bản ghi mới gom cả hai mốc
+// vào log.checks. Hàm này quy về cùng một dạng để bảng hiển thị được cả hai.
+function getCheck(log, phase) {
+    if (log.checks && log.checks[phase]) return log.checks[phase];
+    if (phase === 'start' && !log.checks) {
+        return {
+            time: log.time,
+            present: log.present,
+            absent: log.absent,
+            absent_personnel: log.absent_personnel || [],
+            evidence: log.evidence || null
+        };
+    }
+    if (log.checks && phase === 'start' && log.checks.manual) return log.checks.manual;
+    return null;
+}
+
+function renderCheckCell(check, required) {
+    if (!check) return '<span style="color: #94a3b8;">Chưa chốt</span>';
+    const color = check.absent > 0 ? '#dc2626' : '#059669';
+    return `<strong style="color: ${color};">${check.present}/${required}</strong>`
+        + `<div class="cell-subtext font-mono">${check.time || ''}</div>`;
+}
+
+function renderEvidenceCell(check, log, phaseLabel) {
+    if (!check || !check.evidence) {
+        return '<span style="color: #94a3b8;">—</span>';
+    }
+    const caption = `${log.date} · ${log.unit} · ${phaseLabel} · Có mặt ${check.present}/${log.required}`;
+    return `<img src="${check.evidence}" class="evidence-thumb" loading="lazy"`
+        + ` alt="Bằng chứng ${phaseLabel}"`
+        + ` onclick="openEvidenceModal('${check.evidence}', '${phaseLabel}', '${caption.replace(/'/g, "\\'")}')">`;
+}
+
+function renderAbsentList(log) {
+    const startCheck = getCheck(log, 'start');
+    const endCheck = getCheck(log, 'end');
+    const parts = [];
+    if (startCheck && (startCheck.absent_personnel || []).length > 0) {
+        parts.push(`<div><span class="phase-tag">Đầu giờ</span> ${startCheck.absent_personnel.join(', ')}</div>`);
+    }
+    if (endCheck && (endCheck.absent_personnel || []).length > 0) {
+        parts.push(`<div><span class="phase-tag">Cuối giờ</span> ${endCheck.absent_personnel.join(', ')}</div>`);
+    }
+    if (parts.length === 0) return '<span style="color: #64748b;">-</span>';
+    return `<span style="color: #d97706; font-weight: 500;">${parts.join('')}</span>`;
+}
+
 function renderAttendanceLogsTable(logs) {
     if (!attendanceLogsTbody) return;
     attendanceLogsTbody.innerHTML = '';
 
     if (logs.length === 0) {
-        attendanceLogsTbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: #94a3b8; padding: 24px;">Không có bản ghi điểm danh nào phù hợp</td></tr>`;
+        attendanceLogsTbody.innerHTML = `<tr><td colspan="11" style="text-align: center; color: #94a3b8; padding: 24px;">Không có bản ghi điểm danh nào phù hợp</td></tr>`;
         return;
     }
 
     logs.forEach(log => {
         const row = document.createElement('tr');
         const statusClass = log.status_type === 'success' ? 'status-ok' : 'status-warning';
-        const absentText = log.absent_personnel && log.absent_personnel.length > 0
-            ? `<span style="color: #d97706; font-weight: 500;">${log.absent_personnel.join(', ')}</span>`
-            : '<span style="color: #64748b;">-</span>';
+        const startCheck = getCheck(log, 'start');
+        const endCheck = getCheck(log, 'end');
 
         row.innerHTML = `
             <td class="font-mono"><strong>${log.date}</strong> ${log.time || ''}</td>
-            <td>${log.shift}</td>
+            <td>${log.shift}<div class="cell-subtext">${log.schedule_name || ''}</div></td>
             <td><strong>${log.unit}</strong></td>
             <td>${log.required}</td>
-            <td><strong style="color: #059669;">${log.present}</strong></td>
-            <td><strong style="${log.absent > 0 ? 'color: #dc2626;' : 'color: #64748b;'}">${log.absent}</strong></td>
-            <td style="max-width: 260px;">${absentText}</td>
+            <td>${renderCheckCell(startCheck, log.required)}</td>
+            <td>${renderEvidenceCell(startCheck, log, 'Đầu giờ')}</td>
+            <td>${renderCheckCell(endCheck, log.required)}</td>
+            <td>${renderEvidenceCell(endCheck, log, 'Cuối giờ')}</td>
+            <td style="max-width: 260px;">${renderAbsentList(log)}</td>
             <td><span class="status-tag ${statusClass}">${log.status}</span></td>
             <td>${log.commander || 'Đại úy Nguyễn Văn Hùng'}</td>
         `;
         attendanceLogsTbody.appendChild(row);
     });
 }
+
+// ----------------- EVIDENCE LIGHTBOX -----------------
+function openEvidenceModal(src, phaseLabel, caption) {
+    const modal = document.getElementById('evidence-modal');
+    const img = document.getElementById('evidence-modal-img');
+    const title = document.getElementById('evidence-modal-title');
+    const captionEl = document.getElementById('evidence-modal-caption');
+    if (!modal || !img) return;
+
+    img.src = src;
+    if (title) title.textContent = `Bằng chứng điểm danh ${phaseLabel.toLowerCase()}`;
+    if (captionEl) captionEl.textContent = caption || '';
+    modal.style.display = 'flex';
+}
+window.openEvidenceModal = openEvidenceModal;
+
+function closeEvidenceModal() {
+    const modal = document.getElementById('evidence-modal');
+    if (modal) modal.style.display = 'none';
+}
+window.closeEvidenceModal = closeEvidenceModal;
 
 function filterAttendanceLogsByStatus() {
     const statusSelect = document.getElementById('log-filter-status');
@@ -1412,11 +1566,23 @@ function exportAttendanceLogsCsv() {
     }
 
     let csvContent = "data:text/csv;charset=utf-8,\uFEFF";
-    csvContent += "Thời gian,Ca điểm danh,Đơn vị,Sĩ số yêu cầu,Hiện diện,Vắng mặt,Quân nhân vắng,Trạng thái,Chỉ huy duyệt\n";
+    csvContent += "Ngày,Ca điểm danh,Đơn vị,Sĩ số yêu cầu,"
+        + "Giờ đầu giờ,Hiện diện đầu giờ,Vắng đầu giờ,Bằng chứng đầu giờ,"
+        + "Giờ cuối giờ,Hiện diện cuối giờ,Vắng cuối giờ,Bằng chứng cuối giờ,"
+        + "Quân nhân vắng,Trạng thái,Chỉ huy duyệt\n";
+
+    const origin = window.location.origin;
+    const cell = (check, field) => (check && check[field] !== undefined && check[field] !== null ? check[field] : '');
+    const evidenceUrl = (check) => (check && check.evidence ? origin + check.evidence : '');
 
     attendanceLogsData.forEach(l => {
+        const st = getCheck(l, 'start');
+        const en = getCheck(l, 'end');
         const absentStr = (l.absent_personnel || []).join('; ');
-        csvContent += `"${l.date} ${l.time || ''}","${l.shift}","${l.unit}",${l.required},${l.present},${l.absent},"${absentStr}","${l.status}","${l.commander || ''}"\n`;
+        csvContent += `"${l.date}","${l.shift}","${l.unit}",${l.required},`
+            + `"${cell(st, 'time')}","${cell(st, 'present')}","${cell(st, 'absent')}","${evidenceUrl(st)}",`
+            + `"${cell(en, 'time')}","${cell(en, 'present')}","${cell(en, 'absent')}","${evidenceUrl(en)}",`
+            + `"${absentStr}","${l.status}","${l.commander || ''}"\n`;
     });
 
     const encodedUri = encodeURI(csvContent);

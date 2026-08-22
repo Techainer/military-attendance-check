@@ -5,7 +5,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 import shutil
 import time
-from datetime import datetime
 import os
 import json
 import cv2
@@ -14,6 +13,7 @@ import base64
 from pathlib import Path
 from typing import Optional, List
 
+from app import clock
 from app.video_processor import VideoProcessor
 from app.monitor import AttendanceMonitor
 from app.face_engine import FaceEngine
@@ -29,16 +29,19 @@ static_path = Path(__file__).parent.parent / "static"
 alerts_path = Path(__file__).parent.parent / "alerts"
 data_path = Path(__file__).parent.parent / "data"
 avatars_path = data_path / "face_avatars"
+evidence_path = data_path / "attendance_evidence"
 
 # Ensure directories
 alerts_path.mkdir(exist_ok=True)
 data_path.mkdir(exist_ok=True)
 avatars_path.mkdir(parents=True, exist_ok=True)
+evidence_path.mkdir(parents=True, exist_ok=True)
 
 # Mount static files
 app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
 app.mount("/alerts", StaticFiles(directory=str(alerts_path)), name="alerts")
 app.mount("/data/face_avatars", StaticFiles(directory=str(avatars_path)), name="face_avatars")
+app.mount("/data/attendance_evidence", StaticFiles(directory=str(evidence_path)), name="attendance_evidence")
 
 # Global instances
 monitor = AttendanceMonitor(alerts_dir=str(alerts_path))
@@ -301,9 +304,8 @@ async def get_event_clip(clip_id: Optional[str] = None):
 
 @app.get("/api/schedules")
 async def get_schedules():
-    """Get list of military shift schedules."""
-    sch_file = data_path / "schedules.json"
-    return {"status": "success", "data": read_json_list(sch_file)}
+    """Get list of military shift schedules kèm trạng thái vận hành hiện tại."""
+    return {"status": "success", "data": attendance.schedules_with_state(clock.now())}
 
 
 @app.post("/api/schedules")
@@ -347,7 +349,7 @@ async def get_attendance_logs(unit: Optional[str] = None):
 @app.post("/api/attendance/start")
 async def start_attendance(schedule_id: Optional[str] = None, window_mins: Optional[int] = None):
     """Mở phiên điểm danh ngay lập tức, không chờ tới giờ ca."""
-    now = datetime.now()
+    now = clock.now()
     if attendance.session is not None:
         if not attendance.session.is_due(now):
             return {"status": "error", "message": "Đang có phiên điểm danh chạy dở"}
@@ -374,7 +376,7 @@ async def cancel_attendance():
 @app.get("/api/attendance/status")
 async def attendance_status():
     """Trạng thái phiên điểm danh hiện tại."""
-    return {"status": "success", "data": attendance.status(datetime.now())}
+    return {"status": "success", "data": attendance.status(clock.now())}
 
 
 # ----------------- Video & Stream Controls -----------------
@@ -518,6 +520,12 @@ async def set_baseline(count: int):
         "baseline": count,
         "message": f"Baseline set to {count} persons"
     }
+
+
+@app.get("/api/time")
+async def get_server_time():
+    """Giờ máy chủ để giao diện hiển thị trùng với dấu thời gian trên khung hình."""
+    return {"status": "success", "server_time": clock.now().isoformat(), "timezone": clock.TZ_NAME}
 
 
 @app.get("/api/status")

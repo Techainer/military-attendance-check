@@ -13,13 +13,32 @@ from typing import List, Dict, Optional, Tuple
 class FaceEngine:
     """Manages face detection, 512-d embedding extraction, persistence, and matching."""
 
+    # Mặt nhỏ hơn ngưỡng này (tính bằng pixel bề ngang) cho embedding kém tin cậy
+    # nên phải vượt ngưỡng tương đồng cao hơn mới được chấp nhận.
+    SMALL_FACE_PIXELS = 44
+    SMALL_FACE_PENALTY = 0.06
+    # Khoảng cách tối thiểu giữa người khớp nhất và người khớp nhì, tránh nhận nhầm
+    # giữa hai quân nhân có nét giống nhau.
+    AMBIGUITY_MARGIN = 0.05
+
     def __init__(
         self,
-        model_name: str = "buffalo_s",
-        similarity_threshold: float = 0.38,
+        model_name: Optional[str] = None,
+        similarity_threshold: Optional[float] = None,
         data_dir: str = "data"
     ):
-        self.similarity_threshold = similarity_threshold
+        # buffalo_l (ResNet100) chính xác hơn hẳn buffalo_s trên ảnh camera mờ
+        self.model_name = model_name or os.environ.get("FACE_MODEL", "buffalo_l")
+        self.similarity_threshold = (
+            similarity_threshold
+            if similarity_threshold is not None
+            else float(os.environ.get("FACE_SIM_THRESHOLD", "0.36"))
+        )
+        # det_size lớn hơn để bắt được khuôn mặt nhỏ ở xa; det_thresh thấp hơn để
+        # không bỏ sót mặt mờ. Cả hai chỉnh được qua biến môi trường.
+        det = int(os.environ.get("FACE_DET_SIZE", "960"))
+        self.det_size = (det, det)
+        self.det_thresh = float(os.environ.get("FACE_DET_THRESHOLD", "0.30"))
         self.data_dir = Path(data_dir)
         self.avatars_dir = self.data_dir / "face_avatars"
         self.db_file = self.data_dir / "registered_faces.json"
@@ -34,7 +53,7 @@ class FaceEngine:
 
         # Initialize InsightFace App
         self.app = None
-        self._init_insightface(model_name)
+        self._init_insightface(self.model_name)
 
     def _init_insightface(self, model_name: str):
         """Initialize the InsightFace FaceAnalysis application."""
@@ -45,14 +64,14 @@ class FaceEngine:
             print(f"[FaceEngine] Initializing InsightFace ({model_name})...")
             # Providers: CUDAExecutionProvider if available, else CPUExecutionProvider
             self.app = FaceAnalysis(name=model_name, providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
-            self.app.prepare(ctx_id=0, det_size=(640, 640), det_thresh=0.40)
+            self.app.prepare(ctx_id=0, det_size=self.det_size, det_thresh=self.det_thresh)
             print("[FaceEngine] InsightFace initialized successfully.")
         except Exception as e:
             print(f"[FaceEngine] Warning: Could not initialize InsightFace on GPU: {e}")
             try:
                 from insightface.app import FaceAnalysis
                 self.app = FaceAnalysis(name=model_name, providers=['CPUExecutionProvider'])
-                self.app.prepare(ctx_id=-1, det_size=(640, 640), det_thresh=0.40)
+                self.app.prepare(ctx_id=-1, det_size=self.det_size, det_thresh=self.det_thresh)
                 print("[FaceEngine] InsightFace initialized on CPU.")
             except Exception as ex:
                 print(f"[FaceEngine] Error loading InsightFace model: {ex}")
@@ -165,6 +184,7 @@ class FaceEngine:
                     "status": status,
                     "avatar_path": f"/data/face_avatars/{avatar_filename}",
                     "embedding": norm_emb.tolist(),
+                    "embedding_model": self.model_name,
                     "updated_at": datetime.now().isoformat()
                 })
                 self._save_database()
@@ -185,6 +205,7 @@ class FaceEngine:
             "status": status,
             "avatar_path": f"/data/face_avatars/{avatar_filename}",
             "embedding": norm_emb.tolist(),
+            "embedding_model": self.model_name,
             "created_at": datetime.now().strftime("%d/%m/%Y"),
             "timestamp": datetime.now().isoformat()
         }
@@ -262,10 +283,24 @@ class FaceEngine:
         if self._matrix_cache is None:
             reg_embeddings = []
             reg_persons = []
+            stale = []
             for p in self.registered_faces:
-                if "embedding" in p and p["embedding"] and len(p["embedding"]) > 0:
-                    reg_embeddings.append(p["embedding"])
-                    reg_persons.append(p)
+                if not ("embedding" in p and p["embedding"] and len(p["embedding"]) > 0):
+                    continue
+                # Mỗi model sinh ra một không gian vector riêng. Đem embedding của
+                # model cũ so với model đang chạy chỉ cho ra số ngẫu nhiên, dễ nhận
+                # nhầm người, nên phải loại ra thay vì dùng bừa.
+                if p.get("embedding_model") != self.model_name:
+                    stale.append(p.get("name") or p.get("military_id") or "?")
+                    continue
+                reg_embeddings.append(p["embedding"])
+                reg_persons.append(p)
+
+            if stale:
+                print(f"[FaceEngine] BỎ QUA {len(stale)} quân nhân đăng ký bằng model khác "
+                      f"'{self.model_name}': {', '.join(stale[:10])}"
+                      f"{'...' if len(stale) > 10 else ''}. Cần đăng ký lại khuôn mặt "
+                      f"(hoặc đặt FACE_MODEL về model cũ).")
             if not reg_embeddings:
                 return []
             self._matrix_cache = (np.array(reg_embeddings, dtype=np.float32), reg_persons)
@@ -297,7 +332,18 @@ class FaceEngine:
             best_idx = int(np.argmax(sims))
             best_sim = float(sims[best_idx])
 
-            if best_sim >= self.similarity_threshold:
+            # Mặt càng nhỏ, embedding càng nhiễu -> siết ngưỡng lại
+            threshold = self.similarity_threshold
+            if (bx2 - bx1) < self.SMALL_FACE_PIXELS:
+                threshold += self.SMALL_FACE_PENALTY
+
+            # Người khớp nhì quá sát người khớp nhất thì coi như không phân biệt được
+            ambiguous = False
+            if len(sims) > 1:
+                second = float(np.partition(sims, -2)[-2])
+                ambiguous = (best_sim - second) < self.AMBIGUITY_MARGIN
+
+            if best_sim >= threshold and not ambiguous:
                 matched_person = reg_persons[best_idx]
                 results.append({
                     "bbox": [int(bx1), int(by1), int(bx2), int(by2)],
@@ -321,5 +367,33 @@ class FaceEngine:
                     "det_score": face_dict["det_score"],
                     "person": None
                 })
+
+        return results
+
+    def recognize_in_regions(self, frame: np.ndarray, regions: List[Tuple[int, int, int, int]]) -> List[Dict]:
+        """Quét lại khuôn mặt bên trong từng vùng ảnh nhỏ rồi quy chiếu về toạ độ gốc.
+
+        Camera độ phân giải thấp cho khuôn mặt chỉ vài chục pixel trên khung hình
+        đầy đủ, quét cả khung thường bỏ sót. Cắt riêng vùng người rồi đưa vào
+        InsightFace sẽ được phóng to lên det_size nên bắt được nhiều mặt hơn.
+        """
+        if self.app is None or frame is None or not regions:
+            return []
+
+        h_img, w_img = frame.shape[:2]
+        results = []
+        for (rx1, ry1, rx2, ry2) in regions:
+            x1 = max(0, int(rx1))
+            y1 = max(0, int(ry1))
+            x2 = min(w_img, int(rx2))
+            y2 = min(h_img, int(ry2))
+            if x2 - x1 < 20 or y2 - y1 < 20:
+                continue
+
+            crop = frame[y1:y2, x1:x2]
+            for face in self.recognize_faces_in_frame(crop):
+                fb = face["bbox"]
+                face["bbox"] = [fb[0] + x1, fb[1] + y1, fb[2] + x1, fb[3] + y1]
+                results.append(face)
 
         return results

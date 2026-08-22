@@ -103,9 +103,10 @@
                 </div>
 
                 <div class="header-right">
-                    <div class="live-clock-container">
+                    <div class="live-clock-container" title="Giờ hệ thống, đồng bộ với dấu thời gian trên khung hình">
                         <span id="live-time" class="live-time">23:18:13</span>
                         <span id="live-date" class="live-date">17/08/2026</span>
+                        <span id="clock-drift-warning" class="clock-drift-warning" style="display: none;"></span>
                     </div>
                     <button class="notification-btn" title="Thông báo cảnh báo">
                         🔔
@@ -519,10 +520,11 @@
                                         <th>TÊN NHIỆM VỤ / NỘI DUNG</th>
                                         <th>ĐƠN VỊ ÁP DỤNG</th>
                                         <th>KHUNG GIỜ CA</th>
-                                        <th>CỬA SỔ ĐIỂM DANH</th>
-                                        <th>SỐ PHÚT</th>
+                                        <th>CỬA SỔ ĐẦU GIỜ</th>
+                                        <th>CỬA SỔ CUỐI GIỜ</th>
                                         <th>SĨ SỐ CHUẨN</th>
                                         <th>TRẠNG THÁI</th>
+                                        <th>ĐIỂM DANH HÔM NAY</th>
                                         <th>THAO TÁC</th>
                                     </tr>
                                 </thead>
@@ -584,8 +586,10 @@
                                         <th>CA ĐIỂM DANH</th>
                                         <th>ĐƠN VỊ</th>
                                         <th>SĨ SỐ YÊU CẦU</th>
-                                        <th>HIỆN DIỆN</th>
-                                        <th>VẮNG MẶT</th>
+                                        <th>ĐẦU GIỜ</th>
+                                        <th>BẰNG CHỨNG ĐẦU GIỜ</th>
+                                        <th>CUỐI GIỜ</th>
+                                        <th>BẰNG CHỨNG CUỐI GIỜ</th>
                                         <th>QUÂN NHÂN VẮNG</th>
                                         <th>TRẠNG THÁI</th>
                                         <th>CHỈ HUY DUYỆT</th>
@@ -624,6 +628,23 @@
                 <input type="range" id="clip-timeline-slider" min="0" max="100" value="0" class="clip-slider" oninput="seekClipFrame(this.value)">
                 <span id="clip-fps-label" class="clip-fps-tag">5 FPS</span>
             </div>
+        </div>
+    </div>
+
+    <!-- Attendance Evidence Lightbox -->
+    <div id="evidence-modal" class="modal-backdrop" style="display: none;">
+        <div class="modal-content evidence-modal">
+            <div class="modal-header">
+                <div>
+                    <h3 id="evidence-modal-title">Bằng chứng điểm danh</h3>
+                    <span class="modal-subtitle" id="evidence-modal-subtitle">CAM-01 · SÂN TẬP TRUNG</span>
+                </div>
+                <button class="btn-close-modal" onclick="closeEvidenceModal()">✕</button>
+            </div>
+            <div class="evidence-viewport">
+                <img id="evidence-modal-img" alt="Ảnh bằng chứng điểm danh">
+            </div>
+            <p id="evidence-modal-caption" class="evidence-caption"></p>
         </div>
     </div>
 

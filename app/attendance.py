@@ -1,8 +1,10 @@
-"""Roll-call session logic: điểm danh trong N phút đầu giờ học."""
+"""Roll-call session logic: điểm danh N phút đầu giờ và N phút cuối giờ học."""
 
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
+
+import cv2
 
 from app.storage import read_json_list, write_json_list
 
@@ -11,11 +13,36 @@ DEFAULT_WINDOW_MINS = 5
 # Số lượt quét tối thiểu để coi là có mặt (chống nhận nhầm 1 frame)
 MIN_SIGHTINGS = 3
 # Cửa sổ còn lại ít hơn ngần này thì không mở phiên nữa (mở ra cũng không kịp đếm)
-MIN_OPEN_REMAINING_SECONDS = 30
+MIN_OPEN_REMAINING_SECONDS = 15
+
+PHASE_START = "start"
+PHASE_END = "end"
+PHASE_MANUAL = "manual"
+
+PHASE_LABELS = {
+    PHASE_START: "Đầu giờ",
+    PHASE_END: "Cuối giờ",
+    PHASE_MANUAL: "Đột xuất",
+}
+
+# Trạng thái vận hành của một ca trong ngày
+STATE_UPCOMING = "upcoming"
+STATE_CHECK_START = "check_start"
+STATE_RUNNING = "running"
+STATE_CHECK_END = "check_end"
+STATE_FINISHED = "finished"
+
+STATE_LABELS = {
+    STATE_UPCOMING: "Chưa tới giờ",
+    STATE_CHECK_START: "Đang điểm danh đầu giờ",
+    STATE_RUNNING: "Đang diễn ra",
+    STATE_CHECK_END: "Đang điểm danh cuối giờ",
+    STATE_FINISHED: "Đã kết thúc",
+}
 
 
 def _schedule_window_mins(schedule: dict) -> int:
-    """Số phút đầu giờ dùng để điểm danh (ca cũ không khai thì lấy mặc định)."""
+    """Số phút dùng để điểm danh mỗi mốc (ca cũ không khai thì lấy mặc định)."""
     raw = schedule.get("check_window_mins", schedule.get("tolerance_mins"))
     try:
         mins = int(raw)
@@ -24,40 +51,118 @@ def _schedule_window_mins(schedule: dict) -> int:
     return mins if mins > 0 else DEFAULT_WINDOW_MINS
 
 
-def _start_datetime(schedule: dict, now: datetime) -> Optional[datetime]:
-    """Giờ bắt đầu của ca, quy về ngày hôm nay."""
-    raw = str(schedule.get("start_time") or "").strip()
-    parts = raw.split(":")
+def _time_on(day: datetime, raw_time) -> Optional[datetime]:
+    """Ghép chuỗi 'HH:MM' vào ngày đang xét."""
+    parts = str(raw_time or "").strip().split(":")
     if len(parts) < 2:
         return None
     try:
-        return now.replace(hour=int(parts[0]), minute=int(parts[1]), second=0, microsecond=0)
+        return day.replace(hour=int(parts[0]), minute=int(parts[1]), second=0, microsecond=0)
     except ValueError:
         return None
+
+
+def _start_datetime(schedule: dict, now: datetime) -> Optional[datetime]:
+    """Giờ bắt đầu của ca, quy về ngày hôm nay."""
+    return _time_on(now, schedule.get("start_time"))
+
+
+def _end_datetime(schedule: dict, now: datetime) -> Optional[datetime]:
+    """Giờ kết thúc của ca. Ca qua đêm được đẩy sang ngày hôm sau."""
+    start = _start_datetime(schedule, now)
+    end = _time_on(now, schedule.get("end_time"))
+    if end is None or start is None:
+        return end
+    if end <= start:
+        end += timedelta(days=1)
+    return end
+
+
+def schedule_windows(schedule: dict, now: datetime) -> List[Tuple[str, datetime, datetime]]:
+    """Các cửa sổ điểm danh của ca trong ngày: đầu giờ và cuối giờ."""
+    start = _start_datetime(schedule, now)
+    if start is None:
+        return []
+
+    mins = _schedule_window_mins(schedule)
+    windows = [(PHASE_START, start, start + timedelta(minutes=mins))]
+
+    end = _end_datetime(schedule, now)
+    if end is not None:
+        # Điểm danh cuối giờ = N phút cuối TRƯỚC giờ kết thúc, và không được
+        # đè lên cửa sổ đầu giờ khi ca quá ngắn.
+        end_win_start = max(end - timedelta(minutes=mins), start + timedelta(minutes=mins))
+        if end > end_win_start:
+            windows.append((PHASE_END, end_win_start, end))
+
+    return windows
+
+
+def schedule_runtime_state(schedule: dict, now: datetime) -> dict:
+    """Trạng thái thực tế của ca tại thời điểm ``now`` (thay cho cờ Active cố định)."""
+    start = _start_datetime(schedule, now)
+    end = _end_datetime(schedule, now)
+    if start is None:
+        return {"state": STATE_UPCOMING, "state_label": STATE_LABELS[STATE_UPCOMING]}
+
+    windows = {phase: (w_start, w_end) for phase, w_start, w_end in schedule_windows(schedule, now)}
+
+    if now < start:
+        state = STATE_UPCOMING
+    elif end is not None and now >= end:
+        state = STATE_FINISHED
+    elif PHASE_START in windows and windows[PHASE_START][0] <= now < windows[PHASE_START][1]:
+        state = STATE_CHECK_START
+    elif PHASE_END in windows and windows[PHASE_END][0] <= now < windows[PHASE_END][1]:
+        state = STATE_CHECK_END
+    else:
+        state = STATE_RUNNING
+
+    return {"state": state, "state_label": STATE_LABELS[state]}
 
 
 class AttendanceSession:
     """Một phiên điểm danh: gom kết quả nhận diện trong suốt cửa sổ N phút."""
 
-    def __init__(self, schedule: dict, roster: List[dict], started_at: datetime, window_mins: int):
+    def __init__(
+        self,
+        schedule: dict,
+        roster: List[dict],
+        started_at: datetime,
+        window_mins: int,
+        phase: str = PHASE_MANUAL,
+        ends_at: Optional[datetime] = None
+    ):
         self.schedule = schedule
         self.roster = roster
         self.started_at = started_at
         self.window_mins = window_mins
-        self.ends_at = started_at + timedelta(minutes=window_mins)
+        self.phase = phase
+        self.ends_at = ends_at or (started_at + timedelta(minutes=window_mins))
         # person_id -> số lượt quét nhận ra người này
         self.sightings: Dict[str, int] = {}
         self.scans = 0
+        # Khung hình có nhiều quân nhân được định danh nhất, dùng làm bằng chứng
+        self.evidence_frame = None
+        self.evidence_quality = -1
 
     @property
     def key(self) -> str:
-        return f"{self.schedule.get('id', 'manual')}:{self.started_at.date().isoformat()}"
+        return f"{self.schedule.get('id', 'manual')}:{self.started_at.date().isoformat()}:{self.phase}"
 
-    def record(self, person_ids: List[str]) -> None:
-        """Ghi nhận một lượt quét."""
+    @property
+    def phase_label(self) -> str:
+        return PHASE_LABELS.get(self.phase, PHASE_LABELS[PHASE_MANUAL])
+
+    def record(self, person_ids: List[str], frame=None, quality: int = 0) -> None:
+        """Ghi nhận một lượt quét và giữ lại khung hình tốt nhất làm bằng chứng."""
         self.scans += 1
         for pid in set(person_ids):
             self.sightings[pid] = self.sightings.get(pid, 0) + 1
+
+        if frame is not None and quality > self.evidence_quality:
+            self.evidence_quality = quality
+            self.evidence_frame = frame.copy()
 
     def remaining_seconds(self, now: datetime) -> float:
         return max(0.0, (self.ends_at - now).total_seconds())
@@ -71,37 +176,34 @@ class AttendanceSession:
     def present_count(self) -> int:
         return len(self.present_ids())
 
-    def build_log(self, closed_at: datetime) -> dict:
-        """Chốt phiên thành bản ghi điểm danh."""
+    def required_count(self) -> int:
+        raw = self.schedule.get("required_count")
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return len(self.roster)
+
+    def build_check(self, closed_at: datetime) -> dict:
+        """Kết quả của riêng mốc điểm danh này."""
         present = self.present_ids()
+        present_people = [p for p in self.roster if p.get("id") in present]
         absent_people = [p for p in self.roster if p.get("id") not in present]
 
-        required = self.schedule.get("required_count")
-        try:
-            required = int(required)
-        except (TypeError, ValueError):
-            required = len(self.roster)
-
-        absent_names = [
-            f"{p.get('rank', '')} {p.get('name', '')}".strip() or p.get("military_id", "?")
-            for p in absent_people
-        ]
+        def label(p):
+            return f"{p.get('rank', '')} {p.get('name', '')}".strip() or p.get("military_id", "?")
 
         return {
-            "id": f"log_{int(closed_at.timestamp() * 1000)}",
-            "date": closed_at.strftime("%d/%m/%Y"),
+            "phase": self.phase,
+            "phase_label": self.phase_label,
             "time": closed_at.strftime("%H:%M"),
-            "shift": self.schedule.get("shift", "Điểm danh"),
-            "schedule_name": self.schedule.get("name", ""),
-            "unit": self.schedule.get("unit", "Tất cả đơn vị"),
-            "required": required,
             "present": len(present),
             "absent": len(absent_people),
-            "absent_personnel": absent_names,
-            "status": "Đủ quân số" if not absent_people else f"Thiếu {len(absent_people)} quân nhân",
-            "status_type": "success" if not absent_people else "warning",
+            "present_personnel": [label(p) for p in present_people],
+            "absent_personnel": [label(p) for p in absent_people],
+            "evidence": None,
             "window_mins": self.window_mins,
             "started_at": self.started_at.isoformat(),
+            "scans": self.scans,
         }
 
 
@@ -112,6 +214,8 @@ class AttendanceManager:
         self.data_dir = Path(data_dir)
         self.schedules_file = self.data_dir / "schedules.json"
         self.logs_file = self.data_dir / "attendance_logs.json"
+        self.evidence_dir = self.data_dir / "attendance_evidence"
+        self.evidence_dir.mkdir(parents=True, exist_ok=True)
         self.face_engine = face_engine
         self.session: Optional[AttendanceSession] = None
         self.completed_keys = self._load_completed_keys()
@@ -134,19 +238,94 @@ class AttendanceManager:
         return self._schedules_cache
 
     def _load_completed_keys(self) -> set:
-        """Ca nào đã điểm danh trong ngày rồi thì không chạy lại."""
+        """Mốc nào đã điểm danh trong ngày rồi thì không chạy lại."""
         keys = set()
         for log in read_json_list(self.logs_file):
             sch_id = log.get("schedule_id")
-            started = log.get("started_at", "")
-            if sch_id and started:
-                keys.add(f"{sch_id}:{started[:10]}")
+            if not sch_id:
+                continue
+            day = log.get("date_iso") or str(log.get("started_at", ""))[:10]
+            checks = log.get("checks")
+            if isinstance(checks, dict) and checks:
+                for phase in checks:
+                    keys.add(f"{sch_id}:{day}:{phase}")
+            elif day:
+                # Bản ghi theo định dạng cũ chỉ có một mốc đầu giờ
+                keys.add(f"{sch_id}:{day}:{PHASE_START}")
         return keys
 
-    def _write_log(self, log: dict) -> None:
+    def _save_evidence(self, frame, log_id: str, phase: str) -> Optional[str]:
+        """Lưu khung hình bằng chứng, trả về đường dẫn phục vụ cho web."""
+        if frame is None:
+            return None
+        filename = f"{log_id}_{phase}.jpg"
+        try:
+            cv2.imwrite(str(self.evidence_dir / filename), frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        except Exception as e:
+            print(f"[Attendance] Lỗi lưu ảnh bằng chứng: {e}")
+            return None
+        return f"/data/attendance_evidence/{filename}"
+
+    def _summarize(self, log: dict) -> dict:
+        """Cập nhật phần tổng hợp của bản ghi từ các mốc đã chốt."""
+        checks = log.get("checks", {})
+        ordered = [checks[p] for p in (PHASE_START, PHASE_END, PHASE_MANUAL) if p in checks]
+        if not ordered:
+            return log
+
+        latest = ordered[-1]
+        absent_union = []
+        for chk in ordered:
+            for name in chk.get("absent_personnel", []):
+                if name not in absent_union:
+                    absent_union.append(name)
+
+        log["time"] = latest["time"]
+        log["present"] = latest["present"]
+        log["absent"] = len(absent_union)
+        log["absent_personnel"] = absent_union
+        log["status"] = "Đủ quân số" if not absent_union else f"Thiếu {len(absent_union)} quân nhân"
+        log["status_type"] = "success" if not absent_union else "warning"
+        return log
+
+    def _write_check(self, session: AttendanceSession, check: dict, closed_at: datetime) -> dict:
+        """Ghi kết quả một mốc vào nhật ký, gộp chung dòng của ca trong ngày."""
         logs = read_json_list(self.logs_file)
-        logs.insert(0, log)
+        schedule_id = session.schedule.get("id", "manual")
+        date_iso = session.started_at.date().isoformat()
+
+        target = None
+        if session.phase != PHASE_MANUAL:
+            for log in logs:
+                if log.get("schedule_id") == schedule_id and (
+                    log.get("date_iso") or str(log.get("started_at", ""))[:10]
+                ) == date_iso:
+                    target = log
+                    break
+
+        if target is None:
+            target = {
+                "id": f"log_{int(closed_at.timestamp() * 1000)}",
+                "schedule_id": schedule_id,
+                "date": session.started_at.strftime("%d/%m/%Y"),
+                "date_iso": date_iso,
+                "shift": session.schedule.get("shift", "Điểm danh"),
+                "schedule_name": session.schedule.get("name", ""),
+                "unit": session.schedule.get("unit", "Tất cả đơn vị"),
+                "required": session.required_count(),
+                "checks": {},
+            }
+            logs.insert(0, target)
+
+        target.setdefault("checks", {})
+        target.setdefault("date_iso", date_iso)
+        target["required"] = session.required_count()
+        check["evidence"] = self._save_evidence(session.evidence_frame, target["id"], session.phase)
+        target["checks"][session.phase] = check
+        self._summarize(target)
+
         write_json_list(self.logs_file, logs)
+        return target
 
     # ---------- roster ----------
 
@@ -159,12 +338,19 @@ class AttendanceManager:
 
     # ---------- session lifecycle ----------
 
-    def open_session(self, schedule: dict, now: datetime, window_mins: Optional[int] = None) -> AttendanceSession:
+    def open_session(
+        self,
+        schedule: dict,
+        now: datetime,
+        window_mins: Optional[int] = None,
+        phase: str = PHASE_MANUAL,
+        ends_at: Optional[datetime] = None
+    ) -> AttendanceSession:
         mins = window_mins if (window_mins and window_mins > 0) else _schedule_window_mins(schedule)
         roster = self._roster_for(schedule.get("unit"))
-        self.session = AttendanceSession(schedule, roster, now, mins)
-        print(f"[Attendance] Mở phiên điểm danh '{schedule.get('name', 'thủ công')}' "
-              f"({mins} phút, {len(roster)} quân nhân trong danh sách)")
+        self.session = AttendanceSession(schedule, roster, now, mins, phase=phase, ends_at=ends_at)
+        print(f"[Attendance] Mở phiên điểm danh {self.session.phase_label.lower()} "
+              f"'{schedule.get('name', 'thủ công')}' ({mins} phút, {len(roster)} quân nhân trong danh sách)")
         return self.session
 
     def start_manual(self, now: datetime, schedule_id: Optional[str] = None,
@@ -181,36 +367,37 @@ class AttendanceManager:
                 "shift": "Đột xuất",
                 "unit": "Tất cả đơn vị",
             }
-        return self.open_session(dict(schedule), now, window_mins)
+        return self.open_session(dict(schedule), now, window_mins, phase=PHASE_MANUAL)
 
     def maybe_open_scheduled(self, now: datetime) -> Optional[AttendanceSession]:
-        """Tới N phút đầu giờ học thì tự mở phiên."""
+        """Tới cửa sổ điểm danh đầu giờ hoặc cuối giờ thì tự mở phiên."""
         if self.session is not None:
             return None
 
         for schedule in self._load_schedules():
-            start = _start_datetime(schedule, now)
-            if start is None:
-                continue
-            mins = _schedule_window_mins(schedule)
-            ends = start + timedelta(minutes=mins)
-            if not (start <= now < ends):
-                continue
-            if (ends - now).total_seconds() < MIN_OPEN_REMAINING_SECONDS:
-                # Hệ thống vào quá muộn: không chốt biên bản nửa vời, cũng không
-                # đánh dấu ca này đã xong để còn chạy lại nếu mở sớm hơn
-                continue
-            key = f"{schedule.get('id')}:{now.date().isoformat()}"
-            if key in self.completed_keys:
-                continue
-            # Mở phiên tính từ giờ bắt đầu ca, không phải từ lúc phát hiện
-            session = self.open_session(schedule, start, mins)
-            return session
+            for phase, win_start, win_end in schedule_windows(schedule, now):
+                if not (win_start <= now < win_end):
+                    continue
+                if (win_end - now).total_seconds() < MIN_OPEN_REMAINING_SECONDS:
+                    # Hệ thống vào quá muộn: không chốt biên bản nửa vời, cũng không
+                    # đánh dấu mốc này đã xong để còn chạy lại nếu mở sớm hơn
+                    continue
+                key = f"{schedule.get('id')}:{win_start.date().isoformat()}:{phase}"
+                if key in self.completed_keys:
+                    continue
+                # Phiên tính từ đầu cửa sổ và luôn chốt đúng cuối cửa sổ, kể cả
+                # khi luồng video vào muộn
+                return self.open_session(
+                    schedule, win_start,
+                    _schedule_window_mins(schedule),
+                    phase=phase,
+                    ends_at=win_end
+                )
         return None
 
-    def record(self, present_person_ids: List[str]) -> None:
+    def record(self, present_person_ids: List[str], frame=None, quality: int = 0) -> None:
         if self.session is not None:
-            self.session.record(present_person_ids)
+            self.session.record(present_person_ids, frame=frame, quality=quality)
 
     def close_if_due(self, now: datetime, force: bool = False) -> Optional[dict]:
         """Hết cửa sổ (hoặc luồng video kết thúc) thì chốt biên bản."""
@@ -219,12 +406,12 @@ class AttendanceManager:
         if not force and not self.session.is_due(now):
             return None
 
-        log = self.session.build_log(now)
-        log["schedule_id"] = self.session.schedule.get("id", "manual")
-        self.completed_keys.add(self.session.key)
-        self._write_log(log)
-        print(f"[Attendance] Chốt điểm danh: có mặt {log['present']}/{log['required']}, "
-              f"vắng {log['absent']}")
+        session = self.session
+        check = session.build_check(now)
+        self.completed_keys.add(session.key)
+        log = self._write_check(session, check, now)
+        print(f"[Attendance] Chốt điểm danh {session.phase_label.lower()}: "
+              f"có mặt {check['present']}/{log['required']}, vắng {check['absent']}")
         self.session = None
         return log
 
@@ -241,8 +428,25 @@ class AttendanceManager:
             "active": True,
             "schedule_name": self.session.schedule.get("name", ""),
             "unit": self.session.schedule.get("unit", ""),
+            "phase": self.session.phase,
+            "phase_label": self.session.phase_label,
             "remaining_seconds": int(self.session.remaining_seconds(now)),
             "window_mins": self.session.window_mins,
             "present": self.session.present_count(),
+            "required": self.session.required_count(),
             "roster_size": len(self.session.roster),
         }
+
+    def schedules_with_state(self, now: datetime) -> List[dict]:
+        """Thời khoá biểu kèm trạng thái vận hành và tình hình điểm danh hôm nay."""
+        rows = []
+        for schedule in self._load_schedules():
+            row = dict(schedule)
+            row.update(schedule_runtime_state(schedule, now))
+            done = {}
+            for phase, win_start, _win_end in schedule_windows(schedule, now):
+                key = f"{schedule.get('id')}:{win_start.date().isoformat()}:{phase}"
+                done[phase] = key in self.completed_keys
+            row["checked_today"] = done
+            rows.append(row)
+        return rows

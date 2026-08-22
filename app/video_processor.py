@@ -3,16 +3,18 @@
 import cv2
 import base64
 import asyncio
+import os
 import threading
 import time
 import json
 import numpy as np
 from pathlib import Path
 from collections import deque
-from datetime import datetime
 from typing import Optional, List, Dict, Tuple
 
+from app import clock
 from app.detector import PersonDetector
+from app.overlay import draw_label
 from app.monitor import AttendanceMonitor
 from app.face_engine import FaceEngine
 from app.attendance import AttendanceManager
@@ -21,6 +23,17 @@ from app.attendance import AttendanceManager
 # Global rolling buffer for 10-second clip replay (stores last 60 frames ~ 12 seconds at 5fps)
 global_clip_buffer = deque(maxlen=60)
 latest_event_clips: Dict[str, List[str]] = {}
+
+# Bao lâu không còn thấy một track thì bỏ ràng buộc danh tính của nó
+IDENTITY_TTL_SECONDS = 20.0
+# Điểm tương đồng cộng dồn tối thiểu (khoảng hai lượt khớp) trước khi gán cứng
+# danh tính vào một track
+IDENTITY_BIND_SCORE = 0.7
+# Số vùng người được quét lại khuôn mặt ở độ phân giải cao mỗi khung hình
+MAX_FACE_RESCANS = 4
+# Chỉ quét lại những người có bề ngang box nhỏ hơn ngần này (mặt bị thu nhỏ khi
+# quét cả khung hình nên hay bị bỏ sót)
+FACE_RESCAN_MAX_WIDTH = 300
 
 
 def _bbox_center(bbox) -> Tuple[float, float]:
@@ -35,6 +48,12 @@ class RTSPStreamReader:
     def __init__(self, rtsp_url: str):
         self.rtsp_url = rtsp_url
         self.cap = cv2.VideoCapture(rtsp_url)
+        # Giữ hàng đợi giải mã ở mức tối thiểu để khung hình luôn là mới nhất,
+        # nếu không hình trên màn hình sẽ trễ dần so với thời gian thực.
+        try:
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
         self.ret = False
         self.frame = None
         self.started = False
@@ -90,15 +109,117 @@ class VideoProcessor:
         face_engine: Optional[FaceEngine] = None,
         attendance: Optional[AttendanceManager] = None
     ):
-        self.detector = PersonDetector(model_name="yolo11s.pt")
+        self.detector = PersonDetector(model_name=os.environ.get("YOLO_MODEL", "yolo11s.pt"))
         self.face_engine = face_engine or FaceEngine()
         self.attendance = attendance
         self.fps = fps
         self._stop_requested = False
+        # track_id -> {"scores": {person_id: điểm cộng dồn}, "person": dict, "last_seen": ts}
+        self.track_identity: Dict[int, dict] = {}
 
     def stop(self) -> None:
         """Request the processing pipeline to stop."""
         self._stop_requested = True
+
+    # ---------- nhận diện ----------
+
+    def _assign_faces(self, faces, person_boxes, in_zone_indices, claimed, assignments) -> list:
+        """Gắn mỗi khuôn mặt nhận ra được vào một người đang đứng trong vùng.
+
+        Gán vào box người TRONG VÙNG nhỏ nhất có chứa tâm khuôn mặt; mỗi box chỉ
+        nhận một người. Không dùng polygon để lọc mặt: polygon là vùng mặt đất nên
+        tâm khuôn mặt luôn nằm phía trên nó. Mặt không gắn được vào ai trong vùng
+        thì không tính điểm danh.
+        """
+        matched_boxes = []
+        for rf in faces:
+            if not (rf.get("is_recognized") and rf.get("person")):
+                continue
+
+            fcx, fcy = _bbox_center(rf["bbox"])
+            best_idx = None
+            best_area = None
+            for p_idx in in_zone_indices:
+                if p_idx in claimed:
+                    continue
+                px1, py1, px2, py2 = person_boxes[p_idx]
+                if not (px1 - 20 <= fcx <= px2 + 20 and py1 - 20 <= fcy <= py2 + 40):
+                    continue
+                area = max(1, (px2 - px1) * (py2 - py1))
+                if best_area is None or area < best_area:
+                    best_area = area
+                    best_idx = p_idx
+
+            if best_idx is None:
+                continue
+
+            claimed.add(best_idx)
+            assignments[best_idx] = {"person": rf["person"], "similarity": rf.get("similarity", 0.0)}
+            matched_boxes.append(rf["bbox"])
+
+        return matched_boxes
+
+    def _rescan_regions(self, person_boxes, in_zone_indices, claimed, frame_shape) -> list:
+        """Chọn vùng ảnh quanh những người trong vùng chưa định danh để quét lại."""
+        h_img, w_img = frame_shape[:2]
+        candidates = []
+        for p_idx in in_zone_indices:
+            if p_idx in claimed:
+                continue
+            x1, y1, x2, y2 = person_boxes[p_idx]
+            width = x2 - x1
+            if width <= 0 or width > FACE_RESCAN_MAX_WIDTH:
+                continue
+            # Chỉ lấy phần thân trên, nơi có khuôn mặt, để tỉ lệ phóng to cao hơn
+            pad = int(width * 0.25)
+            candidates.append((width, (
+                max(0, x1 - pad),
+                max(0, y1 - pad),
+                min(w_img, x2 + pad),
+                min(h_img, y1 + int((y2 - y1) * 0.6))
+            )))
+
+        candidates.sort(key=lambda c: c[0], reverse=True)
+        return [region for _w, region in candidates[:MAX_FACE_RESCANS]]
+
+    def _remember_identity(self, track_id, person, similarity, now_mono) -> None:
+        """Cộng dồn bằng chứng nhận diện cho một track."""
+        if track_id is None or track_id < 0:
+            return
+        entry = self.track_identity.setdefault(
+            track_id, {"scores": {}, "people": {}, "person": None, "last_seen": now_mono}
+        )
+        entry["last_seen"] = now_mono
+
+        pid = person.get("id")
+        entry["people"][pid] = person
+        entry["scores"][pid] = entry["scores"].get(pid, 0.0) + max(0.1, float(similarity))
+
+        best_pid = max(entry["scores"], key=entry["scores"].get)
+        if entry["scores"][best_pid] >= IDENTITY_BIND_SCORE:
+            entry["person"] = entry["people"][best_pid]
+
+    def _recall_identity(self, track_id, now_mono) -> Optional[dict]:
+        """Danh tính đã khoá cho track, nếu vẫn còn hiệu lực.
+
+        Mỗi lần dùng lại thì gia hạn: track còn sống thì giữ danh tính, chỉ khi
+        người đó rời khỏi khung hình đủ lâu ràng buộc mới hết hiệu lực.
+        """
+        if track_id is None or track_id < 0:
+            return None
+        entry = self.track_identity.get(track_id)
+        if entry is None or entry.get("person") is None:
+            return None
+        if now_mono - entry["last_seen"] > IDENTITY_TTL_SECONDS:
+            return None
+        entry["last_seen"] = now_mono
+        return entry["person"]
+
+    def _prune_identities(self, now_mono) -> None:
+        for tid in [t for t, e in self.track_identity.items() if now_mono - e["last_seen"] > IDENTITY_TTL_SECONDS]:
+            del self.track_identity[tid]
+
+    # ---------- vòng xử lý ----------
 
     async def process_video(
         self,
@@ -113,6 +234,9 @@ class VideoProcessor:
         is_rtsp = "://" in video_path
         reader = None
         cap = None
+
+        self.detector.reset()
+        self.track_identity.clear()
 
         if is_rtsp:
             print(f"Connecting to RTSP/Network stream: {video_path}")
@@ -186,6 +310,8 @@ class VideoProcessor:
                 )
                 person_boxes = detection['boxes']
                 confidences = detection['confidences']
+                track_ids = detection['track_ids']
+                occluded_flags = detection['occluded']
 
                 # 2. Clean Frame + Annotated HUD Frame
                 h_img, w_img = frame.shape[:2]
@@ -208,7 +334,7 @@ class VideoProcessor:
                                 cv2.fillPoly(overlay, [np_pts], (20, 160, 60))
                                 cv2.addWeighted(overlay, 0.15, display_frame, 0.85, 0, display_frame)
                                 cv2.polylines(display_frame, [np_pts], isClosed=True, color=(30, 220, 90), thickness=2)
-                            
+
                             # Draw tripwire
                             tw_pts = z_data.get("tripwire_points", [])
                             if len(tw_pts) >= 2:
@@ -217,7 +343,7 @@ class VideoProcessor:
                                 cv2.line(display_frame, p1, p2, (0, 140, 255), 2, cv2.LINE_AA)
                     except Exception:
                         pass
-                
+
                 if np_pts is None:
                     # Default Fallback Zone
                     raw_pts = [
@@ -237,7 +363,7 @@ class VideoProcessor:
                     # Test feet (ground point) or center point against the polygon
                     feet_pt = ((x1 + x2) / 2.0, float(y2 - 2))
                     center_pt = ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
-                    
+
                     in_feet = cv2.pointPolygonTest(np_pts, feet_pt, False) >= 0
                     in_center = cv2.pointPolygonTest(np_pts, center_pt, False) >= 0
 
@@ -248,148 +374,146 @@ class VideoProcessor:
                 person_count = len(in_zone_indices)
 
                 # 4. Gắn khuôn mặt đã quét được vào người trong vùng
+                now_mono = time.monotonic()
+                claimed_boxes = set()
+                assignments: Dict[int, dict] = {}
+                matched_face_boxes = self._assign_faces(
+                    recognized_faces, person_boxes, in_zone_indices, claimed_boxes, assignments
+                )
+
+                # 4b. Người trong vùng còn lại: cắt riêng vùng ảnh rồi quét lại. Khuôn mặt
+                #     ở xa chỉ vài chục pixel trên khung hình đầy đủ nên lượt quét chung
+                #     hay bỏ sót, cắt ra quét lại thì được phóng to lên det_size.
+                regions = self._rescan_regions(person_boxes, in_zone_indices, claimed_boxes, frame.shape)
+                if regions:
+                    rescanned = await asyncio.to_thread(
+                        self.face_engine.recognize_in_regions, frame, regions
+                    )
+                    matched_face_boxes += self._assign_faces(
+                        rescanned, person_boxes, in_zone_indices, claimed_boxes, assignments
+                    )
+
+                # 4c. Khoá danh tính vào track: một quân nhân đã nhận ra được thì vẫn
+                #     được tính khi quay mặt đi hoặc bị che trong các khung hình sau.
+                live_matches = len(assignments)
+                for p_idx, info in assignments.items():
+                    self._remember_identity(track_ids[p_idx], info["person"], info["similarity"], now_mono)
+
+                person_to_face_match = {p_idx: info["person"] for p_idx, info in assignments.items()}
+                claimed_person_ids = {info["person"]["id"] for info in assignments.values()}
+
+                for p_idx in in_zone_indices:
+                    if p_idx in person_to_face_match:
+                        continue
+                    remembered = self._recall_identity(track_ids[p_idx], now_mono)
+                    if remembered is None or remembered.get("id") in claimed_person_ids:
+                        continue
+                    person_to_face_match[p_idx] = remembered
+                    claimed_person_ids.add(remembered.get("id"))
+
+                self._prune_identities(now_mono)
+
                 present_personnel = []
                 seen_ids = set()
-                person_to_face_match = {}
-                claimed_boxes = set()
-                matched_face_boxes = []
-
-                for rf in recognized_faces:
-                    if not (rf.get("is_recognized") and rf.get("person")):
+                for p_idx in sorted(person_to_face_match):
+                    p_info = person_to_face_match[p_idx]
+                    if p_info["id"] in seen_ids:
                         continue
-
-                    # Gán mặt vào box người TRONG VÙNG nhỏ nhất có chứa mặt; mỗi box chỉ
-                    # nhận một người. Không dùng polygon để lọc mặt: polygon là vùng mặt
-                    # đất nên tâm khuôn mặt luôn nằm phía trên nó. Mặt không gắn được vào
-                    # ai trong vùng thì không tính điểm danh.
-                    fcx, fcy = _bbox_center(rf['bbox'])
-                    best_idx = None
-                    best_area = None
-                    for p_idx in in_zone_indices:
-                        if p_idx in claimed_boxes:
-                            continue
-                        px1, py1, px2, py2 = person_boxes[p_idx]
-                        if not (px1 - 20 <= fcx <= px2 + 20 and py1 - 20 <= fcy <= py2 + 40):
-                            continue
-                        area = max(1, (px2 - px1) * (py2 - py1))
-                        if best_area is None or area < best_area:
-                            best_area = area
-                            best_idx = p_idx
-
-                    if best_idx is None:
-                        continue
-
-                    p_info = rf["person"]
-                    person_to_face_match[best_idx] = p_info
-                    claimed_boxes.add(best_idx)
-                    matched_face_boxes.append(rf['bbox'])
-
-                    if p_info["id"] not in seen_ids:
-                        seen_ids.add(p_info["id"])
-                        present_personnel.append(p_info)
+                    seen_ids.add(p_info["id"])
+                    present_personnel.append(p_info)
 
                 # Draw Person Bounding Boxes with In-Zone / Out-of-Zone distinction
                 for p_idx, (box, conf) in enumerate(zip(person_boxes, confidences)):
                     x1, y1, x2, y2 = box
                     is_in_zone = p_idx in in_zone_indices
+                    is_occluded = occluded_flags[p_idx]
 
                     if is_in_zone:
                         if p_idx in person_to_face_match:
                             # RECOGNIZED SOLDIER IN ZONE: Bright glowing green box & identification banner
                             p_info = person_to_face_match[p_idx]
                             cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 120), 2)
-                            
+
                             rank_str = p_info.get('rank', '')
                             name_str = p_info.get('name', '')
                             mid_str = p_info.get('military_id', '')
                             id_label = f"[{rank_str}] {name_str} ({mid_str})" if rank_str else f"{name_str} ({mid_str})"
-                            
-                            (tw, th), _ = cv2.getTextSize(id_label, cv2.FONT_HERSHEY_DUPLEX, 0.45, 1)
-                            cv2.rectangle(display_frame, (x1, max(0, y1 - th - 8)), (x1 + tw + 6, y1), (0, 180, 70), -1)
-                            cv2.putText(
-                                display_frame,
-                                id_label,
-                                (x1 + 3, max(12, y1 - 4)),
-                                cv2.FONT_HERSHEY_DUPLEX,
-                                0.45,
-                                (255, 255, 255),
-                                1
-                            )
+                            draw_label(display_frame, id_label, (x1, y1), font_size=15, bg_color=(0, 180, 70), anchor="bottom")
+                        elif is_occluded:
+                            # BỊ VẬT CHE: vẫn tính vào sĩ số, vẽ nét đứt màu vàng để phân biệt
+                            cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 190, 230), 1)
+                            draw_label(display_frame, "Bị che khuất", (x1, y1), font_size=14,
+                                          bg_color=(0, 120, 150), anchor="bottom")
                         else:
                             # UNIDENTIFIED SOLDIER IN ZONE: Active green detection box
                             cv2.rectangle(display_frame, (x1, y1), (x2, y2), (20, 220, 80), 2)
-                            tag_text = f"Trong vung: {int(conf * 100)}%"
-                            (tw, th), _ = cv2.getTextSize(tag_text, cv2.FONT_HERSHEY_DUPLEX, 0.4, 1)
-                            cv2.rectangle(display_frame, (x1, max(0, y1 - th - 6)), (x1 + tw + 4, y1), (10, 140, 50), -1)
-                            cv2.putText(
-                                display_frame,
-                                tag_text,
-                                (x1 + 2, max(10, y1 - 3)),
-                                cv2.FONT_HERSHEY_DUPLEX,
-                                0.4,
-                                (255, 255, 255),
-                                1
-                            )
+                            draw_label(display_frame, f"Trong vùng {int(conf * 100)}%", (x1, y1), font_size=14,
+                                          bg_color=(10, 140, 50), anchor="bottom")
                     else:
                         # SOLDIER OUTSIDE ZONE (FAR AWAY): Subtle grey/dimmed box, not counted
                         cv2.rectangle(display_frame, (x1, y1), (x2, y2), (120, 130, 140), 1)
-                        tag_text = "Ngoai vung"
-                        (tw, th), _ = cv2.getTextSize(tag_text, cv2.FONT_HERSHEY_DUPLEX, 0.35, 1)
-                        cv2.rectangle(display_frame, (x1, max(0, y1 - th - 4)), (x1 + tw + 4, y1), (60, 65, 75), -1)
-                        cv2.putText(
-                            display_frame,
-                            tag_text,
-                            (x1 + 2, max(8, y1 - 2)),
-                            cv2.FONT_HERSHEY_DUPLEX,
-                            0.35,
-                            (200, 205, 215),
-                            1
-                        )
+                        draw_label(display_frame, "Ngoài vùng", (x1, y1), font_size=13,
+                                      text_color=(200, 205, 215), bg_color=(60, 65, 75), anchor="bottom")
 
                 # Draw any standalone recognized face tags
                 for fbox in matched_face_boxes:
                     fx1, fy1, fx2, fy2 = fbox
                     cv2.rectangle(display_frame, (fx1, fy1), (fx2, fy2), (0, 255, 120), 2)
 
-                # Phiên điểm danh: mở theo thời khoá biểu, gom người nhận diện được, chốt khi hết giờ
-                now = datetime.now()
-                if self.attendance is not None:
-                    if self.attendance.session is None:
-                        self.attendance.maybe_open_scheduled(now)
-                    if self.attendance.session is not None:
-                        self.attendance.record([p["id"] for p in present_personnel])
-                    closed_log = self.attendance.close_if_due(now)
-                    if closed_log:
-                        await on_update({'type': 'attendance_complete', 'log': closed_log})
+                # Phiên điểm danh: mở theo thời khoá biểu (đầu giờ / cuối giờ)
+                now = clock.now()
+                if self.attendance is not None and self.attendance.session is None:
+                    self.attendance.maybe_open_scheduled(now)
 
-                # 4. Top & Bottom HUD Overlays
+                # 5. Top & Bottom HUD Overlays
                 cv2.circle(display_frame, (25, 28), 6, (0, 0, 240), -1)
-                cv2.putText(display_frame, "CAM-01 . SAN TAP TRUNG", (38, 33), cv2.FONT_HERSHEY_DUPLEX, 0.55, (230, 230, 230), 1)
+                draw_label(display_frame, "CAM-01 · SÂN TẬP TRUNG", (38, 18), font_size=16,
+                              text_color=(230, 230, 230), bg_color=(18, 22, 28))
+
+                # Dấu thời gian của máy chủ (giờ Việt Nam) để đối chiếu với đồng hồ camera
+                draw_label(display_frame, now.strftime("%d/%m/%Y %H:%M:%S"), (20, 46), font_size=16,
+                              text_color=(200, 215, 230), bg_color=(18, 22, 28))
 
                 att_status = self.attendance.status(now) if self.attendance else {"active": False}
 
                 baseline_val = monitor.baseline_count
                 if baseline_val is None and att_status.get("active"):
-                    baseline_val = att_status.get("roster_size", 0)
+                    baseline_val = att_status.get("required", att_status.get("roster_size", 0))
                 if baseline_val is None:
                     baseline_val = 0
 
-                hud_stat = f"CHUAN: {baseline_val} | TRONG VUNG: {person_count} | DINH DANH: {len(present_personnel)}"
-                (hw, hh), _ = cv2.getTextSize(hud_stat, cv2.FONT_HERSHEY_DUPLEX, 0.5, 1)
-                cv2.rectangle(display_frame, (w_img - hw - 30, 12), (w_img - 10, 44), (15, 30, 20), -1)
-                cv2.rectangle(display_frame, (w_img - hw - 30, 12), (w_img - 10, 44), (20, 180, 70), 1)
-                cv2.putText(display_frame, hud_stat, (w_img - hw - 20, 32), cv2.FONT_HERSHEY_DUPLEX, 0.5, (0, 255, 120), 1)
+                hud_stat = (f"Chuẩn {baseline_val}  ·  Trong vùng {person_count}"
+                            f"  ·  Định danh {len(present_personnel)}")
+                # x vượt mép phải: nhãn được kéo về canh sát lề phải
+                draw_label(display_frame, hud_stat, (w_img, 14), font_size=17,
+                              text_color=(0, 255, 120), bg_color=(15, 30, 20))
 
                 if att_status.get("active"):
                     remain = int(att_status.get("remaining_seconds", 0))
-                    roll_label = f"DANG DIEM DANH . CON {remain // 60:02d}:{remain % 60:02d} . CO MAT {att_status.get('present', 0)}/{att_status.get('roster_size', 0)}"
-                    (rw, rh), _ = cv2.getTextSize(roll_label, cv2.FONT_HERSHEY_DUPLEX, 0.5, 1)
-                    cv2.rectangle(display_frame, (14, 52), (30 + rw, 84), (10, 45, 90), -1)
-                    cv2.rectangle(display_frame, (14, 52), (30 + rw, 84), (0, 170, 255), 1)
-                    cv2.putText(display_frame, roll_label, (22, 73), cv2.FONT_HERSHEY_DUPLEX, 0.5, (0, 200, 255), 1)
+                    roll_label = (f"ĐIỂM DANH {att_status.get('phase_label', '').upper()}"
+                                  f"  ·  còn {remain // 60:02d}:{remain % 60:02d}"
+                                  f"  ·  có mặt {att_status.get('present', 0)}/{att_status.get('required', 0)}")
+                    draw_label(display_frame, roll_label, (16, 78), font_size=17,
+                                  text_color=(0, 200, 255), bg_color=(10, 45, 90))
 
-                rtsp_label = "RTSP://10.24.4.1:554 . QUANG HOC" if is_rtsp else f"TIEP VIDEO: {Path(video_path).name} . QUANG HOC"
-                cv2.putText(display_frame, rtsp_label, (20, h_img - 18), cv2.FONT_HERSHEY_DUPLEX, 0.45, (160, 175, 190), 1)
+                source_label = ("Nguồn: RTSP · quang học" if is_rtsp
+                                else f"Nguồn: {Path(video_path).name} · quang học")
+                draw_label(display_frame, source_label, (18, h_img - 12), font_size=14,
+                              text_color=(160, 175, 190), bg_color=(18, 22, 28), anchor="bottom")
+
+                # 6. Ghi nhận vào phiên điểm danh và chốt biên bản khi hết cửa sổ.
+                #    Khung hình dùng làm bằng chứng là khung đã vẽ đầy đủ HUD.
+                if self.attendance is not None:
+                    if self.attendance.session is not None:
+                        quality = live_matches * 100 + len(present_personnel)
+                        self.attendance.record(
+                            [p["id"] for p in present_personnel],
+                            frame=display_frame,
+                            quality=quality
+                        )
+                    closed_log = self.attendance.close_if_due(now)
+                    if closed_log:
+                        await on_update({'type': 'attendance_complete', 'log': closed_log})
 
                 # Encode to base64 JPEG
                 _, buffer = cv2.imencode('.jpg', display_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
@@ -410,6 +534,7 @@ class VideoProcessor:
                     'attendance': att_status,
                     'boxes': person_boxes,
                     'frame_number': frame_count,
+                    'server_time': now.isoformat(),
                     'is_processing': True
                 })
 
@@ -452,7 +577,7 @@ class VideoProcessor:
                     # Người dùng bấm dừng giữa phiên -> huỷ, không chốt biên bản vắng giả
                     self.attendance.cancel_session()
                 else:
-                    closed_log = self.attendance.close_if_due(datetime.now(), force=True)
+                    closed_log = self.attendance.close_if_due(clock.now(), force=True)
                     if closed_log:
                         await on_update({'type': 'attendance_complete', 'log': closed_log})
 
