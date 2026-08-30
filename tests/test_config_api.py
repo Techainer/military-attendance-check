@@ -230,6 +230,78 @@ check("mọi đường dẫn trong hợp đồng đều đã hiện thực", not
 thua = {p: sorted(m) for p, m in impl.items() if p not in declared}
 check("không có endpoint v1 nào nằm ngoài hợp đồng", not thua, str(thua))
 
+# Khớp đường dẫn thôi chưa đủ: hợp đồng hứa bộ lọc mà code lặng lẽ bỏ qua thì
+# giao diện dựng ô chọn ngày xong thấy nó không có tác dụng.
+import inspect
+
+params_def = spec["components"].get("parameters", {})
+
+
+def _resolve(p):
+    return params_def[p["$ref"].rsplit("/", 1)[1]] if "$ref" in p else p
+
+
+declared_q = {}
+for path, ops in spec["paths"].items():
+    shared = [_resolve(p) for p in ops.get("parameters", [])]
+    for method, op in ops.items():
+        if method not in ("get", "post", "patch", "delete", "put"):
+            continue
+        allp = shared + [_resolve(p) for p in op.get("parameters", [])]
+        declared_q[(path, method.upper())] = {p["name"] for p in allp if p.get("in") == "query"}
+
+impl_q = {}
+for route in api.app.routes:
+    path = getattr(route, "path", "")
+    if not path.startswith("/api/v1") or getattr(route, "endpoint", None) is None:
+        continue
+    names = set(inspect.signature(route.endpoint).parameters)
+    names -= {"background_tasks", "payload", "body", "request"}
+    names -= {seg.strip("{}") for seg in path.split("/") if seg.startswith("{")}
+    for method in getattr(route, "methods", set()):
+        if method not in ("HEAD", "OPTIONS"):
+            impl_q[(path.replace("/api/v1", "", 1), method)] = names
+
+hua_suong = {k: sorted(v - impl_q.get(k, set())) for k, v in declared_q.items()
+             if v - impl_q.get(k, set())}
+check("không có bộ lọc nào hợp đồng hứa mà code bỏ qua", not hua_suong, str(hua_suong))
+
+am_tham = {k: sorted(impl_q[k] - v) for k, v in declared_q.items()
+           if impl_q.get(k, set()) - v}
+check("không có bộ lọc nào code nhận mà hợp đồng giấu", not am_tham, str(am_tham))
+
+print("\n[6] Các bộ lọc hợp đồng hứa phải chạy thật")
+
+api.events.emit("INTRUSION", "Sự kiện để kiểm bộ lọc.", severity="critical",
+                zone_id="z1", detail={"zone_name": "z", "object_count": 1})
+
+r = client.get("/api/v1/events?occurred_from=2099-01-01T00:00:00")
+check("lọc từ mốc tương lai -> rỗng", r.json()["total"] == 0, str(r.json()["total"]))
+
+r = client.get("/api/v1/events?occurred_to=2000-01-01T00:00:00")
+check("lọc tới mốc quá khứ -> rỗng", r.json()["total"] == 0, str(r.json()["total"]))
+
+r = client.get("/api/v1/events?occurred_from=2000-01-01T00:00:00")
+check("lọc từ mốc quá khứ -> có kết quả", r.json()["total"] >= 1, str(r.json()["total"]))
+
+r = client.get("/api/v1/summary/safety?date=2000-01-01")
+check("dashboard an toàn lọc theo ngày cũ -> không có vi phạm",
+      r.json()["pending_count"] == 0 and r.json()["date"] == "2000-01-01", r.text[:200])
+
+r = client.get("/api/v1/summary/training?date=2000-01-01")
+check("tổng hợp lọc theo ngày cũ", r.json()["date"] == "2000-01-01", r.text[:200])
+
+first, _ = api.events.list_events(limit=1)
+marker = first[0]["id"]
+after = api.events.emit("SYSTEM", "Sự kiện sau mốc.", detail={"code": "camera_online"})
+missed = api.events.since(marker)
+check("phát bù đúng sự kiện phát sinh sau mốc",
+      [e["id"] for e in missed] == [after["id"]], str([e["id"] for e in missed]))
+check("mốc lạ thì không dội lại toàn bộ lịch sử", api.events.since("evt_khong_co") == [])
+
+r = client.get("/api/v1/schedules?enabled=false")
+check("lọc ca đang tắt", r.status_code == 200 and r.json()["total"] == 0, r.text[:200])
+
 for goner in ["/areas", "/classes", "/sessions", "/sessions/{session_id}/approve"]:
     check(f"đã bỏ {goner} khỏi hợp đồng (hệ thống quản lý sở hữu)", goner not in declared)
 

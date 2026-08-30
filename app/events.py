@@ -158,6 +158,8 @@ class EventStore:
         acked: Optional[bool] = None,
         session_id: Optional[str] = None,
         camera_id: Optional[str] = None,
+        occurred_from: Optional[str] = None,
+        occurred_to: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple:
@@ -171,7 +173,32 @@ class EventStore:
             events = [e for e in events if e.get("session_id") == session_id]
         if camera_id:
             events = [e for e in events if e.get("camera_id") == camera_id]
+        # So sánh chuỗi ISO được vì cùng một múi giờ thì thứ tự chuỗi trùng thứ
+        # tự thời gian; mốc lọc không kèm offset nên cắt phần offset khi so.
+        if occurred_from:
+            events = [e for e in events if str(e.get("occurred_at", ""))[:19] >= occurred_from[:19]]
+        if occurred_to:
+            events = [e for e in events if str(e.get("occurred_at", ""))[:19] <= occurred_to[:19]]
         return events[offset:offset + limit], len(events)
+
+    def since(self, event_id: str, types=None, camera_id: Optional[str] = None) -> List[dict]:
+        """Các sự kiện phát sinh SAU ``event_id``, cũ trước mới sau.
+
+        Dùng khi client SSE nối lại: phát bù phần đã bỏ lỡ rồi mới chuyển sang
+        luồng trực tiếp. Không tìm thấy mốc thì coi như không bỏ lỡ gì, tránh
+        dội lại toàn bộ lịch sử.
+        """
+        events = read_json_list(self.events_file)
+        index = next((i for i, e in enumerate(events) if e.get("id") == event_id), None)
+        if index is None:
+            return []
+
+        missed = list(reversed(events[:index]))
+        if types:
+            missed = [e for e in missed if e.get("type") in types]
+        if camera_id:
+            missed = [e for e in missed if e.get("camera_id") == camera_id]
+        return missed
 
     def get(self, event_id: str) -> Optional[dict]:
         return next((e for e in read_json_list(self.events_file) if e.get("id") == event_id), None)

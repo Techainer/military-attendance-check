@@ -622,6 +622,8 @@ async def v1_list_events(
     acked: Optional[bool] = None,
     session_id: Optional[str] = None,
     camera_id: Optional[str] = None,
+    occurred_from: Optional[str] = None,
+    occurred_to: Optional[str] = None,
     page: int = 1,
     page_size: int = 50,
 ):
@@ -629,28 +631,43 @@ async def v1_list_events(
     types = [t.strip() for t in type.split(",")] if type else None
     items, total = events.list_events(
         types=types, acked=acked, session_id=session_id, camera_id=camera_id,
+        occurred_from=occurred_from, occurred_to=occurred_to,
         limit=page_size, offset=(max(1, page) - 1) * page_size,
     )
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
 @app.get("/api/v1/events/stream")
-async def v1_stream_events(type: Optional[str] = None, camera_id: Optional[str] = None):
-    """Kênh sự kiện thời gian thực (SSE). Không chứa khung hình."""
+async def v1_stream_events(type: Optional[str] = None, camera_id: Optional[str] = None,
+                           since_event_id: Optional[str] = None):
+    """Kênh sự kiện thời gian thực (SSE). Không chứa khung hình.
+
+    ``since_event_id``: phát lại các sự kiện phát sinh sau mốc đó trước khi
+    chuyển sang luồng trực tiếp, để client nối lại sau khi đứt không mất sự kiện.
+    """
     types = {t.strip() for t in type.split(",")} if type else None
     queue = events.subscribe()
+    backlog = events.since(since_event_id, types=types, camera_id=camera_id) \
+        if since_event_id else []
+
+    def matches(event: dict) -> bool:
+        if types and event.get("type") not in types:
+            return False
+        if camera_id and event.get("camera_id") != camera_id:
+            return False
+        return True
 
     async def generator():
         try:
+            for event in backlog:
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=15.0)
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
                     continue
-                if types and event.get("type") not in types:
-                    continue
-                if camera_id and event.get("camera_id") != camera_id:
+                if not matches(event):
                     continue
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         finally:
@@ -747,16 +764,23 @@ async def v1_session_attendance(session_id: str, violation: Optional[str] = None
 
 
 @app.get("/api/v1/summary/safety")
-async def v1_safety_summary():
-    """Dashboard an toàn: trạng thái chung, cảnh báo đang chờ, thư viện ảnh vi phạm."""
-    recent, total = events.list_events(types=["INTRUSION"], limit=50)
+async def v1_safety_summary(date: Optional[str] = None):
+    """Dashboard an toàn: trạng thái chung, cảnh báo đang chờ, thư viện ảnh vi phạm.
+
+    ``date`` dạng YYYY-MM-DD; bỏ trống thì lấy toàn bộ lịch sử gần đây.
+    """
+    recent, total = events.list_events(
+        types=["INTRUSION"], limit=50,
+        occurred_from=f"{date}T00:00:00" if date else None,
+        occurred_to=f"{date}T23:59:59" if date else None,
+    )
     pending = [e for e in recent if not e.get("acked")]
 
     state = "danger" if pending else ("warning" if recent else "normal")
     labels = {"danger": "Cảnh báo nguy hiểm", "warning": "Có vi phạm đã xử lý", "normal": "Bình thường"}
 
     return {
-        "date": clock.now().date().isoformat(),
+        "date": date or clock.now().date().isoformat(),
         "state": state,
         "state_label": labels[state],
         "active_intrusion": pending[0] if pending else None,
@@ -768,13 +792,14 @@ async def v1_safety_summary():
 
 
 @app.get("/api/v1/summary/training")
-async def v1_training_summary(training_type: Optional[str] = None):
+async def v1_training_summary(training_type: Optional[str] = None,
+                              date: Optional[str] = None):
     """Tổng hợp giám sát quân số trong ngày: chỉ số nhanh + danh sách buổi.
 
     ``training_type`` tách phân hệ đào tạo và chiến đấu; bỏ trống thì lấy cả hai.
     """
     now = clock.now()
-    today = now.date().isoformat()
+    today = date or now.date().isoformat()
     logs = {l.get("schedule_id"): l for l in read_json_list(data_path / "attendance_logs.json")
             if (l.get("date_iso") or str(l.get("started_at", ""))[:10]) == today}
 
@@ -1112,13 +1137,16 @@ async def v1_stop_camera(camera_id: str):
 
 
 @app.get("/api/v1/schedules")
-async def v1_list_schedules(training_type: Optional[str] = None, unit: Optional[str] = None):
+async def v1_list_schedules(training_type: Optional[str] = None, unit: Optional[str] = None,
+                            enabled: Optional[bool] = None):
     """Thời khoá biểu kèm trạng thái vận hành hiện tại của từng ca."""
     rows = attendance.schedules_with_state(clock.now())
     if training_type:
         rows = [r for r in rows if r.get("training_type") == training_type]
     if unit:
         rows = [r for r in rows if r.get("unit") == unit]
+    if enabled is not None:
+        rows = [r for r in rows if bool(r.get("enabled", True)) is enabled]
     return {"items": rows, "total": len(rows), "page": 1, "page_size": len(rows)}
 
 

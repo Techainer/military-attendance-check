@@ -77,9 +77,8 @@ paths:
     get:
       tags: [Camera]
       summary: Danh sách thiết bị camera
+      description: Trả hết trong một lần; số camera của một đơn vị không đủ nhiều để phân trang.
       parameters:
-        - $ref: '#/components/parameters/Page'
-        - $ref: '#/components/parameters/PageSize'
         - name: area_name
           in: query
           schema: { type: string }
@@ -329,16 +328,12 @@ paths:
     get:
       tags: [Thời khoá biểu]
       summary: Danh sách ca theo thời khoá biểu
+      description: Trả hết trong một lần, kèm trạng thái vận hành hiện tại của từng ca.
       parameters:
-        - $ref: '#/components/parameters/Page'
-        - $ref: '#/components/parameters/PageSize'
         - name: training_type
           in: query
           schema: { $ref: '#/components/schemas/TrainingType' }
-        - name: area_id
-          in: query
-          schema: { type: string }
-        - name: class_id
+        - name: unit
           in: query
           schema: { type: string }
         - name: enabled
@@ -501,13 +496,8 @@ paths:
       parameters:
         - name: date
           in: query
+          description: 'Dạng YYYY-MM-DD. Bỏ trống thì lấy toàn bộ lịch sử gần đây.'
           schema: { type: string, format: date }
-        - name: training_type
-          in: query
-          schema: { $ref: '#/components/schemas/TrainingType' }
-        - name: area_id
-          in: query
-          schema: { type: string }
       responses:
         '200':
           description: OK
@@ -534,9 +524,6 @@ paths:
             type: array
             items: { $ref: '#/components/schemas/EventType' }
         - name: camera_id
-          in: query
-          schema: { type: string }
-        - name: area_id
           in: query
           schema: { type: string }
         - name: session_id
