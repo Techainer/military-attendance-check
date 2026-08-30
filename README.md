@@ -4,21 +4,35 @@ A real-time student attendance monitoring system using YOLO person detection. Th
 
 ## Features
 
-- **YOLO v8 Person Detection**: Fast and accurate person detection using YOLOv8n
-- **Real-time Monitoring**: Track person count continuously throughout video playback
-- **Baseline Setting**: Manually set the expected attendance count
-- **Alert System**: Automatic alerts when count drops below baseline for >60 seconds
-- **Frame Capture**: Saves frames when alerts are triggered
-- **Web UI**: Simple, clean HTML/CSS/JS interface with live video feed
-- **Event Log**: Historical record of all attendance alerts
+- **YOLO Person Detection + Face ID**: hai model chạy song song trên cùng khung hình
+- **Điểm danh theo thời khoá biểu**: tự mở phiên N phút đầu giờ và cuối giờ, lưu ảnh bằng chứng từng mốc
+- **Vi phạm giờ giấc**: suy ra Đi chậm / Về sớm / Không tham gia từ dấu vết hiện diện cả buổi (`app/presence.py`)
+- **Giám sát an toàn**: phát hiện người vào vùng cấm hoặc vượt vạch an toàn (`app/safety.py`)
+- **Kho sự kiện thống nhất**: mọi cảnh báo về một cấu trúc, có xác nhận xử lý và kênh SSE (`app/events.py`)
+- **Web UI**: giao diện HTML/CSS/JS với luồng hình trực tiếp
 
 ## Architecture
 
 ```
-User uploads video → FastAPI backend → Video processing pipeline:
-  1. YOLO detects persons → count + bounding boxes
-  2. Monitor checks if count < baseline for >60s
-  3. WebSocket streams frames + alerts to UI
+Nguồn video / RTSP → FastAPI → Vòng xử lý mỗi khung hình:
+  1. YOLO đếm người  +  InsightFace định danh   (song song)
+  2. Lọc theo vùng điểm danh → sĩ số trong vùng
+  3. Ghi dấu vết hiện diện từng quân nhân (cả buổi, không chỉ 2 mốc)
+  4. Soi vùng cấm / vạch an toàn → sự kiện INTRUSION
+  5. Chốt mốc điểm danh khi hết cửa sổ → biên bản + bảng vi phạm
+  6. WebSocket đẩy khung hình · SSE đẩy sự kiện
+```
+
+## Hợp đồng API
+
+`docs/api/openapi.yaml` và `docs/api/events.schema.json` là hợp đồng giao tiếp với
+giao diện. Xem `docs/api/README.md` để biết endpoint nào đã chạy được.
+
+## Kiểm thử
+
+```bash
+python tests/test_ai.py     # logic vi phạm giờ giấc, xâm nhập, kho sự kiện
+python tests/test_api.py    # endpoint v1 + đối chiếu sự kiện với hợp đồng
 ```
 
 ## Requirements

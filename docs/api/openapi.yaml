@@ -1,0 +1,1701 @@
+openapi: 3.1.0
+
+info:
+  title: Hệ thống Giám sát Huấn luyện tích hợp AI — API
+  version: 1.0.0-draft
+  description: |
+    Hợp đồng giao tiếp giữa backend AI và giao diện web.
+
+    **Trạng thái: DRAFT — P0.** Backend chưa hiện thực đầy đủ các route dưới đây;
+    tài liệu này là hợp đồng để hai đội làm song song.
+
+    ## Nguyên tắc
+
+    1. **Mọi tài nguyên gắn với `camera_id`.** Kể cả giai đoạn chỉ chạy một camera,
+       payload vẫn mang `camera_id` để không phải phá hợp đồng khi lên đa camera.
+    2. **Tách luồng hình khỏi luồng dữ liệu.** Hình đi qua MJPEG
+       (`/cameras/{id}/stream.mjpg`) — phía web chỉ cần `<img src>`, không cần
+       canvas hay base64. Dữ liệu sự kiện đi qua SSE (`/events/stream`).
+       Không nhồi frame vào kênh sự kiện.
+    3. **Một mô hình sự kiện duy nhất** cho mọi loại cảnh báo (vắng, đi chậm,
+       về sớm, xâm nhập vùng cấm, hệ thống). Xem `events.schema.json`.
+    4. **Thời gian**: chuỗi ISO-8601 kèm offset (`2026-08-30T07:05:00+07:00`).
+       Giờ trong ngày dùng `HH:MM` giờ địa phương của đơn vị.
+    5. **Toạ độ vùng**: chuẩn hoá về `[0,1]` theo chiều rộng/cao khung hình, để
+       không phụ thuộc độ phân giải camera.
+    6. Lỗi trả `Problem` (RFC 7807). Danh sách trả `{ items, total, page, page_size }`.
+
+    ## Khác biệt với API cũ
+
+    Các route `/api/*` hiện tại (`/api/faces`, `/api/schedules`,
+    `/api/attendance-logs`, `/ws`, ...) được giữ làm alias trong giai đoạn chuyển
+    tiếp và sẽ gỡ khi giao diện mới lên. Không dùng cho phát triển mới.
+    API cũ bọc kết quả trong `{"status": "success", "data": ...}`; API v1 trả
+    thẳng tài nguyên và dùng mã HTTP để báo trạng thái.
+
+servers:
+  - url: /api/v1
+
+tags:
+  - name: Khu vực & Camera
+    description: Phân hệ III — quản trị (màn 7.1, 8.1)
+  - name: Vùng giám sát
+    description: Cấu hình polygon / vạch an toàn theo từng camera
+  - name: Quân nhân & Lớp
+    description: Đăng ký sinh trắc học, biên chế lớp / đội học
+  - name: Thời khoá biểu
+    description: Phân hệ III — cấu hình ca và quy tắc tự động (màn 6.1)
+  - name: Buổi huấn luyện
+    description: Phân hệ I & II — lịch, tiến độ, điểm danh (màn 1.1, 1.2, 2.2, 4.2)
+  - name: Tổng hợp
+    description: Màn tổng hợp và dashboard (màn 1.1, 2.1, 3.1, 4.1, 5.1)
+  - name: Sự kiện
+    description: Dòng sự kiện, cảnh báo an toàn, xác nhận xử lý
+  - name: Hệ thống
+
+paths:
+
+  # ------------------------------------------------------------------
+  # Khu vực (màn 7.1)
+  # ------------------------------------------------------------------
+  /areas:
+    get:
+      tags: [Khu vực & Camera]
+      summary: Danh sách khu vực giám sát
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: q
+          in: query
+          description: Tìm theo tên hoặc mã khu vực
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/Area' }
+    post:
+      tags: [Khu vực & Camera]
+      summary: Thêm khu vực mới
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AreaInput' }
+      responses:
+        '201':
+          description: Đã tạo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Area' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /areas/{area_id}:
+    parameters:
+      - $ref: '#/components/parameters/AreaId'
+    get:
+      tags: [Khu vực & Camera]
+      summary: Chi tiết khu vực kèm danh sách camera trực thuộc
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AreaDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Khu vực & Camera]
+      summary: Cập nhật thông tin khu vực
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AreaInput' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Area' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Khu vực & Camera]
+      summary: Xoá khu vực
+      description: Từ chối nếu còn camera trực thuộc; gỡ camera ra trước.
+      responses:
+        '204': { description: Đã xoá }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ------------------------------------------------------------------
+  # Camera (màn 8.1)
+  # ------------------------------------------------------------------
+  /cameras:
+    get:
+      tags: [Khu vực & Camera]
+      summary: Danh sách thiết bị camera
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: area_id
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/CameraStatus' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/Camera' }
+    post:
+      tags: [Khu vực & Camera]
+      summary: Thêm thiết bị camera
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CameraInput' }
+      responses:
+        '201':
+          description: Đã tạo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Camera' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /cameras/{camera_id}:
+    parameters:
+      - $ref: '#/components/parameters/CameraId'
+    get:
+      tags: [Khu vực & Camera]
+      summary: Chi tiết camera
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Camera' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Khu vực & Camera]
+      summary: Cập nhật camera
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CameraInput' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Camera' }
+    delete:
+      tags: [Khu vực & Camera]
+      summary: Gỡ camera khỏi hệ thống
+      responses:
+        '204': { description: Đã xoá }
+
+  /cameras/{camera_id}/start:
+    parameters:
+      - $ref: '#/components/parameters/CameraId'
+    post:
+      tags: [Khu vực & Camera]
+      summary: Bật xử lý AI cho camera
+      description: |
+        Bất đồng bộ. Trả về ngay với `status = starting`; theo dõi trạng thái thật
+        qua `GET /cameras/{id}` hoặc sự kiện `SYSTEM` trên kênh SSE.
+      responses:
+        '202':
+          description: Đã nhận yêu cầu
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Camera' }
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /cameras/{camera_id}/stop:
+    parameters:
+      - $ref: '#/components/parameters/CameraId'
+    post:
+      tags: [Khu vực & Camera]
+      summary: Dừng xử lý AI cho camera
+      responses:
+        '202':
+          description: Đã nhận yêu cầu
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Camera' }
+
+  /cameras/{camera_id}/stream.mjpg:
+    parameters:
+      - $ref: '#/components/parameters/CameraId'
+    get:
+      tags: [Khu vực & Camera]
+      summary: Luồng hình trực tiếp (MJPEG)
+      description: |
+        `multipart/x-mixed-replace`. Dùng trực tiếp trong thẻ ảnh:
+
+        ```html
+        <img src="/api/v1/cameras/cam_01/stream.mjpg?overlay=1">
+        ```
+
+        Không cần WebSocket, không cần canvas. Trình duyệt tự nối lại khi đứt.
+        Mỗi camera nên mở tối đa vài kết nối đồng thời — màn tổng hợp nhiều ô
+        hình nên dùng `fps` thấp.
+      parameters:
+        - name: overlay
+          in: query
+          description: |
+            `1` = có lớp phủ AI (khung người, nhãn tên, vùng giám sát, HUD).
+            `0` = hình gốc, không vẽ gì. Đây là nguồn dữ liệu thật cho nút
+            "Bật/Tắt lớp phủ AI" trên giao diện.
+          schema: { type: integer, enum: [0, 1], default: 1 }
+        - name: fps
+          in: query
+          description: Giới hạn khung hình/giây trả về (mặc định theo cấu hình camera).
+          schema: { type: integer, minimum: 1, maximum: 25 }
+      responses:
+        '200':
+          description: Luồng MJPEG
+          content:
+            multipart/x-mixed-replace:
+              schema: { type: string, format: binary }
+        '409':
+          description: Camera chưa được bật xử lý
+
+  /cameras/{camera_id}/snapshot:
+    parameters:
+      - $ref: '#/components/parameters/CameraId'
+    get:
+      tags: [Khu vực & Camera]
+      summary: Ảnh tĩnh khung hình hiện tại
+      description: Dùng làm ảnh nền khi vẽ vùng giám sát, và cho nút "Chụp nhanh".
+      parameters:
+        - name: overlay
+          in: query
+          schema: { type: integer, enum: [0, 1], default: 0 }
+        - name: download
+          in: query
+          description: 'Trả kèm header `Content-Disposition: attachment`.'
+          schema: { type: integer, enum: [0, 1], default: 0 }
+      responses:
+        '200':
+          description: Ảnh JPEG
+          content:
+            image/jpeg:
+              schema: { type: string, format: binary }
+        '409':
+          description: Camera chưa có khung hình nào
+
+  # ------------------------------------------------------------------
+  # Vùng giám sát
+  # ------------------------------------------------------------------
+  /cameras/{camera_id}/zones:
+    parameters:
+      - $ref: '#/components/parameters/CameraId'
+    get:
+      tags: [Vùng giám sát]
+      summary: Các vùng đã cấu hình trên camera
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Zone' }
+    post:
+      tags: [Vùng giám sát]
+      summary: Thêm vùng cho camera
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ZoneInput' }
+      responses:
+        '201':
+          description: Đã tạo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Zone' }
+
+  /zones/{zone_id}:
+    parameters:
+      - name: zone_id
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      tags: [Vùng giám sát]
+      summary: Cập nhật vùng
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ZoneInput' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Zone' }
+    delete:
+      tags: [Vùng giám sát]
+      summary: Xoá vùng
+      responses:
+        '204': { description: Đã xoá }
+
+  # ------------------------------------------------------------------
+  # Quân nhân & Lớp
+  # ------------------------------------------------------------------
+  /personnel:
+    get:
+      tags: [Quân nhân & Lớp]
+      summary: Danh sách quân nhân đã đăng ký sinh trắc học
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: q
+          in: query
+          description: Tìm theo tên hoặc số hiệu
+          schema: { type: string }
+        - name: unit
+          in: query
+          schema: { type: string }
+        - name: rank
+          in: query
+          schema: { type: string }
+        - name: class_id
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/Person' }
+    post:
+      tags: [Quân nhân & Lớp]
+      summary: Đăng ký quân nhân mới kèm ảnh khuôn mặt
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [name, military_id, rank, unit, photo]
+              properties:
+                name: { type: string, example: Nguyễn Văn A }
+                military_id: { type: string, example: QN-10231 }
+                rank: { type: string, example: Binh nhất }
+                unit: { type: string, example: Đại đội 1 }
+                class_ids:
+                  type: array
+                  items: { type: string }
+                photo:
+                  type: string
+                  format: binary
+                  description: Ảnh chân dung rõ mặt, chính diện.
+      responses:
+        '201':
+          description: Đã đăng ký
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Person' }
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /personnel/{person_id}:
+    parameters:
+      - name: person_id
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      tags: [Quân nhân & Lớp]
+      summary: Cập nhật hồ sơ quân nhân
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                military_id: { type: string }
+                rank: { type: string }
+                unit: { type: string }
+                class_ids:
+                  type: array
+                  items: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Person' }
+    delete:
+      tags: [Quân nhân & Lớp]
+      summary: Xoá quân nhân khỏi cơ sở dữ liệu sinh trắc
+      responses:
+        '204': { description: Đã xoá }
+
+  /classes:
+    get:
+      tags: [Quân nhân & Lớp]
+      summary: Danh sách lớp / đội học
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/TrainingClass' }
+    post:
+      tags: [Quân nhân & Lớp]
+      summary: Tạo lớp / đội học
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TrainingClassInput' }
+      responses:
+        '201':
+          description: Đã tạo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrainingClass' }
+
+  /classes/{class_id}:
+    parameters:
+      - name: class_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Quân nhân & Lớp]
+      summary: Chi tiết lớp kèm quân số danh sách
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrainingClassDetail' }
+    patch:
+      tags: [Quân nhân & Lớp]
+      summary: Cập nhật lớp (đổi tên, thay biên chế)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TrainingClassInput' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrainingClass' }
+    delete:
+      tags: [Quân nhân & Lớp]
+      summary: Xoá lớp
+      responses:
+        '204': { description: Đã xoá }
+
+  # ------------------------------------------------------------------
+  # Thời khoá biểu (màn 6.1)
+  # ------------------------------------------------------------------
+  /schedules:
+    get:
+      tags: [Thời khoá biểu]
+      summary: Danh sách ca theo thời khoá biểu
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: training_type
+          in: query
+          schema: { $ref: '#/components/schemas/TrainingType' }
+        - name: area_id
+          in: query
+          schema: { type: string }
+        - name: class_id
+          in: query
+          schema: { type: string }
+        - name: enabled
+          in: query
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/Schedule' }
+    post:
+      tags: [Thời khoá biểu]
+      summary: Tạo ca mới
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ScheduleInput' }
+      responses:
+        '201':
+          description: Đã tạo. Hệ thống tự áp dụng cấu hình giám sát ngay.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Schedule' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /schedules/{schedule_id}:
+    parameters:
+      - name: schedule_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Thời khoá biểu]
+      summary: Chi tiết ca
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Schedule' }
+    patch:
+      tags: [Thời khoá biểu]
+      summary: Cập nhật cấu hình ca
+      description: |
+        Tương ứng nút "Cập nhật cấu hình" → "Lưu" ở màn 6.1. Sau khi lưu, hệ
+        thống áp dụng khung giờ và quy tắc mới cho các buổi **chưa diễn ra**;
+        buổi đang chạy không bị ảnh hưởng.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ScheduleInput' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Schedule' }
+    delete:
+      tags: [Thời khoá biểu]
+      summary: Xoá ca
+      responses:
+        '204': { description: Đã xoá }
+
+  # ------------------------------------------------------------------
+  # Buổi huấn luyện (màn 1.1, 1.2, 2.2, 4.2)
+  # ------------------------------------------------------------------
+  /sessions:
+    get:
+      tags: [Buổi huấn luyện]
+      summary: Danh sách buổi huấn luyện theo ngày
+      description: |
+        Một `Session` là một lần ca diễn ra trong một ngày cụ thể. Đây là nguồn
+        dữ liệu cho bảng lịch ở màn 1.1 và bảng tổng hợp quân số ở màn 2.1 / 4.1.
+      parameters:
+        - name: date_from
+          in: query
+          schema: { type: string, format: date }
+        - name: date_to
+          in: query
+          schema: { type: string, format: date }
+        - name: training_type
+          in: query
+          schema: { $ref: '#/components/schemas/TrainingType' }
+        - name: state
+          in: query
+          schema: { $ref: '#/components/schemas/SessionState' }
+        - name: class_id
+          in: query
+          schema: { type: string }
+        - name: area_id
+          in: query
+          schema: { type: string }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/Session' }
+
+  /sessions/{session_id}:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      tags: [Buổi huấn luyện]
+      summary: Chi tiết buổi huấn luyện (màn 1.2)
+      description: |
+        Gồm thông tin bài học, giáo viên, thao trường, lớp tham gia, tiến độ, và
+        bảng đối chiếu quân số đầu buổi / cuối buổi.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /sessions/{session_id}/attendance:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      tags: [Buổi huấn luyện]
+      summary: Kết quả điểm danh chi tiết từng quân nhân (màn 2.2 / 4.2)
+      description: |
+        Trả về **toàn bộ** quân số danh sách của lớp, kèm trạng thái tham gia.
+        Bộ lọc `violation` phục vụ thanh lọc nhanh "Đi chậm / Vắng / Về sớm".
+      parameters:
+        - name: violation
+          in: query
+          description: Chỉ lấy quân nhân có loại vi phạm này.
+          schema: { $ref: '#/components/schemas/ViolationType' }
+        - name: q
+          in: query
+          description: Tìm theo tên hoặc số hiệu quân nhân.
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session_id, summary, items]
+                properties:
+                  session_id: { type: string }
+                  summary: { $ref: '#/components/schemas/AttendanceSummary' }
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/AttendanceRecord' }
+
+  /sessions/{session_id}/checks:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      tags: [Buổi huấn luyện]
+      summary: Các mốc điểm danh và ảnh bằng chứng
+      description: |
+        Mỗi mốc (`start` / `end` / `manual`) kèm ảnh do camera AI chụp lại tại
+        thời điểm chốt. `evidence_url` tải được trực tiếp; thêm `?download=1`
+        cho nút "Tải ảnh điểm danh".
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Check' }
+
+  /sessions/{session_id}/checks/manual:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    post:
+      tags: [Buổi huấn luyện]
+      summary: Điểm danh đột xuất
+      description: Mở một cửa sổ điểm danh ngoài lịch cho buổi đang diễn ra.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                window_mins:
+                  type: integer
+                  minimum: 1
+                  maximum: 60
+                  default: 5
+      responses:
+        '202':
+          description: Đã mở phiên điểm danh
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ActiveCheck' }
+        '409':
+          description: Đang có phiên điểm danh khác chạy, hoặc buổi đã kết thúc
+
+  /sessions/{session_id}/checks/active:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      tags: [Buổi huấn luyện]
+      summary: Trạng thái phiên điểm danh đang chạy
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ActiveCheck' }
+    delete:
+      tags: [Buổi huấn luyện]
+      summary: Huỷ phiên điểm danh đang chạy
+      responses:
+        '204': { description: Đã huỷ }
+
+  /sessions/{session_id}/approve:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    post:
+      tags: [Buổi huấn luyện]
+      summary: Chỉ huy duyệt biên bản điểm danh
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [approver_name]
+              properties:
+                approver_name: { type: string, example: Đại uý Nguyễn Văn Hùng }
+                note: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionDetail' }
+
+  # ------------------------------------------------------------------
+  # Tổng hợp / dashboard
+  # ------------------------------------------------------------------
+  /summary/training:
+    get:
+      tags: [Tổng hợp]
+      summary: Tổng hợp giám sát quân số (màn 1.1, 2.1, 4.1)
+      description: |
+        Chỉ số nhanh + danh sách buổi. Phân hệ I và II dùng chung endpoint này,
+        khác nhau ở `training_type`.
+      parameters:
+        - name: date
+          in: query
+          description: Mặc định là hôm nay.
+          schema: { type: string, format: date }
+        - name: training_type
+          in: query
+          schema: { $ref: '#/components/schemas/TrainingType' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrainingSummary' }
+
+  /summary/safety:
+    get:
+      tags: [Tổng hợp]
+      summary: Dashboard an toàn bắn đạn thật (màn 3.1, 5.1)
+      parameters:
+        - name: date
+          in: query
+          schema: { type: string, format: date }
+        - name: training_type
+          in: query
+          schema: { $ref: '#/components/schemas/TrainingType' }
+        - name: area_id
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SafetySummary' }
+
+  # ------------------------------------------------------------------
+  # Sự kiện
+  # ------------------------------------------------------------------
+  /events:
+    get:
+      tags: [Sự kiện]
+      summary: Lịch sử sự kiện / thư viện ảnh vi phạm
+      description: |
+        Cùng một endpoint phục vụ dòng sự kiện trực tiếp (không lọc) và thư viện
+        ảnh vi phạm an toàn (`type=INTRUSION`).
+      parameters:
+        - name: type
+          in: query
+          explode: false
+          description: Lọc nhiều loại, ngăn cách bởi dấu phẩy.
+          schema:
+            type: array
+            items: { $ref: '#/components/schemas/EventType' }
+        - name: camera_id
+          in: query
+          schema: { type: string }
+        - name: area_id
+          in: query
+          schema: { type: string }
+        - name: session_id
+          in: query
+          schema: { type: string }
+        - name: acked
+          in: query
+          description: '`false` = chỉ lấy sự kiện chờ xử lý.'
+          schema: { type: boolean }
+        - name: occurred_from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: occurred_to
+          in: query
+          schema: { type: string, format: date-time }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/Event' }
+
+  /events/stream:
+    get:
+      tags: [Sự kiện]
+      summary: Kênh sự kiện thời gian thực (SSE)
+      description: |
+        `text/event-stream`, mỗi bản tin có dạng `data: {json}\n\n` — kiểu sự
+        kiện nằm **trong** JSON ở trường `type`, khớp với `events.schema.json`.
+
+        ```js
+        const es = new EventSource('/api/v1/events/stream?camera_id=cam_01');
+        es.onmessage = (e) => handle(JSON.parse(e.data));
+        ```
+
+        Kênh này **không** chứa khung hình. Hình lấy từ `stream.mjpg`.
+        Server gửi comment `:keepalive` mỗi 15 giây để giữ kết nối.
+      parameters:
+        - name: camera_id
+          in: query
+          schema: { type: string }
+        - name: type
+          in: query
+          explode: false
+          schema:
+            type: array
+            items: { $ref: '#/components/schemas/EventType' }
+        - name: since_event_id
+          in: query
+          description: Phát lại các sự kiện sau mốc này (dùng khi nối lại sau mất kết nối).
+          schema: { type: string }
+      responses:
+        '200':
+          description: Luồng SSE
+          content:
+            text/event-stream:
+              schema: { type: string }
+
+  /events/{event_id}/ack:
+    parameters:
+      - name: event_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [Sự kiện]
+      summary: Xác nhận đã xử lý sự kiện
+      description: |
+        Tương ứng nút "Xác nhận xử lý". Kết quả **được lưu**; sự kiện đã xác nhận
+        không còn tính vào `pending_count`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [acked_by]
+              properties:
+                acked_by: { type: string, example: Đại uý Nguyễn Văn Hùng }
+                note: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '409':
+          description: Sự kiện đã được xác nhận trước đó
+
+  /events/{event_id}/clip:
+    parameters:
+      - name: event_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Sự kiện]
+      summary: Đoạn video quanh thời điểm sự kiện
+      description: |
+        Trả file MP4 ~10 giây (khoảng đệm trước và sau mốc sự kiện). Phát trực
+        tiếp bằng thẻ `<video>`; thêm `?download=1` để tải về làm bằng chứng.
+      parameters:
+        - name: download
+          in: query
+          schema: { type: integer, enum: [0, 1], default: 0 }
+      responses:
+        '200':
+          description: Video MP4
+          content:
+            video/mp4:
+              schema: { type: string, format: binary }
+        '404':
+          description: Sự kiện không có đoạn ghi kèm
+
+  # ------------------------------------------------------------------
+  # Hệ thống
+  # ------------------------------------------------------------------
+  /system/time:
+    get:
+      tags: [Hệ thống]
+      summary: Giờ máy chủ
+      description: |
+        Giao diện nên đồng bộ đồng hồ hiển thị theo giờ này, vì dấu thời gian
+        trên khung hình và mốc điểm danh đều lấy từ máy chủ.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [server_time, timezone]
+                properties:
+                  server_time: { type: string, format: date-time }
+                  timezone: { type: string, example: Asia/Ho_Chi_Minh }
+
+  /system/health:
+    get:
+      tags: [Hệ thống]
+      summary: Tình trạng hệ thống
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [ok, degraded] }
+                  cameras_running: { type: integer }
+                  cameras_total: { type: integer }
+                  models_loaded:
+                    type: array
+                    items: { type: string }
+                  registered_personnel: { type: integer }
+
+components:
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSize:
+      name: page_size
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    AreaId:
+      name: area_id
+      in: path
+      required: true
+      schema: { type: string }
+    CameraId:
+      name: camera_id
+      in: path
+      required: true
+      schema: { type: string }
+      example: cam_01
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      schema: { type: string }
+
+  responses:
+    NotFound:
+      description: Không tìm thấy tài nguyên
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Conflict:
+      description: Xung đột trạng thái
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    ValidationError:
+      description: Dữ liệu không hợp lệ
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+  schemas:
+
+    # ---------------- chung ----------------
+    Problem:
+      type: object
+      required: [title, status]
+      properties:
+        type: { type: string, default: about:blank }
+        title: { type: string, description: Thông báo hiển thị được cho người dùng. }
+        status: { type: integer }
+        detail: { type: string }
+        errors:
+          type: object
+          description: Lỗi theo từng trường, dùng để đánh dấu ô nhập liệu.
+          additionalProperties:
+            type: array
+            items: { type: string }
+
+    Page:
+      type: object
+      required: [total, page, page_size]
+      properties:
+        total: { type: integer }
+        page: { type: integer }
+        page_size: { type: integer }
+
+    Point:
+      type: object
+      required: [x, y]
+      description: Toạ độ chuẩn hoá theo khung hình, trong khoảng [0, 1].
+      properties:
+        x: { type: number, minimum: 0, maximum: 1 }
+        y: { type: number, minimum: 0, maximum: 1 }
+
+    BoundingBox:
+      type: object
+      required: [x1, y1, x2, y2]
+      description: Khung bao chuẩn hoá [0,1], gốc toạ độ ở góc trên trái.
+      properties:
+        x1: { type: number }
+        y1: { type: number }
+        x2: { type: number }
+        y2: { type: number }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+
+    # ---------------- enum ----------------
+    TrainingType:
+      type: string
+      description: |
+        Phân hệ nghiệp vụ. `dao_tao` = huấn luyện đào tạo (phân hệ I),
+        `chien_dau` = huấn luyện chiến đấu (phân hệ II).
+      enum: [dao_tao, chien_dau]
+
+    RuleType:
+      type: string
+      description: Quy tắc giám sát tự động áp dụng cho ca.
+      enum: [diem_danh, an_toan, ca_hai]
+
+    CameraStatus:
+      type: string
+      enum: [online, offline, error, disabled]
+
+    SourceType:
+      type: string
+      enum: [rtsp, file, webcam]
+
+    ZoneKind:
+      type: string
+      description: '`polygon` = vùng kín; `tripwire` = vạch (2 điểm trở lên).'
+      enum: [polygon, tripwire]
+
+    ZoneRule:
+      type: string
+      description: |
+        Ý nghĩa nghiệp vụ của vùng — quyết định AI xử lý thế nào:
+        - `attendance_area`: chỉ đếm/nhận diện người **bên trong** vùng. Người
+          ngoài vùng bị bỏ qua. Đây là hành vi của hệ thống hiện tại.
+        - `restricted_area`: người xuất hiện bên trong là **vi phạm** → sinh sự
+          kiện `INTRUSION`. Dùng cho vùng cấm / khối chắn trường bắn.
+        - `crossing_line`: sinh sự kiện khi có người **cắt qua** vạch.
+      enum: [attendance_area, restricted_area, crossing_line]
+
+    SessionState:
+      type: string
+      description: Trạng thái vận hành của buổi tại thời điểm gọi API.
+      enum: [upcoming, check_start, running, check_end, finished, cancelled]
+
+    CheckPhase:
+      type: string
+      enum: [start, end, manual]
+
+    AttendanceStatus:
+      type: string
+      description: |
+        Trạng thái tổng hợp của một quân nhân trong buổi.
+        `violation` nghĩa là có mặt nhưng vi phạm giờ giấc — xem `violations`
+        để biết vi phạm loại nào.
+      enum: [present, violation, absent]
+
+    ViolationType:
+      type: string
+      description: |
+        - `late`: đi chậm — lần đầu được nhận diện muộn hơn giờ bắt đầu cộng dung sai.
+        - `early_leave`: chưa hết giờ đã rời thao trường.
+        - `absent`: không tham gia — không được nhận diện lần nào trong buổi.
+
+        Một quân nhân có thể vừa `late` vừa `early_leave`.
+      enum: [late, early_leave, absent]
+
+    EventType:
+      type: string
+      enum: [ABSENT, LATE, EARLY_LEAVE, INTRUSION, SYSTEM]
+
+    EventSeverity:
+      type: string
+      enum: [info, warning, critical]
+
+    SafetyState:
+      type: string
+      description: Trạng thái an toàn chung hiển thị ở đầu dashboard 3.1 / 5.1.
+      enum: [normal, warning, danger]
+
+    # ---------------- khu vực & camera ----------------
+    AreaInput:
+      type: object
+      required: [name]
+      properties:
+        code: { type: string, example: KV-TRUONGBAN-01 }
+        name: { type: string, example: Trường bắn số 1 }
+        description: { type: string }
+        location: { type: string, example: Thao trường phía Bắc }
+
+    Area:
+      allOf:
+        - $ref: '#/components/schemas/AreaInput'
+        - type: object
+          required: [id, camera_count]
+          properties:
+            id: { type: string }
+            camera_count: { type: integer }
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
+
+    AreaDetail:
+      allOf:
+        - $ref: '#/components/schemas/Area'
+        - type: object
+          properties:
+            cameras:
+              type: array
+              items: { $ref: '#/components/schemas/Camera' }
+
+    CameraInput:
+      type: object
+      required: [name, source_type, source_uri]
+      properties:
+        code: { type: string, example: CAM-01 }
+        name: { type: string, example: Sân tập trung }
+        source_type: { $ref: '#/components/schemas/SourceType' }
+        source_uri:
+          type: string
+          description: |
+            RTSP URL, đường dẫn file, hoặc chỉ số thiết bị webcam. Không trả lại
+            mật khẩu nhúng trong URL ở response — phần đó bị che.
+          example: rtsp://10.0.0.21:554/stream1
+        area_id: { type: string }
+        enabled: { type: boolean, default: true }
+        target_fps:
+          type: integer
+          description: Số khung hình/giây đưa vào xử lý AI.
+          minimum: 1
+          maximum: 25
+          default: 5
+
+    Camera:
+      allOf:
+        - $ref: '#/components/schemas/CameraInput'
+        - type: object
+          required: [id, status]
+          properties:
+            id: { type: string, example: cam_01 }
+            status: { $ref: '#/components/schemas/CameraStatus' }
+            area_name: { type: string }
+            last_frame_at: { type: string, format: date-time, nullable: true }
+            resolution:
+              type: object
+              nullable: true
+              properties:
+                width: { type: integer }
+                height: { type: integer }
+            stream_url:
+              type: string
+              description: Đường dẫn MJPEG dựng sẵn, dùng thẳng cho thẻ ảnh.
+              example: /api/v1/cameras/cam_01/stream.mjpg?overlay=1
+            snapshot_url: { type: string }
+            error_message: { type: string, nullable: true }
+
+    # ---------------- vùng ----------------
+    ZoneInput:
+      type: object
+      required: [name, kind, rule, points]
+      properties:
+        name: { type: string, example: Khối chắn tuyến bắn }
+        kind: { $ref: '#/components/schemas/ZoneKind' }
+        rule: { $ref: '#/components/schemas/ZoneRule' }
+        points:
+          type: array
+          minItems: 2
+          items: { $ref: '#/components/schemas/Point' }
+        detect_human: { type: boolean, default: true }
+        detect_object: { type: boolean, default: false }
+        enabled: { type: boolean, default: true }
+        active_schedule_ids:
+          type: array
+          description: |
+            Chỉ áp dụng vùng trong khung giờ của các ca này. Rỗng = áp dụng 24/7.
+          items: { type: string }
+
+    Zone:
+      allOf:
+        - $ref: '#/components/schemas/ZoneInput'
+        - type: object
+          required: [id, camera_id]
+          properties:
+            id: { type: string }
+            camera_id: { type: string }
+
+    # ---------------- quân nhân & lớp ----------------
+    Person:
+      type: object
+      required: [id, name, military_id, rank, unit]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        military_id: { type: string }
+        rank: { type: string }
+        unit: { type: string }
+        display_name:
+          type: string
+          description: Chuỗi hiển thị dựng sẵn "cấp bậc + họ tên".
+          example: Binh nhất Nguyễn Văn A
+        class_ids:
+          type: array
+          items: { type: string }
+        photo_url: { type: string }
+        registered_at: { type: string, format: date-time }
+
+    TrainingClassInput:
+      type: object
+      required: [name]
+      properties:
+        code: { type: string, example: LOP-A1 }
+        name: { type: string, example: Đội học A1 }
+        units:
+          type: array
+          description: Các đơn vị góp quân cho lớp này.
+          items: { type: string }
+        member_ids:
+          type: array
+          items: { type: string }
+
+    TrainingClass:
+      allOf:
+        - $ref: '#/components/schemas/TrainingClassInput'
+        - type: object
+          required: [id, size]
+          properties:
+            id: { type: string }
+            size:
+              type: integer
+              description: Quân số danh sách (số quân nhân biên chế vào lớp).
+
+    TrainingClassDetail:
+      allOf:
+        - $ref: '#/components/schemas/TrainingClass'
+        - type: object
+          properties:
+            members:
+              type: array
+              items: { $ref: '#/components/schemas/Person' }
+
+    # ---------------- thời khoá biểu ----------------
+    ScheduleInput:
+      type: object
+      required: [name, training_type, start_time, end_time]
+      properties:
+        name: { type: string, example: Huấn luyện bắn súng tiểu liên AK }
+        training_type: { $ref: '#/components/schemas/TrainingType' }
+        rule_type: { $ref: '#/components/schemas/RuleType' }
+        shift: { type: string, example: Ca sáng }
+        lesson_name:
+          type: string
+          description: Tên bài học, hiển thị ở màn chi tiết lịch (1.2).
+          example: Bài 3 — Ngắm bắn mục tiêu cố định
+        instructor: { type: string, example: Thượng uý Trần Văn B }
+        field:
+          type: string
+          description: Thao trường thực hiện.
+          example: Trường bắn số 1
+        class_id: { type: string }
+        area_id: { type: string }
+        camera_ids:
+          type: array
+          description: Camera tham gia giám sát ca này.
+          items: { type: string }
+        start_time: { type: string, pattern: '^\d{2}:\d{2}$', example: '07:00' }
+        end_time: { type: string, pattern: '^\d{2}:\d{2}$', example: '11:30' }
+        recurrence:
+          type: object
+          description: |
+            Rỗng hoặc bỏ trống = ca diễn ra một lần vào `date`.
+          nullable: true
+          properties:
+            days_of_week:
+              type: array
+              description: '1 = Thứ Hai … 7 = Chủ Nhật.'
+              items: { type: integer, minimum: 1, maximum: 7 }
+            date_from: { type: string, format: date }
+            date_to: { type: string, format: date }
+        date:
+          type: string
+          format: date
+          nullable: true
+          description: Ngày diễn ra, dùng khi ca không lặp lại.
+        check_window_mins:
+          type: integer
+          description: Độ dài cửa sổ điểm danh ở mỗi mốc đầu giờ và cuối giờ.
+          minimum: 1
+          maximum: 60
+          default: 5
+        late_tolerance_mins:
+          type: integer
+          description: Có mặt muộn hơn ngần này phút so với giờ bắt đầu thì tính "đi chậm".
+          minimum: 0
+          default: 5
+        early_leave_tolerance_mins:
+          type: integer
+          description: Rời thao trường sớm hơn ngần này phút so với giờ kết thúc thì tính "về sớm".
+          minimum: 0
+          default: 5
+        required_count:
+          type: integer
+          nullable: true
+          description: Sĩ số chuẩn. Bỏ trống = lấy theo quân số danh sách của lớp.
+        enabled: { type: boolean, default: true }
+
+    Schedule:
+      allOf:
+        - $ref: '#/components/schemas/ScheduleInput'
+        - type: object
+          required: [id]
+          properties:
+            id: { type: string }
+            class_name: { type: string }
+            area_name: { type: string }
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
+
+    # ---------------- buổi huấn luyện ----------------
+    Session:
+      type: object
+      required: [id, schedule_id, date, state, training_type]
+      properties:
+        id: { type: string }
+        schedule_id: { type: string }
+        date: { type: string, format: date }
+        training_type: { $ref: '#/components/schemas/TrainingType' }
+        name: { type: string }
+        lesson_name: { type: string }
+        shift: { type: string }
+        instructor: { type: string }
+        field: { type: string }
+        class_id: { type: string }
+        class_name: { type: string }
+        unit: { type: string }
+        area_id: { type: string }
+        camera_ids:
+          type: array
+          items: { type: string }
+        state: { $ref: '#/components/schemas/SessionState' }
+        state_label:
+          type: string
+          description: Nhãn tiếng Việt dựng sẵn, giao diện hiển thị thẳng.
+          example: Đang điểm danh cuối giờ
+        planned_start: { type: string, format: date-time }
+        planned_end: { type: string, format: date-time }
+        actual_start:
+          type: string
+          format: date-time
+          nullable: true
+          description: Thời điểm quân số trên thao trường lần đầu đạt ngưỡng.
+        actual_end:
+          type: string
+          format: date-time
+          nullable: true
+        scheduled_minutes: { type: integer }
+        actual_minutes:
+          type: integer
+          description: |
+            Số phút lớp thực sự diễn ra: từ lúc AI nhận diện được quân nhân đầu
+            tiên trên thao trường tới lúc nhận diện được người cuối cùng. Cố ý
+            không đòi "đủ sĩ số" — lớp hiếm khi đủ 100% suốt buổi, đòi vậy thì
+            tiến độ gần như luôn bằng 0.
+        progress_pct:
+          type: number
+          description: |
+            `actual_minutes / scheduled_minutes × 100`, chặn trên ở 100.
+            Buổi chưa diễn ra = 0.
+          minimum: 0
+          maximum: 100
+        required: { type: integer, description: Sĩ số chuẩn của buổi. }
+        present_start:
+          type: integer
+          description: |
+            Quân số điểm danh đầu buổi. Buổi **chưa diễn ra** trả 0.
+        present_end:
+          type: integer
+          description: |
+            Quân số điểm danh cuối buổi. Buổi chưa diễn ra hoặc **đang diễn ra**
+            trả 0 — chỉ có số thật sau khi chốt mốc cuối giờ.
+        violation_count:
+          type: integer
+          description: Số lượt vi phạm giờ giấc trong buổi (vắng + đi chậm + về sớm).
+        approved_by: { type: string, nullable: true }
+        approved_at: { type: string, format: date-time, nullable: true }
+
+    SessionDetail:
+      allOf:
+        - $ref: '#/components/schemas/Session'
+        - type: object
+          properties:
+            class_size: { type: integer }
+            roster:
+              type: array
+              description: Quân số danh sách của lớp tham gia.
+              items: { $ref: '#/components/schemas/Person' }
+            checks:
+              type: array
+              items: { $ref: '#/components/schemas/Check' }
+            attendance_summary: { $ref: '#/components/schemas/AttendanceSummary' }
+            cameras:
+              type: array
+              items: { $ref: '#/components/schemas/Camera' }
+
+    Check:
+      type: object
+      required: [phase, phase_label, present, absent]
+      properties:
+        phase: { $ref: '#/components/schemas/CheckPhase' }
+        phase_label: { type: string, example: Đầu giờ }
+        closed_at: { type: string, format: date-time }
+        time: { type: string, example: '07:05' }
+        present: { type: integer }
+        absent: { type: integer }
+        window_mins: { type: integer }
+        scans:
+          type: integer
+          description: Số lượt quét AI đã thực hiện trong cửa sổ.
+        evidence_url:
+          type: string
+          nullable: true
+          description: Ảnh do camera AI chụp tại thời điểm chốt mốc.
+        present_personnel:
+          type: array
+          items: { type: string }
+        absent_personnel:
+          type: array
+          items: { type: string }
+
+    ActiveCheck:
+      type: object
+      required: [active]
+      properties:
+        active: { type: boolean }
+        session_id: { type: string }
+        phase: { $ref: '#/components/schemas/CheckPhase' }
+        phase_label: { type: string }
+        started_at: { type: string, format: date-time }
+        remaining_seconds: { type: integer }
+        window_mins: { type: integer }
+        present: { type: integer }
+        required: { type: integer }
+
+    AttendanceSummary:
+      type: object
+      required: [required, present, absent, late, early_leave]
+      properties:
+        required: { type: integer }
+        present:
+          type: integer
+          description: Có mặt đủ giờ, không vi phạm.
+        absent: { type: integer }
+        late: { type: integer }
+        early_leave: { type: integer }
+
+    AttendanceRecord:
+      type: object
+      required: [person, status, violations]
+      properties:
+        person: { $ref: '#/components/schemas/Person' }
+        status: { $ref: '#/components/schemas/AttendanceStatus' }
+        violations:
+          type: array
+          description: Rỗng khi không vi phạm. Có thể chứa đồng thời late và early_leave.
+          items: { $ref: '#/components/schemas/ViolationType' }
+        first_seen:
+          type: string
+          format: date-time
+          nullable: true
+          description: Lần đầu AI nhận diện được quân nhân trong buổi.
+        last_seen:
+          type: string
+          format: date-time
+          nullable: true
+        total_seconds:
+          type: integer
+          description: Tổng thời gian được nhận diện có mặt trên thao trường.
+        late_minutes: { type: integer, nullable: true }
+        early_leave_minutes: { type: integer, nullable: true }
+        present_at_start:
+          type: boolean
+          description: Có mặt trong cửa sổ điểm danh đầu giờ.
+        present_at_end:
+          type: boolean
+        note: { type: string, nullable: true }
+
+    # ---------------- tổng hợp ----------------
+    TrainingSummary:
+      type: object
+      required: [date, stats, sessions]
+      properties:
+        date: { type: string, format: date }
+        training_type: { $ref: '#/components/schemas/TrainingType' }
+        stats:
+          type: object
+          description: Chỉ số tổng quan nhanh trên đầu màn 2.1 / 4.1.
+          required: [running_sessions, present_total, required_total, violation_total]
+          properties:
+            running_sessions: { type: integer, description: Số lớp đang học. }
+            present_total: { type: integer, description: Tổng quân số thực tế có mặt. }
+            required_total: { type: integer }
+            violation_total:
+              type: integer
+              description: Tổng số ca vi phạm giờ giấc trong ngày.
+            overall_progress_pct: { type: number, minimum: 0, maximum: 100 }
+        sessions:
+          type: array
+          items: { $ref: '#/components/schemas/Session' }
+
+    SafetySummary:
+      type: object
+      required: [state, pending_count, events]
+      properties:
+        date: { type: string, format: date }
+        state:
+          $ref: '#/components/schemas/SafetyState'
+        state_label: { type: string, example: Cảnh báo nguy hiểm }
+        active_intrusion:
+          description: |
+            Sự kiện xâm nhập đang chờ xử lý gần nhất — nguồn dữ liệu cho banner
+            đỏ nhấp nháy. `null` khi không có.
+          oneOf:
+            - $ref: '#/components/schemas/Event'
+            - type: 'null'
+        pending_count:
+          type: integer
+          description: Số vi phạm chưa được xác nhận xử lý.
+        cameras:
+          type: array
+          items: { $ref: '#/components/schemas/Camera' }
+        events:
+          type: array
+          description: Thư viện ảnh vi phạm gần đây.
+          items: { $ref: '#/components/schemas/Event' }
+
+    # ---------------- sự kiện ----------------
+    Event:
+      type: object
+      description: |
+        Cùng cấu trúc với bản tin trên kênh SSE. Định nghĩa đầy đủ kèm ràng buộc
+        theo từng `type` nằm ở `events.schema.json`.
+      required: [id, type, severity, occurred_at, message, acked]
+      properties:
+        id: { type: string, example: evt_01J9X2K }
+        type: { $ref: '#/components/schemas/EventType' }
+        severity: { $ref: '#/components/schemas/EventSeverity' }
+        occurred_at: { type: string, format: date-time }
+        camera_id: { type: string, nullable: true }
+        camera_name: { type: string, nullable: true }
+        area_id: { type: string, nullable: true }
+        area_name: { type: string, nullable: true }
+        zone_id: { type: string, nullable: true }
+        session_id: { type: string, nullable: true }
+        schedule_id: { type: string, nullable: true }
+        person_id: { type: string, nullable: true }
+        person_name: { type: string, nullable: true }
+        message:
+          type: string
+          description: Câu mô tả tiếng Việt dựng sẵn, giao diện hiển thị thẳng.
+          example: Phát hiện 01 đối tượng trong khối chắn tuyến bắn.
+        snapshot_url:
+          type: string
+          nullable: true
+          description: Ảnh đã khoanh đỏ đối tượng vi phạm.
+        clip_id: { type: string, nullable: true }
+        clip_url: { type: string, nullable: true }
+        boxes:
+          type: array
+          description: Vị trí đối tượng trên khung hình để vẽ lại khi phóng to ảnh.
+          items: { $ref: '#/components/schemas/BoundingBox' }
+        detail:
+          type: object
+          description: Trường phụ theo từng loại sự kiện — xem events.schema.json.
+          additionalProperties: true
+        acked: { type: boolean }
+        acked_by: { type: string, nullable: true }
+        acked_at: { type: string, format: date-time, nullable: true }
+        ack_note: { type: string, nullable: true }

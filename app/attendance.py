@@ -6,6 +6,9 @@ from typing import Dict, List, Optional, Tuple
 
 import cv2
 
+from app import clock
+from app.events import TYPE_EARLY_LEAVE, TYPE_LATE
+from app.presence import PresenceTracker, VIOLATION_EARLY_LEAVE
 from app.storage import read_json_list, write_json_list
 
 
@@ -41,6 +44,19 @@ STATE_LABELS = {
 }
 
 
+def person_label(person: dict) -> str:
+    """Chuỗi hiển thị 'cấp bậc + họ tên' của một quân nhân."""
+    return f"{person.get('rank', '')} {person.get('name', '')}".strip() or person.get("military_id", "?")
+
+
+def _tolerance_mins(schedule: dict, field: str, default: int = 5) -> int:
+    try:
+        value = int(schedule.get(field))
+    except (TypeError, ValueError):
+        return default
+    return max(0, value)
+
+
 def _schedule_window_mins(schedule: dict) -> int:
     """Số phút dùng để điểm danh mỗi mốc (ca cũ không khai thì lấy mặc định)."""
     raw = schedule.get("check_window_mins", schedule.get("tolerance_mins"))
@@ -62,20 +78,39 @@ def _time_on(day: datetime, raw_time) -> Optional[datetime]:
         return None
 
 
+def _occurrence(schedule: dict, now: datetime) -> Tuple[Optional[datetime], Optional[datetime]]:
+    """Lần diễn ra của ca ứng với thời điểm ``now``.
+
+    Ca qua đêm (22:00 → 06:00) sau nửa đêm vẫn thuộc về lần diễn ra bắt đầu từ
+    hôm trước. Neo cứng vào ngày của ``now`` thì suốt nửa sau của ca, giờ bắt đầu
+    lại rơi vào tương lai và ca bị coi như chưa tới giờ.
+    """
+    def anchored(day: datetime) -> Tuple[Optional[datetime], Optional[datetime]]:
+        start = _time_on(day, schedule.get("start_time"))
+        end = _time_on(day, schedule.get("end_time"))
+        if start is not None and end is not None and end <= start:
+            end += timedelta(days=1)
+        return start, end
+
+    for day_offset in (0, -1):
+        start, end = anchored(now + timedelta(days=day_offset))
+        if start is None:
+            return None, None
+        if end is not None and start <= now < end:
+            return start, end
+
+    # Không lần nào đang diễn ra: lấy lần của hôm nay để biết sắp tới hay đã xong
+    return anchored(now)
+
+
 def _start_datetime(schedule: dict, now: datetime) -> Optional[datetime]:
-    """Giờ bắt đầu của ca, quy về ngày hôm nay."""
-    return _time_on(now, schedule.get("start_time"))
+    """Giờ bắt đầu của lần diễn ra ứng với ``now``."""
+    return _occurrence(schedule, now)[0]
 
 
 def _end_datetime(schedule: dict, now: datetime) -> Optional[datetime]:
-    """Giờ kết thúc của ca. Ca qua đêm được đẩy sang ngày hôm sau."""
-    start = _start_datetime(schedule, now)
-    end = _time_on(now, schedule.get("end_time"))
-    if end is None or start is None:
-        return end
-    if end <= start:
-        end += timedelta(days=1)
-    return end
+    """Giờ kết thúc của lần diễn ra ứng với ``now``."""
+    return _occurrence(schedule, now)[1]
 
 
 def schedule_windows(schedule: dict, now: datetime) -> List[Tuple[str, datetime, datetime]]:
@@ -188,9 +223,7 @@ class AttendanceSession:
         present = self.present_ids()
         present_people = [p for p in self.roster if p.get("id") in present]
         absent_people = [p for p in self.roster if p.get("id") not in present]
-
-        def label(p):
-            return f"{p.get('rank', '')} {p.get('name', '')}".strip() or p.get("military_id", "?")
+        label = person_label
 
         return {
             "phase": self.phase,
@@ -202,7 +235,7 @@ class AttendanceSession:
             "absent_personnel": [label(p) for p in absent_people],
             "evidence": None,
             "window_mins": self.window_mins,
-            "started_at": self.started_at.isoformat(),
+            "started_at": clock.iso(self.started_at),
             "scans": self.scans,
         }
 
@@ -210,13 +243,15 @@ class AttendanceSession:
 class AttendanceManager:
     """Mở/đóng phiên điểm danh theo thời khoá biểu và ghi nhật ký."""
 
-    def __init__(self, data_dir: str, face_engine):
+    def __init__(self, data_dir: str, face_engine, events=None):
         self.data_dir = Path(data_dir)
         self.schedules_file = self.data_dir / "schedules.json"
         self.logs_file = self.data_dir / "attendance_logs.json"
         self.evidence_dir = self.data_dir / "attendance_evidence"
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
         self.face_engine = face_engine
+        self.events = events
+        self.presence = PresenceTracker()
         self.session: Optional[AttendanceSession] = None
         self.completed_keys = self._load_completed_keys()
         self._schedules_cache: List[dict] = []
@@ -323,9 +358,36 @@ class AttendanceManager:
         check["evidence"] = self._save_evidence(session.evidence_frame, target["id"], session.phase)
         target["checks"][session.phase] = check
         self._summarize(target)
+        self._attach_attendance_table(target, session, closed_at)
 
         write_json_list(self.logs_file, logs)
         return target
+
+    def _attach_attendance_table(self, target: dict, session: AttendanceSession,
+                                 closed_at: datetime) -> None:
+        """Ghi bảng trạng thái từng quân nhân (đi chậm / về sớm / không tham gia).
+
+        Chỉ ghi khi có dấu vết hiện diện thật — máy chủ khởi động lại giữa buổi
+        thì dấu vết mất, lúc đó thà không có bảng còn hơn ghi nhầm tất cả là vắng.
+        """
+        presence = self._presence_for(session.schedule, closed_at)
+        if presence is None or not presence.seen:
+            return
+
+        items, summary = presence.build_records(session.roster, closed_at)
+        target["session_id"] = self._presence_key(session.schedule, presence.planned_start)
+        target["attendance"] = items
+        target["attendance_summary"] = summary
+        target["actual_minutes"] = presence.actual_minutes(closed_at)
+        if presence.planned_end is not None:
+            scheduled = int((presence.planned_end - presence.planned_start).total_seconds() // 60)
+            target["scheduled_minutes"] = scheduled
+            target["progress_pct"] = round(
+                min(100.0, target["actual_minutes"] / scheduled * 100), 1
+            ) if scheduled > 0 else 0.0
+
+        if session.phase == PHASE_END:
+            self._emit_early_leave_events(session.schedule, presence, items, session.evidence_frame)
 
     # ---------- roster ----------
 
@@ -335,6 +397,126 @@ class AttendanceManager:
         Đơn vị chưa đăng ký ai thì roster rỗng, không rơi về toàn bộ CSDL.
         """
         return self.face_engine.get_registered_faces(unit=unit)
+
+    # ---------- dấu vết hiện diện cả buổi ----------
+
+    def _active_schedule(self, now: datetime) -> Optional[dict]:
+        """Ca đang trong khung giờ tại thời điểm ``now``."""
+        for schedule in self._load_schedules():
+            start = _start_datetime(schedule, now)
+            end = _end_datetime(schedule, now)
+            if start is None or end is None:
+                continue
+            if start <= now < end:
+                return schedule
+        return None
+
+    def _presence_key(self, schedule: dict, now: datetime) -> Optional[str]:
+        """Khoá của một buổi = ``mã ca:ngày diễn ra``.
+
+        Cũng chính là ``session_id`` gắn vào sự kiện và nhận ở API, để lọc được
+        vi phạm theo từng buổi.
+        """
+        start = _start_datetime(schedule, now)
+        if start is None:
+            return None
+        return f"{schedule.get('id', 'manual')}:{start.date().isoformat()}"
+
+    def _presence_for(self, schedule: dict, now: datetime, create: bool = False):
+        """Dấu vết hiện diện của ca trong ngày. ``create=False`` thì không tự tạo mới."""
+        key = self._presence_key(schedule, now)
+        if key is None:
+            return None
+        if not create:
+            return self.presence.get(key)
+        return self.presence.get_or_create(
+            key,
+            _start_datetime(schedule, now),
+            _end_datetime(schedule, now),
+            _tolerance_mins(schedule, "late_tolerance_mins"),
+            _tolerance_mins(schedule, "early_leave_tolerance_mins"),
+            now=now,
+        )
+
+    def _emit_late_events(self, schedule: dict, presence, person_ids: List[str], frame) -> None:
+        """Bắn sự kiện đi chậm, mỗi quân nhân đúng một lần trong buổi."""
+        if self.events is None:
+            return
+        newly = [pid for pid in set(person_ids) if presence.newly_late(pid)]
+        if not newly:
+            return
+
+        session_id = self._presence_key(schedule, presence.planned_start)
+        roster = {p.get("id"): p for p in self._roster_for(schedule.get("unit"))}
+        for pid in newly:
+            person = roster.get(pid)
+            if person is None:
+                continue
+            minutes = presence.late_minutes(pid)
+            name = person_label(person)
+            self.events.emit(
+                TYPE_LATE,
+                f"{name} đi chậm {minutes} phút so với giờ tập trung.",
+                severity="warning",
+                frame=frame,
+                person_id=pid,
+                person_name=name,
+                session_id=session_id,
+                schedule_id=schedule.get("id"),
+                detail={
+                    "late_minutes": minutes,
+                    "first_seen": clock.iso(presence.seen[pid]["first"]),
+                    "planned_start": clock.iso(presence.planned_start),
+                    "tolerance_mins": presence.late_tolerance_mins,
+                },
+            )
+
+    def _emit_early_leave_events(self, schedule: dict, presence, items: List[dict], frame) -> None:
+        """Bắn sự kiện về sớm, chỉ chốt được khi buổi đã kết thúc."""
+        if self.events is None:
+            return
+        session_id = self._presence_key(schedule, presence.planned_start)
+        for item in items:
+            if VIOLATION_EARLY_LEAVE not in item.get("violations", []):
+                continue
+            name = person_label(item["person"])
+            self.events.emit(
+                TYPE_EARLY_LEAVE,
+                f"{name} rời thao trường sớm {item['early_leave_minutes']} phút trước giờ kết thúc.",
+                severity="warning",
+                frame=frame,
+                person_id=item["person"].get("id"),
+                person_name=name,
+                session_id=session_id,
+                schedule_id=schedule.get("id"),
+                detail={
+                    "early_leave_minutes": item["early_leave_minutes"],
+                    "last_seen": item["last_seen"],
+                    "planned_end": clock.iso(presence.planned_end) if presence.planned_end else None,
+                },
+            )
+
+    def observe(self, person_ids: List[str], now: datetime, frame=None, quality: int = 0) -> None:
+        """Ghi nhận một lượt quét: vừa nuôi dấu vết cả buổi, vừa nuôi phiên đang mở.
+
+        Khác với ``record``, hàm này chạy trên **mọi** khung hình chứ không chỉ
+        trong hai cửa sổ điểm danh — có vậy mới biết ai đến muộn, ai về sớm.
+        """
+        schedule = self._active_schedule(now)
+        if schedule is not None:
+            presence = self._presence_for(schedule, now, create=True)
+            if presence is not None:
+                presence.record(person_ids, now)
+                self._emit_late_events(schedule, presence, person_ids, frame)
+
+        self.record(person_ids, frame=frame, quality=quality)
+
+    def attendance_table(self, schedule: dict, roster: List[dict], now: datetime) -> tuple:
+        """Bảng trạng thái từng quân nhân của ca trong ngày, kèm phần tổng hợp."""
+        presence = self._presence_for(schedule, now)
+        if presence is None:
+            return [], None
+        return presence.build_records(roster, now)
 
     # ---------- session lifecycle ----------
 

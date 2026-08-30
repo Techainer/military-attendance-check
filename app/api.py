@@ -2,7 +2,8 @@
 
 from fastapi import FastAPI, WebSocket, UploadFile, File, Form, WebSocketDisconnect, BackgroundTasks, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, StreamingResponse
+import asyncio
 import shutil
 import time
 import os
@@ -17,7 +18,8 @@ from app import clock
 from app.video_processor import VideoProcessor
 from app.monitor import AttendanceMonitor
 from app.face_engine import FaceEngine
-from app.attendance import AttendanceManager
+from app.attendance import AttendanceManager, person_label
+from app.events import CAMERA_ID, CAMERA_NAME, EventStore
 from app.storage import read_json_list, write_json_list
 
 
@@ -30,23 +32,27 @@ alerts_path = Path(__file__).parent.parent / "alerts"
 data_path = Path(__file__).parent.parent / "data"
 avatars_path = data_path / "face_avatars"
 evidence_path = data_path / "attendance_evidence"
+event_snapshots_path = data_path / "events"
 
 # Ensure directories
 alerts_path.mkdir(exist_ok=True)
 data_path.mkdir(exist_ok=True)
 avatars_path.mkdir(parents=True, exist_ok=True)
 evidence_path.mkdir(parents=True, exist_ok=True)
+event_snapshots_path.mkdir(parents=True, exist_ok=True)
 
 # Mount static files
 app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
 app.mount("/alerts", StaticFiles(directory=str(alerts_path)), name="alerts")
 app.mount("/data/face_avatars", StaticFiles(directory=str(avatars_path)), name="face_avatars")
 app.mount("/data/attendance_evidence", StaticFiles(directory=str(evidence_path)), name="attendance_evidence")
+app.mount("/data/events", StaticFiles(directory=str(event_snapshots_path)), name="event_snapshots")
 
 # Global instances
 monitor = AttendanceMonitor(alerts_dir=str(alerts_path))
 face_engine = FaceEngine(data_dir=str(data_path))
-attendance = AttendanceManager(data_dir=str(data_path), face_engine=face_engine)
+events = EventStore(data_dir=str(data_path))
+attendance = AttendanceManager(data_dir=str(data_path), face_engine=face_engine, events=events)
 
 current_video_path = None
 active_connections: List[WebSocket] = []
@@ -81,7 +87,8 @@ async def _background_process_video(video_path: str):
     global is_processing, last_frame_data, current_processor
     is_processing = True
     last_frame_data = None
-    current_processor = VideoProcessor(fps=5, face_engine=face_engine, attendance=attendance)
+    current_processor = VideoProcessor(fps=5, face_engine=face_engine, attendance=attendance,
+                                       events=events, data_dir=str(data_path))
     await current_processor.process_video(video_path, broadcast_update, monitor)
     is_processing = False
     last_frame_data = None
@@ -591,3 +598,234 @@ async def websocket_endpoint(websocket: WebSocket):
         print(f"Error in WebSocket: {e}")
         if websocket in active_connections:
             active_connections.remove(websocket)
+
+
+# ----------------- API v1: sự kiện, vi phạm giờ giấc, an toàn -----------------
+# Theo hợp đồng docs/api/openapi.yaml. Các route /api/* cũ giữ nguyên làm alias
+# cho giao diện hiện tại trong lúc chuyển tiếp.
+
+
+def _find_log(session_id: str) -> Optional[dict]:
+    return next((l for l in read_json_list(data_path / "attendance_logs.json")
+                 if l.get("id") == session_id), None)
+
+
+def _find_schedule(schedule_id: str) -> Optional[dict]:
+    return next((s for s in read_json_list(data_path / "schedules.json")
+                 if s.get("id") == schedule_id), None)
+
+
+@app.get("/api/v1/events")
+async def v1_list_events(
+    type: Optional[str] = Query(None, description="Lọc nhiều loại, ngăn cách bởi dấu phẩy"),
+    acked: Optional[bool] = None,
+    session_id: Optional[str] = None,
+    camera_id: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50,
+):
+    """Lịch sử sự kiện, cũng là nguồn cho thư viện ảnh vi phạm an toàn."""
+    types = [t.strip() for t in type.split(",")] if type else None
+    items, total = events.list_events(
+        types=types, acked=acked, session_id=session_id, camera_id=camera_id,
+        limit=page_size, offset=(max(1, page) - 1) * page_size,
+    )
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+@app.get("/api/v1/events/stream")
+async def v1_stream_events(type: Optional[str] = None, camera_id: Optional[str] = None):
+    """Kênh sự kiện thời gian thực (SSE). Không chứa khung hình."""
+    types = {t.strip() for t in type.split(",")} if type else None
+    queue = events.subscribe()
+
+    async def generator():
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                if types and event.get("type") not in types:
+                    continue
+                if camera_id and event.get("camera_id") != camera_id:
+                    continue
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        finally:
+            events.unsubscribe(queue)
+
+    return StreamingResponse(generator(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post("/api/v1/events/{event_id}/ack")
+async def v1_ack_event(event_id: str, body: dict):
+    """Xác nhận đã xử lý một sự kiện. Kết quả được lưu, khác với nút giả trước đây."""
+    acked_by = (body or {}).get("acked_by")
+    if not acked_by:
+        raise HTTPException(status_code=422, detail="Thiếu tên người xác nhận (acked_by)")
+
+    existing = events.get(event_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy sự kiện")
+    if existing.get("acked"):
+        raise HTTPException(status_code=409, detail="Sự kiện đã được xác nhận trước đó")
+
+    return events.ack(event_id, acked_by, (body or {}).get("note"))
+
+
+@app.get("/api/v1/events/{event_id}/clip")
+async def v1_event_clip(event_id: str, download: int = 0):
+    """Đoạn video ~10 giây quanh thời điểm sự kiện, dựng từ bộ đệm khung hình."""
+    from app.video_processor import latest_event_clips
+
+    event = events.get(event_id)
+    clip_id = (event or {}).get("clip_id")
+    frames = latest_event_clips.get(clip_id) if clip_id else None
+    if not frames:
+        raise HTTPException(status_code=404, detail="Sự kiện không có đoạn ghi kèm")
+
+    clip_file = event_snapshots_path / f"{event_id}.mp4"
+    if not clip_file.exists():
+        decoded = [cv2.imdecode(np.frombuffer(base64.b64decode(f), np.uint8), cv2.IMREAD_COLOR)
+                   for f in frames]
+        decoded = [img for img in decoded if img is not None]
+        if not decoded:
+            raise HTTPException(status_code=404, detail="Không giải mã được đoạn ghi")
+
+        h, w = decoded[0].shape[:2]
+        writer = cv2.VideoWriter(str(clip_file), cv2.VideoWriter_fourcc(*"mp4v"), 5, (w, h))
+        for img in decoded:
+            # Khung hình lệch kích thước sẽ bị VideoWriter bỏ qua âm thầm
+            if img.shape[:2] == (h, w):
+                writer.write(img)
+        writer.release()
+
+        if not clip_file.exists() or clip_file.stat().st_size == 0:
+            clip_file.unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail="Không dựng được đoạn video")
+
+    return FileResponse(clip_file, media_type="video/mp4",
+                        filename=f"{event_id}.mp4" if download else None)
+
+
+@app.get("/api/v1/sessions/{session_id}/attendance")
+async def v1_session_attendance(session_id: str, violation: Optional[str] = None,
+                                q: Optional[str] = None):
+    """Trạng thái tham gia của từng quân nhân: đi chậm / về sớm / không tham gia.
+
+    Nhận cả id biên bản lẫn id ca. Buổi đang diễn ra thì tính trực tiếp từ dấu
+    vết hiện diện; buổi đã chốt thì lấy bảng đã lưu trong biên bản.
+    """
+    # Nhận cả ba dạng: id biên bản, id ca, và "id ca:ngày" (dạng gắn trên sự kiện)
+    log = _find_log(session_id)
+    schedule_id = log["schedule_id"] if log else session_id.split(":")[0]
+    schedule = _find_schedule(schedule_id)
+    if schedule is None and log is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy buổi huấn luyện")
+
+    items, summary = [], None
+    if schedule is not None:
+        roster = face_engine.get_registered_faces(unit=schedule.get("unit"))
+        items, summary = attendance.attendance_table(schedule, roster, clock.now())
+
+    if not items and log is not None:
+        items = log.get("attendance", [])
+        summary = log.get("attendance_summary")
+
+    if violation:
+        items = [i for i in items if violation in i.get("violations", [])]
+    if q:
+        needle = q.lower()
+        items = [i for i in items
+                 if needle in person_label(i["person"]).lower()
+                 or needle in str(i["person"].get("military_id", "")).lower()]
+
+    return {
+        "session_id": session_id,
+        "summary": summary or {"required": 0, "present": 0, "absent": 0, "late": 0, "early_leave": 0},
+        "items": items,
+    }
+
+
+@app.get("/api/v1/summary/safety")
+async def v1_safety_summary():
+    """Dashboard an toàn: trạng thái chung, cảnh báo đang chờ, thư viện ảnh vi phạm."""
+    recent, total = events.list_events(types=["INTRUSION"], limit=50)
+    pending = [e for e in recent if not e.get("acked")]
+
+    state = "danger" if pending else ("warning" if recent else "normal")
+    labels = {"danger": "Cảnh báo nguy hiểm", "warning": "Có vi phạm đã xử lý", "normal": "Bình thường"}
+
+    return {
+        "date": clock.now().date().isoformat(),
+        "state": state,
+        "state_label": labels[state],
+        "active_intrusion": pending[0] if pending else None,
+        "pending_count": len(pending),
+        "cameras": [{
+            "id": CAMERA_ID,
+            "name": CAMERA_NAME,
+            "status": "online" if is_processing else "offline",
+            "stream_url": f"/api/v1/cameras/{CAMERA_ID}/stream.mjpg",
+        }],
+        "events": recent,
+        "total": total,
+    }
+
+
+@app.get("/api/v1/summary/training")
+async def v1_training_summary():
+    """Tổng hợp giám sát quân số trong ngày: chỉ số nhanh + danh sách buổi."""
+    now = clock.now()
+    today = now.date().isoformat()
+    logs = {l.get("schedule_id"): l for l in read_json_list(data_path / "attendance_logs.json")
+            if (l.get("date_iso") or str(l.get("started_at", ""))[:10]) == today}
+
+    sessions, running, present_total, required_total, violations = [], 0, 0, 0, 0
+    for row in attendance.schedules_with_state(now):
+        log = logs.get(row.get("id"), {})
+        checks = log.get("checks", {})
+        summary = log.get("attendance_summary") or {}
+        required = log.get("required", row.get("required_count") or 0)
+
+        if row.get("state") in ("check_start", "running", "check_end"):
+            running += 1
+        present_total += checks.get("start", {}).get("present", 0)
+        required_total += required or 0
+        violations += (summary.get("absent", 0) + summary.get("late", 0)
+                       + summary.get("early_leave", 0))
+
+        sessions.append({
+            "id": log.get("id", row.get("id")),
+            "schedule_id": row.get("id"),
+            "date": today,
+            "name": row.get("name", ""),
+            "shift": row.get("shift", ""),
+            "unit": row.get("unit", ""),
+            "state": row.get("state"),
+            "state_label": row.get("state_label"),
+            "required": required,
+            "present_start": checks.get("start", {}).get("present", 0),
+            "present_end": checks.get("end", {}).get("present", 0),
+            "actual_minutes": log.get("actual_minutes", 0),
+            "scheduled_minutes": log.get("scheduled_minutes", 0),
+            "progress_pct": log.get("progress_pct", 0.0),
+            "violation_count": (summary.get("absent", 0) + summary.get("late", 0)
+                                + summary.get("early_leave", 0)),
+        })
+
+    progress_values = [s["progress_pct"] for s in sessions if s["progress_pct"]]
+    return {
+        "date": today,
+        "stats": {
+            "running_sessions": running,
+            "present_total": present_total,
+            "required_total": required_total,
+            "violation_total": violations,
+            "overall_progress_pct": round(sum(progress_values) / len(progress_values), 1)
+            if progress_values else 0.0,
+        },
+        "sessions": sessions,
+    }

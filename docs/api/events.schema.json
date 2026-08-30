@@ -1,0 +1,370 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vision-agent.local/schemas/events.schema.json",
+  "title": "Bản tin sự kiện giám sát",
+  "description": "Hợp đồng cho kênh thời gian thực GET /api/v1/events/stream (SSE) và cho các phần tử trả về bởi GET /api/v1/events. Wire format: 'data: {json}\\n\\n' — loại sự kiện nằm trong JSON ở trường 'type', không dùng trường 'event:' của SSE.",
+
+  "type": "object",
+  "unevaluatedProperties": false,
+
+  "allOf": [
+    { "$ref": "#/$defs/EventBase" },
+    {
+      "oneOf": [
+        { "$ref": "#/$defs/AbsentEvent" },
+        { "$ref": "#/$defs/LateEvent" },
+        { "$ref": "#/$defs/EarlyLeaveEvent" },
+        { "$ref": "#/$defs/IntrusionEvent" },
+        { "$ref": "#/$defs/SystemEvent" }
+      ]
+    }
+  ],
+
+  "$defs": {
+
+    "EventBase": {
+      "type": "object",
+      "required": ["id", "type", "severity", "occurred_at", "message", "acked"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Mã sự kiện, tăng dần theo thời gian. Dùng làm mốc cho tham số since_event_id khi nối lại kênh SSE.",
+          "examples": ["evt_01J9X2K7QF"]
+        },
+        "type": {
+          "type": "string",
+          "enum": ["ABSENT", "LATE", "EARLY_LEAVE", "INTRUSION", "SYSTEM"]
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["info", "warning", "critical"],
+          "description": "Quyết định cách hiển thị: info = thẻ thường, warning = viền vàng, critical = banner đỏ nhấp nháy kèm còi."
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Giờ máy chủ, ISO-8601 kèm offset."
+        },
+
+        "camera_id": { "type": ["string", "null"] },
+        "camera_name": { "type": ["string", "null"] },
+        "area_id": { "type": ["string", "null"] },
+        "area_name": { "type": ["string", "null"] },
+        "zone_id": { "type": ["string", "null"] },
+        "session_id": { "type": ["string", "null"] },
+        "schedule_id": { "type": ["string", "null"] },
+        "person_id": { "type": ["string", "null"] },
+        "person_name": { "type": ["string", "null"] },
+
+        "message": {
+          "type": "string",
+          "description": "Câu mô tả tiếng Việt đã dựng sẵn phía máy chủ. Giao diện hiển thị thẳng, không tự ghép chuỗi từ các trường khác — để hai đội không phải đồng bộ cách diễn đạt."
+        },
+
+        "snapshot_url": {
+          "type": ["string", "null"],
+          "description": "Ảnh JPEG tại thời điểm sự kiện, đã khoanh đỏ đối tượng. Thêm ?download=1 để tải về làm bằng chứng."
+        },
+        "clip_id": { "type": ["string", "null"] },
+        "clip_url": {
+          "type": ["string", "null"],
+          "description": "MP4 ~10 giây quanh mốc sự kiện.",
+          "examples": ["/api/v1/events/evt_01J9X2K7QF/clip"]
+        },
+        "boxes": {
+          "type": "array",
+          "description": "Khung bao chuẩn hoá [0,1] của đối tượng liên quan, để vẽ lại khi phóng to ảnh.",
+          "items": { "$ref": "#/$defs/BoundingBox" }
+        },
+
+        "acked": {
+          "type": "boolean",
+          "description": "Đã được xác nhận xử lý hay chưa. Sự kiện mới trên kênh SSE luôn là false."
+        },
+        "acked_by": { "type": ["string", "null"] },
+        "acked_at": { "type": ["string", "null"], "format": "date-time" },
+        "ack_note": { "type": ["string", "null"] },
+
+        "detail": {
+          "type": "object",
+          "description": "Trường phụ riêng theo từng loại sự kiện."
+        }
+      }
+    },
+
+    "BoundingBox": {
+      "type": "object",
+      "required": ["x1", "y1", "x2", "y2"],
+      "properties": {
+        "x1": { "type": "number", "minimum": 0, "maximum": 1 },
+        "y1": { "type": "number", "minimum": 0, "maximum": 1 },
+        "x2": { "type": "number", "minimum": 0, "maximum": 1 },
+        "y2": { "type": "number", "minimum": 0, "maximum": 1 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "label": {
+          "type": "string",
+          "description": "Nhãn hiển thị cạnh khung, ví dụ tên quân nhân đã nhận diện hoặc 'Không xác định'."
+        }
+      }
+    },
+
+    "AbsentEvent": {
+      "title": "Thiếu quân số",
+      "description": "Quân số trên thao trường tụt dưới sĩ số chuẩn và duy trì quá ngưỡng thời gian. Sự kiện ở mức lớp, không gắn với một quân nhân cụ thể.",
+      "type": "object",
+      "properties": {
+        "type": { "const": "ABSENT" },
+        "person_id": { "type": "null" },
+        "detail": {
+          "type": "object",
+          "required": ["current_count", "required_count", "duration_seconds"],
+          "properties": {
+            "current_count": { "type": "integer", "minimum": 0 },
+            "required_count": { "type": "integer", "minimum": 0 },
+            "missing_count": { "type": "integer", "minimum": 0 },
+            "duration_seconds": {
+              "type": "integer",
+              "description": "Đã thiếu quân số liên tục trong bao lâu trước khi bắn cảnh báo."
+            }
+          }
+        }
+      },
+      "required": ["type", "detail"],
+      "examples": [
+        {
+          "id": "evt_01J9X2K7QF",
+          "type": "ABSENT",
+          "severity": "warning",
+          "occurred_at": "2026-08-30T07:18:22+07:00",
+          "camera_id": "cam_01",
+          "camera_name": "Sân tập trung",
+          "area_id": "area_01",
+          "area_name": "Thao trường số 1",
+          "session_id": "ses_20260830_a1_sang",
+          "schedule_id": "sch_1756500000000",
+          "person_id": null,
+          "message": "Thiếu 05 quân nhân so với sĩ số chuẩn (40/45) trong 32 giây.",
+          "snapshot_url": "/data/events/evt_01J9X2K7QF.jpg",
+          "clip_id": "clip_1756530000",
+          "clip_url": "/api/v1/events/evt_01J9X2K7QF/clip",
+          "boxes": [],
+          "acked": false,
+          "acked_by": null,
+          "acked_at": null,
+          "detail": {
+            "current_count": 40,
+            "required_count": 45,
+            "missing_count": 5,
+            "duration_seconds": 32
+          }
+        }
+      ]
+    },
+
+    "LateEvent": {
+      "title": "Đi chậm",
+      "description": "Quân nhân lần đầu được nhận diện muộn hơn giờ bắt đầu cộng dung sai. Mỗi quân nhân chỉ sinh tối đa một sự kiện LATE trong một buổi.",
+      "type": "object",
+      "properties": {
+        "type": { "const": "LATE" },
+        "person_id": { "type": "string" },
+        "session_id": { "type": "string" },
+        "detail": {
+          "type": "object",
+          "required": ["late_minutes", "first_seen", "planned_start"],
+          "properties": {
+            "late_minutes": { "type": "integer", "minimum": 0 },
+            "first_seen": { "type": "string", "format": "date-time" },
+            "planned_start": { "type": "string", "format": "date-time" },
+            "tolerance_mins": { "type": "integer", "minimum": 0 }
+          }
+        }
+      },
+      "required": ["type", "person_id", "session_id", "detail"],
+      "examples": [
+        {
+          "id": "evt_01J9X3B1TT",
+          "type": "LATE",
+          "severity": "warning",
+          "occurred_at": "2026-08-30T07:14:05+07:00",
+          "camera_id": "cam_01",
+          "camera_name": "Sân tập trung",
+          "session_id": "ses_20260830_a1_sang",
+          "person_id": "per_10231",
+          "person_name": "Binh nhất Nguyễn Văn A",
+          "message": "Binh nhất Nguyễn Văn A đi chậm 14 phút so với giờ tập trung.",
+          "snapshot_url": "/data/events/evt_01J9X3B1TT.jpg",
+          "boxes": [
+            { "x1": 0.42, "y1": 0.36, "x2": 0.49, "y2": 0.71, "confidence": 0.93, "label": "Nguyễn Văn A" }
+          ],
+          "acked": false,
+          "detail": {
+            "late_minutes": 14,
+            "first_seen": "2026-08-30T07:14:05+07:00",
+            "planned_start": "2026-08-30T07:00:00+07:00",
+            "tolerance_mins": 5
+          }
+        }
+      ]
+    },
+
+    "EarlyLeaveEvent": {
+      "title": "Chưa hết giờ đã rời thao trường",
+      "description": "Quân nhân không còn được nhận diện trước giờ kết thúc trừ dung sai. Sự kiện chỉ được chốt khi buổi kết thúc, vì trước đó chưa thể khẳng định người đó không quay lại.",
+      "type": "object",
+      "properties": {
+        "type": { "const": "EARLY_LEAVE" },
+        "person_id": { "type": "string" },
+        "session_id": { "type": "string" },
+        "detail": {
+          "type": "object",
+          "required": ["early_leave_minutes", "last_seen", "planned_end"],
+          "properties": {
+            "early_leave_minutes": { "type": "integer", "minimum": 0 },
+            "last_seen": { "type": "string", "format": "date-time" },
+            "planned_end": { "type": "string", "format": "date-time" },
+            "tolerance_mins": { "type": "integer", "minimum": 0 }
+          }
+        }
+      },
+      "required": ["type", "person_id", "session_id", "detail"]
+    },
+
+    "IntrusionEvent": {
+      "title": "Xâm nhập vùng cấm",
+      "description": "Phát hiện đối tượng bên trong vùng có rule = restricted_area, hoặc cắt qua vùng crossing_line. Đây là sự kiện của dashboard an toàn bắn đạn thật (màn 3.1 / 5.1). severity = critical sẽ kích hoạt banner đỏ nhấp nháy và còi.",
+      "type": "object",
+      "properties": {
+        "type": { "const": "INTRUSION" },
+        "camera_id": { "type": "string" },
+        "zone_id": { "type": "string" },
+        "detail": {
+          "type": "object",
+          "required": ["zone_name", "object_count"],
+          "properties": {
+            "zone_name": { "type": "string", "examples": ["Khối chắn tuyến bắn"] },
+            "zone_rule": {
+              "type": "string",
+              "enum": ["restricted_area", "crossing_line"]
+            },
+            "object_count": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Số đối tượng phát hiện trong vùng cấm tại thời điểm này."
+            },
+            "object_class": {
+              "type": "string",
+              "description": "Loại đối tượng theo mô hình phát hiện.",
+              "examples": ["person", "vehicle"]
+            },
+            "identified": {
+              "type": "array",
+              "description": "Các quân nhân nhận diện được trong số đối tượng vi phạm. Rỗng nếu không nhận ra ai.",
+              "items": {
+                "type": "object",
+                "required": ["person_id", "person_name"],
+                "properties": {
+                  "person_id": { "type": "string" },
+                  "person_name": { "type": "string" }
+                }
+              }
+            },
+            "dwell_seconds": {
+              "type": "integer",
+              "description": "Đã ở trong vùng cấm bao lâu tính đến lúc bắn sự kiện."
+            }
+          }
+        }
+      },
+      "required": ["type", "camera_id", "zone_id", "detail"],
+      "examples": [
+        {
+          "id": "evt_01J9XC0P4M",
+          "type": "INTRUSION",
+          "severity": "critical",
+          "occurred_at": "2026-08-30T09:02:47+07:00",
+          "camera_id": "cam_07",
+          "camera_name": "Trường bắn — hướng Đông",
+          "area_id": "area_03",
+          "area_name": "Trường bắn số 1",
+          "zone_id": "zone_kc_01",
+          "session_id": "ses_20260830_b2_sang",
+          "person_id": null,
+          "message": "Phát hiện 01 đối tượng đi vào khối chắn tuyến bắn.",
+          "snapshot_url": "/data/events/evt_01J9XC0P4M.jpg",
+          "clip_url": "/api/v1/events/evt_01J9XC0P4M/clip",
+          "boxes": [
+            { "x1": 0.61, "y1": 0.44, "x2": 0.68, "y2": 0.79, "confidence": 0.88, "label": "Không xác định" }
+          ],
+          "acked": false,
+          "detail": {
+            "zone_name": "Khối chắn tuyến bắn",
+            "zone_rule": "restricted_area",
+            "object_count": 1,
+            "object_class": "person",
+            "identified": [],
+            "dwell_seconds": 3
+          }
+        }
+      ]
+    },
+
+    "SystemEvent": {
+      "title": "Sự kiện hệ thống",
+      "description": "Thông báo vận hành: mở/chốt mốc điểm danh, camera mất kết nối hoặc kết nối lại, quân số đủ trở lại, áp dụng cấu hình mới. Luôn ở mức info trừ khi camera lỗi.",
+      "type": "object",
+      "properties": {
+        "type": { "const": "SYSTEM" },
+        "detail": {
+          "type": "object",
+          "required": ["code"],
+          "properties": {
+            "code": {
+              "type": "string",
+              "description": "Mã sự kiện hệ thống, để giao diện chọn biểu tượng và quyết định có cần tải lại dữ liệu không.",
+              "enum": [
+                "camera_online",
+                "camera_offline",
+                "camera_error",
+                "session_started",
+                "session_finished",
+                "check_opened",
+                "check_closed",
+                "headcount_recovered",
+                "config_applied"
+              ]
+            },
+            "check_phase": {
+              "type": "string",
+              "enum": ["start", "end", "manual"],
+              "description": "Có mặt khi code là check_opened hoặc check_closed."
+            },
+            "present": { "type": "integer" },
+            "required": { "type": "integer" }
+          }
+        }
+      },
+      "required": ["type", "detail"],
+      "examples": [
+        {
+          "id": "evt_01J9XD5R2A",
+          "type": "SYSTEM",
+          "severity": "info",
+          "occurred_at": "2026-08-30T07:05:00+07:00",
+          "camera_id": "cam_01",
+          "camera_name": "Sân tập trung",
+          "session_id": "ses_20260830_a1_sang",
+          "message": "Đã chốt điểm danh đầu giờ: 43/45 quân nhân.",
+          "snapshot_url": "/data/attendance_evidence/ses_20260830_a1_sang_start.jpg",
+          "acked": true,
+          "detail": {
+            "code": "check_closed",
+            "check_phase": "start",
+            "present": 43,
+            "required": 45
+          }
+        }
+      ]
+    }
+  }
+}
