@@ -23,7 +23,8 @@ from app.face_engine import FaceEngine
 from app.attendance import AttendanceManager, person_label
 from app.events import CAMERA_ID, CAMERA_NAME, EventStore
 from app.safety import RULE_ATTENDANCE, ZoneStore
-from app.schemas import AckInput, ZoneInput, ZonePatch
+from app.schemas import (AckInput, CameraInput, CameraPatch, ScheduleInput,
+                         SchedulePatch, ZoneInput, ZonePatch)
 from app.storage import read_json_list, write_json_list
 
 
@@ -760,20 +761,18 @@ async def v1_safety_summary():
         "state_label": labels[state],
         "active_intrusion": pending[0] if pending else None,
         "pending_count": len(pending),
-        "cameras": [{
-            "id": CAMERA_ID,
-            "name": CAMERA_NAME,
-            "status": "online" if is_processing else "offline",
-            "stream_url": f"/api/v1/cameras/{CAMERA_ID}/stream.mjpg",
-        }],
+        "cameras": [_camera_out(c) for c in _load_cameras()],
         "events": recent,
         "total": total,
     }
 
 
 @app.get("/api/v1/summary/training")
-async def v1_training_summary():
-    """Tổng hợp giám sát quân số trong ngày: chỉ số nhanh + danh sách buổi."""
+async def v1_training_summary(training_type: Optional[str] = None):
+    """Tổng hợp giám sát quân số trong ngày: chỉ số nhanh + danh sách buổi.
+
+    ``training_type`` tách phân hệ đào tạo và chiến đấu; bỏ trống thì lấy cả hai.
+    """
     now = clock.now()
     today = now.date().isoformat()
     logs = {l.get("schedule_id"): l for l in read_json_list(data_path / "attendance_logs.json")
@@ -781,6 +780,8 @@ async def v1_training_summary():
 
     sessions, running, present_total, required_total, violations = [], 0, 0, 0, 0
     for row in attendance.schedules_with_state(now):
+        if training_type and row.get("training_type") != training_type:
+            continue
         log = logs.get(row.get("id"), {})
         checks = log.get("checks", {})
         summary = log.get("attendance_summary") or {}
@@ -800,6 +801,8 @@ async def v1_training_summary():
             "name": row.get("name", ""),
             "shift": row.get("shift", ""),
             "unit": row.get("unit", ""),
+            "training_type": row.get("training_type"),
+            "camera_id": row.get("camera_id", CAMERA_ID),
             "state": row.get("state"),
             "state_label": row.get("state_label"),
             "required": required,
@@ -815,6 +818,7 @@ async def v1_training_summary():
     progress_values = [s["progress_pct"] for s in sessions if s["progress_pct"]]
     return {
         "date": today,
+        "training_type": training_type,
         "stats": {
             "running_sessions": running,
             "present_total": present_total,
@@ -924,8 +928,7 @@ async def v1_camera_stream(camera_id: str, overlay: int = 1, fps: int = 5):
 
     Không cần WebSocket, không cần canvas, trình duyệt tự nối lại khi đứt.
     """
-    if camera_id != CAMERA_ID:
-        raise HTTPException(status_code=404, detail="Không tìm thấy camera")
+    _camera_or_404(camera_id)
     if _current_jpeg(overlay) is None:
         raise HTTPException(status_code=409, detail="Camera chưa được bật xử lý")
 
@@ -956,8 +959,7 @@ async def v1_camera_stream(camera_id: str, overlay: int = 1, fps: int = 5):
 @app.get("/api/v1/cameras/{camera_id}/snapshot")
 async def v1_camera_snapshot(camera_id: str, overlay: int = 0, download: int = 0):
     """Ảnh tĩnh khung hình hiện tại: nền để vẽ vùng, và nút chụp nhanh."""
-    if camera_id != CAMERA_ID:
-        raise HTTPException(status_code=404, detail="Không tìm thấy camera")
+    _camera_or_404(camera_id)
 
     frame = _current_jpeg(overlay)
     if frame is None:
@@ -968,3 +970,241 @@ async def v1_camera_snapshot(camera_id: str, overlay: int = 0, download: int = 0
         stamp = clock.now().strftime("%Y%m%d_%H%M%S")
         headers["Content-Disposition"] = f'attachment; filename="{camera_id}_{stamp}.jpg"'
     return Response(content=frame, media_type="image/jpeg", headers=headers)
+
+
+# ----------------- API v1: camera và thời khoá biểu -----------------
+# Hai nhóm này là ĐẦU VÀO của service AI. Tạm thời do chính service quản; khi
+# nối vào hệ thống quản lý bên ngoài thì chỉ cần đồng bộ xuống hai file JSON này,
+# phần AI không phải sửa gì.
+
+cameras_file = data_path / "cameras.json"
+schedules_file = data_path / "schedules.json"
+
+
+def _load_cameras() -> List[dict]:
+    """Danh sách camera. Lần đầu chạy thì tạo sẵn camera mặc định."""
+    cameras = read_json_list(cameras_file)
+    if not cameras:
+        cameras = [{
+            "id": CAMERA_ID,
+            "code": "CAM-01",
+            "name": CAMERA_NAME,
+            "source_type": "file",
+            "source_uri": "",
+            "area_name": "Thao trường số 1",
+            "enabled": True,
+            "target_fps": 5,
+        }]
+        write_json_list(cameras_file, cameras)
+    return cameras
+
+
+def _camera_status(camera: dict) -> str:
+    """Camera đang chạy xử lý hay không. POC chạy một luồng nên chỉ một camera online."""
+    if not camera.get("enabled", True):
+        return "disabled"
+    return "online" if (is_processing and camera["id"] == CAMERA_ID) else "offline"
+
+
+def _camera_out(camera: dict) -> dict:
+    """Bản ghi trả về giao diện, kèm trạng thái và đường dẫn dựng sẵn."""
+    return {
+        **camera,
+        "status": _camera_status(camera),
+        "stream_url": f"/api/v1/cameras/{camera['id']}/stream.mjpg?overlay=1",
+        "snapshot_url": f"/api/v1/cameras/{camera['id']}/snapshot?overlay=0",
+    }
+
+
+def _camera_or_404(camera_id: str) -> tuple:
+    cameras = _load_cameras()
+    for index, camera in enumerate(cameras):
+        if camera.get("id") == camera_id:
+            return cameras, index
+    raise HTTPException(status_code=404, detail="Không tìm thấy camera")
+
+
+@app.get("/api/v1/cameras")
+async def v1_list_cameras(area_name: Optional[str] = None, status: Optional[str] = None):
+    """Danh sách camera của service."""
+    items = [_camera_out(c) for c in _load_cameras()]
+    if area_name:
+        items = [c for c in items if c.get("area_name") == area_name]
+    if status:
+        items = [c for c in items if c["status"] == status]
+    return {"items": items, "total": len(items), "page": 1, "page_size": len(items)}
+
+
+@app.get("/api/v1/cameras/{camera_id}")
+async def v1_get_camera(camera_id: str):
+    cameras, index = _camera_or_404(camera_id)
+    return _camera_out(cameras[index])
+
+
+@app.post("/api/v1/cameras", status_code=201)
+async def v1_create_camera(payload: CameraInput):
+    cameras = _load_cameras()
+    camera = payload.model_dump()
+    camera["id"] = f"cam_{int(time.time() * 1000)}"
+    cameras.append(camera)
+    write_json_list(cameras_file, cameras)
+    return _camera_out(camera)
+
+
+@app.patch("/api/v1/cameras/{camera_id}")
+async def v1_update_camera(camera_id: str, payload: CameraPatch):
+    cameras, index = _camera_or_404(camera_id)
+    try:
+        merged = payload.apply_to(cameras[index])
+    except ValidationError as e:
+        raise HTTPException(status_code=422,
+                            detail=e.errors(include_url=False, include_context=False,
+                                            include_input=False))
+    merged["id"] = camera_id
+    cameras[index] = merged
+    write_json_list(cameras_file, cameras)
+    return _camera_out(merged)
+
+
+@app.delete("/api/v1/cameras/{camera_id}", status_code=204)
+async def v1_delete_camera(camera_id: str):
+    """Gỡ camera. Vùng giám sát của camera đó bị xoá theo, không để lại rác."""
+    cameras, index = _camera_or_404(camera_id)
+    if _camera_status(cameras[index]) == "online":
+        raise HTTPException(status_code=409, detail="Camera đang chạy, dừng xử lý trước khi xoá")
+
+    cameras.pop(index)
+    write_json_list(cameras_file, cameras)
+    zone_store.save([z for z in zone_store.all_zones()
+                     if z.get("camera_id", CAMERA_ID) != camera_id])
+    return Response(status_code=204)
+
+
+@app.post("/api/v1/cameras/{camera_id}/start", status_code=202)
+async def v1_start_camera(camera_id: str, background_tasks: BackgroundTasks):
+    """Bật xử lý AI cho camera, dùng nguồn đã khai trong hồ sơ camera."""
+    global current_video_path
+    cameras, index = _camera_or_404(camera_id)
+    camera = cameras[index]
+
+    if not camera.get("enabled", True):
+        raise HTTPException(status_code=409, detail="Camera đang bị tắt")
+    if is_processing:
+        raise HTTPException(status_code=409, detail="Đang có luồng xử lý chạy, dừng trước đã")
+
+    source = camera.get("source_uri") or ""
+    if not source:
+        raise HTTPException(status_code=422, detail="Camera chưa khai nguồn (source_uri)")
+    if "://" not in source and not os.path.exists(source):
+        raise HTTPException(status_code=422, detail=f"Không tìm thấy nguồn video: {source}")
+
+    current_video_path = source
+    background_tasks.add_task(_background_process_video, source)
+    return _camera_out(camera)
+
+
+@app.post("/api/v1/cameras/{camera_id}/stop", status_code=202)
+async def v1_stop_camera(camera_id: str):
+    cameras, index = _camera_or_404(camera_id)
+    if current_processor is not None:
+        current_processor.stop()
+    return _camera_out(cameras[index])
+
+
+@app.get("/api/v1/schedules")
+async def v1_list_schedules(training_type: Optional[str] = None, unit: Optional[str] = None):
+    """Thời khoá biểu kèm trạng thái vận hành hiện tại của từng ca."""
+    rows = attendance.schedules_with_state(clock.now())
+    if training_type:
+        rows = [r for r in rows if r.get("training_type") == training_type]
+    if unit:
+        rows = [r for r in rows if r.get("unit") == unit]
+    return {"items": rows, "total": len(rows), "page": 1, "page_size": len(rows)}
+
+
+@app.post("/api/v1/schedules", status_code=201)
+async def v1_create_schedule(payload: ScheduleInput):
+    schedules = read_json_list(schedules_file)
+    schedule = payload.model_dump()
+    schedule["id"] = f"sch_{int(time.time() * 1000)}"
+    schedules.append(schedule)
+    write_json_list(schedules_file, schedules)
+    return schedule
+
+
+@app.get("/api/v1/schedules/{schedule_id}")
+async def v1_get_schedule(schedule_id: str):
+    row = next((r for r in attendance.schedules_with_state(clock.now())
+                if r.get("id") == schedule_id), None)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy ca")
+    return row
+
+
+@app.patch("/api/v1/schedules/{schedule_id}")
+async def v1_update_schedule(schedule_id: str, payload: SchedulePatch):
+    """Sửa ca. Buổi đang chạy không bị ảnh hưởng, cấu hình mới áp cho buổi sau."""
+    schedules = read_json_list(schedules_file)
+    index = next((i for i, s in enumerate(schedules) if s.get("id") == schedule_id), None)
+    if index is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy ca")
+
+    try:
+        merged = payload.apply_to(schedules[index])
+    except ValidationError as e:
+        raise HTTPException(status_code=422,
+                            detail=e.errors(include_url=False, include_context=False,
+                                            include_input=False))
+    merged["id"] = schedule_id
+    schedules[index] = merged
+    write_json_list(schedules_file, schedules)
+    return merged
+
+
+@app.delete("/api/v1/schedules/{schedule_id}", status_code=204)
+async def v1_delete_schedule(schedule_id: str):
+    schedules = read_json_list(schedules_file)
+    remaining = [s for s in schedules if s.get("id") != schedule_id]
+    if len(remaining) == len(schedules):
+        raise HTTPException(status_code=404, detail="Không tìm thấy ca")
+    write_json_list(schedules_file, remaining)
+    return Response(status_code=204)
+
+
+@app.get("/api/v1/sessions/{session_id}/checks")
+async def v1_session_checks(session_id: str):
+    """Các mốc điểm danh và ảnh bằng chứng do camera AI chụp."""
+    log = _find_log(session_id)
+    if log is None:
+        log = next((l for l in read_json_list(data_path / "attendance_logs.json")
+                    if l.get("session_id") == session_id), None)
+    if log is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy buổi huấn luyện")
+
+    checks = log.get("checks", {})
+    return [
+        {**checks[phase], "evidence_url": checks[phase].get("evidence")}
+        for phase in ("start", "end", "manual") if phase in checks
+    ]
+
+
+# ----------------- API v1: hệ thống -----------------
+
+@app.get("/api/v1/system/time")
+async def v1_system_time():
+    """Giờ máy chủ. Giao diện nên đồng bộ theo đây vì mọi mốc điểm danh lấy từ nó."""
+    return {"server_time": clock.iso(), "timezone": clock.TZ_NAME}
+
+
+@app.get("/api/v1/system/health")
+async def v1_system_health():
+    cameras = _load_cameras()
+    running = sum(1 for c in cameras if _camera_status(c) == "online")
+    return {
+        "status": "ok",
+        "cameras_running": running,
+        "cameras_total": len(cameras),
+        "models_loaded": ["yolo-person", "insightface-buffalo_l"],
+        "registered_personnel": len(face_engine.registered_faces),
+        "pending_events": events.pending_count(),
+    }

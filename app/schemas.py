@@ -7,7 +7,7 @@ Chỉ khai những gì backend thực sự nhận. Ràng buộc ở đây phải
 
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.safety import RULE_ATTENDANCE, RULE_CROSSING, RULE_RESTRICTED
 
@@ -122,3 +122,128 @@ class AckInput(BaseModel):
 
     acked_by: str = Field(min_length=1, max_length=120)
     note: Optional[str] = Field(default=None, max_length=1000)
+
+
+# ---------------------------------------------------------------- camera & ca
+
+# Lõi AI chỉ đọc vài trường (giờ giấc, cửa sổ điểm danh, đơn vị, sĩ số). Những
+# trường còn lại — giáo viên, thao trường, tên bài học, loại huấn luyện — giao
+# diện cần hiển thị nên vẫn phải lưu và trả lại nguyên vẹn. Vì vậy phần AI phụ
+# thuộc thì kiểm chặt, phần còn lại cho đi xuyên qua: đội giao diện thêm trường
+# mới không phải chờ sửa backend.
+
+SOURCE_TYPES = {"rtsp", "file", "webcam"}
+TRAINING_TYPES = {"dao_tao", "chien_dau"}
+HHMM = r"^([01]\d|2[0-3]):([0-5]\d)$"
+
+
+class CameraInput(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    name: str = Field(min_length=1, max_length=120)
+    source_type: str
+    source_uri: str = Field(min_length=1, max_length=2000)
+    code: Optional[str] = Field(default=None, max_length=60)
+    area_name: Optional[str] = Field(default=None, max_length=120)
+    enabled: bool = True
+    target_fps: int = Field(default=5, ge=1, le=25)
+
+    @field_validator("source_type")
+    @classmethod
+    def _check_source(cls, v: str) -> str:
+        if v not in SOURCE_TYPES:
+            raise ValueError(f"source_type phải là một trong {sorted(SOURCE_TYPES)}")
+        return v
+
+    @model_validator(mode="after")
+    def _check_uri(self):
+        if self.source_type == "rtsp" and "://" not in self.source_uri:
+            raise ValueError("nguồn rtsp phải là URL đầy đủ, ví dụ rtsp://10.0.0.21:554/stream1")
+        return self
+
+
+class CameraPatch(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    source_type: Optional[str] = None
+    source_uri: Optional[str] = Field(default=None, min_length=1, max_length=2000)
+    code: Optional[str] = Field(default=None, max_length=60)
+    area_name: Optional[str] = Field(default=None, max_length=120)
+    enabled: Optional[bool] = None
+    target_fps: Optional[int] = Field(default=None, ge=1, le=25)
+
+    def apply_to(self, existing: dict) -> dict:
+        merged = {**existing, **self.model_dump(exclude_unset=True, exclude_none=True)}
+        merged.pop("id", None)
+        merged.pop("status", None)
+        return CameraInput.model_validate(merged).model_dump()
+
+
+class ScheduleInput(BaseModel):
+    """Ca theo thời khoá biểu.
+
+    Trường ngoài danh sách này vẫn được lưu và trả lại — giao diện dùng để hiển
+    thị tên bài học, giáo viên, thao trường mà lõi AI không cần biết.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str = Field(min_length=1, max_length=200)
+    start_time: str = Field(pattern=HHMM, examples=["07:00"])
+    end_time: str = Field(pattern=HHMM, examples=["11:30"])
+    unit: Optional[str] = Field(default=None, max_length=120)
+    shift: Optional[str] = Field(default=None, max_length=60)
+    training_type: Optional[str] = None
+    check_window_mins: int = Field(default=5, ge=1, le=60)
+    late_tolerance_mins: int = Field(default=5, ge=0, le=240)
+    early_leave_tolerance_mins: int = Field(default=5, ge=0, le=240)
+    required_count: Optional[int] = Field(default=None, ge=0, le=100000)
+    camera_id: Optional[str] = Field(default=None, max_length=60)
+    enabled: bool = True
+
+    @field_validator("training_type")
+    @classmethod
+    def _check_training_type(cls, v):
+        if v is not None and v not in TRAINING_TYPES:
+            raise ValueError(f"training_type phải là một trong {sorted(TRAINING_TYPES)}")
+        return v
+
+    @model_validator(mode="after")
+    def _check_window(self):
+        if self.start_time == self.end_time:
+            raise ValueError("giờ bắt đầu và giờ kết thúc không được trùng nhau")
+
+        # Ca qua đêm được phép (22:00 -> 06:00), nhưng ca trong ngày phải đủ dài
+        # cho hai cửa sổ điểm danh, nếu không mốc cuối giờ sẽ đè lên mốc đầu giờ.
+        start_h, start_m = (int(x) for x in self.start_time.split(":"))
+        end_h, end_m = (int(x) for x in self.end_time.split(":"))
+        length = (end_h * 60 + end_m) - (start_h * 60 + start_m)
+        if length > 0 and length < self.check_window_mins * 2:
+            raise ValueError(
+                f"ca dài {length} phút không đủ cho hai cửa sổ điểm danh "
+                f"{self.check_window_mins} phút; rút ngắn check_window_mins hoặc kéo dài ca"
+            )
+        return self
+
+
+class SchedulePatch(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    start_time: Optional[str] = Field(default=None, pattern=HHMM)
+    end_time: Optional[str] = Field(default=None, pattern=HHMM)
+    unit: Optional[str] = Field(default=None, max_length=120)
+    shift: Optional[str] = Field(default=None, max_length=60)
+    training_type: Optional[str] = None
+    check_window_mins: Optional[int] = Field(default=None, ge=1, le=60)
+    late_tolerance_mins: Optional[int] = Field(default=None, ge=0, le=240)
+    early_leave_tolerance_mins: Optional[int] = Field(default=None, ge=0, le=240)
+    required_count: Optional[int] = Field(default=None, ge=0, le=100000)
+    camera_id: Optional[str] = Field(default=None, max_length=60)
+    enabled: Optional[bool] = None
+
+    def apply_to(self, existing: dict) -> dict:
+        merged = {**existing, **self.model_dump(exclude_unset=True, exclude_none=True)}
+        merged.pop("id", None)
+        return ScheduleInput.model_validate(merged).model_dump()

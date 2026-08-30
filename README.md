@@ -31,9 +31,14 @@ giao diện. Xem `docs/api/README.md` để biết endpoint nào đã chạy đ�
 ## Kiểm thử
 
 ```bash
-python tests/test_ai.py     # logic vi phạm giờ giấc, xâm nhập, kho sự kiện
-python tests/test_api.py    # endpoint v1 + đối chiếu sự kiện với hợp đồng
+python tests/test_ai.py           # vi phạm giờ giấc, xâm nhập, kho sự kiện
+python tests/test_api.py          # sự kiện, kết quả điểm danh, kênh SSE
+python tests/test_zones_stream.py # vùng giám sát, luồng MJPEG
+python tests/test_config_api.py   # camera, thời khoá biểu, đối chiếu hợp đồng
 ```
+
+Lưu ý: test ghi đè `data/cameras.json`, `data/schedules.json` và
+`data/zone_rules.json`. Sao lưu trước nếu đang có cấu hình thật trên máy.
 
 ## Requirements
 
