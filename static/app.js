@@ -11,7 +11,6 @@ let capturedSnapshotBase64 = null;
 let registeredPersonnel = [];
 let isAiOverlayEnabled = true;
 let isSirenMuted = false;
-let currentStreamType = 'optical';
 let pendingEventsCount = 2;
 
 // DOM Elements
@@ -23,7 +22,7 @@ const topbarAlertStat = document.getElementById('topbar-alert-stat');
 const pendingEventsBadge = document.getElementById('pending-events-badge');
 
 // Surveillance DOM Elements
-const videoCanvas = document.getElementById('video-canvas');
+const videoStreamImg = document.getElementById('video-stream');
 const loadingOverlay = document.getElementById('loading-overlay');
 const overlayStatusText = document.getElementById('overlay-status-text');
 const overlayStartBtn = document.getElementById('overlay-start-btn');
@@ -119,21 +118,45 @@ setInterval(fetchServerClock, 5 * 60 * 1000);
 // ----------------- NAVIGATION TABS -----------------
 let scheduleRefreshTimer = null;
 
+// Phân hệ I và II dùng chung khung nhìn, chỉ khác training_type
+const SHARED_VIEW = {
+    'dt-attendance': 'attendance-summary',
+    'cd-attendance': 'attendance-summary',
+    'dt-safety': 'safety',
+    'cd-safety': 'safety'
+};
+
 function switchNavTab(tabName) {
     document.querySelectorAll('.sidebar-nav .nav-item').forEach(item => item.classList.remove('active'));
     const activeNav = document.getElementById(`nav-${tabName}`);
     if (activeNav) activeNav.classList.add('active');
 
     document.querySelectorAll('.page-view').forEach(view => view.classList.remove('active'));
-    const targetView = document.getElementById(`view-${tabName}`);
+    const targetView = document.getElementById(`view-${SHARED_VIEW[tabName] || tabName}`);
     if (targetView) targetView.classList.add('active');
 
+    // Rời màn nào thì ngắt luồng hình của màn đó, không để chạy ngầm
+    ['ad-stream', 'sf-stream'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el && !el.closest('.page-view').classList.contains('active')) detachStream(el);
+    });
+    const mainImg = document.getElementById('video-stream');
+    if (mainImg && tabName !== 'monitoring') detachStream(mainImg);
+
     const titles = {
+        'dt-schedule': 'Đào tạo / Lịch & Tiến độ',
+        'dt-attendance': 'Đào tạo / Giám sát quân số',
+        'dt-safety': 'Đào tạo / An toàn bắn đạn thật',
+        'cd-attendance': 'Chiến đấu / Giám sát quân số',
+        'cd-safety': 'Chiến đấu / An toàn bắn đạn thật',
+        'session-detail': 'Chi tiết lịch huấn luyện',
+        'attendance-detail': 'Chi tiết giám sát quân số',
         'monitoring': 'Giám sát trực tiếp',
-        'zones': 'Quản lý Vùng & Luật (F-06)',
-        'registration': 'Đăng ký Khuôn mặt',
-        'schedule': 'Cấu hình Thời khóa biểu',
-        'logs': 'Nhật ký & Điểm danh'
+        'zones': 'Vùng giám sát',
+        'cameras': 'Thiết bị camera',
+        'registration': 'Đăng ký khuôn mặt',
+        'schedule': 'Cấu hình giám sát',
+        'logs': 'Nhật ký điểm danh'
     };
     if (currentPageTitle) currentPageTitle.textContent = titles[tabName] || 'Hệ thống Horus AI';
 
@@ -164,6 +187,34 @@ function switchNavTab(tabName) {
 
     if (tabName === 'logs') {
         loadAttendanceLogs();
+    }
+
+    if (safetyPollTimer) { clearInterval(safetyPollTimer); safetyPollTimer = null; }
+    currentSafetyType = null;
+
+    switch (tabName) {
+        case 'dt-schedule':
+            loadTrainingSchedule();
+            break;
+        case 'dt-attendance':
+        case 'cd-attendance':
+            currentTrainingType = tabName === 'dt-attendance' ? 'dao_tao' : 'chien_dau';
+            loadAttendanceSummary();
+            break;
+        case 'dt-safety':
+        case 'cd-safety':
+            currentSafetyType = tabName === 'dt-safety' ? 'dao_tao' : 'chien_dau';
+            loadSafetyDashboard();
+            // Màn hoạt động thời gian thực, giữ nguyên trang và tự làm mới
+            safetyPollTimer = setInterval(loadSafetyDashboard, 15000);
+            break;
+        case 'cameras':
+            loadCameras();
+            break;
+        case 'monitoring':
+            loadCameras();
+            startStream();
+            break;
     }
 }
 window.switchNavTab = switchNavTab;
@@ -253,6 +304,7 @@ function renderClipFrame(idx) {
         clipPlayerCanvas.width = img.width;
         clipPlayerCanvas.height = img.height;
         const ctx = clipPlayerCanvas.getContext('2d');
+        if (!ctx) return;
         ctx.drawImage(img, 0, 0);
     };
     img.src = 'data:image/jpeg;base64,' + frameB64;
@@ -305,21 +357,6 @@ function toggleAiOverlay() {
 }
 window.toggleAiOverlay = toggleAiOverlay;
 
-function switchStreamType(type) {
-    currentStreamType = type;
-    const btnOptical = document.getElementById('btn-optical-stream');
-    const btnThermal = document.getElementById('btn-thermal-stream');
-
-    if (type === 'optical') {
-        btnOptical.classList.add('active');
-        btnThermal.classList.remove('active');
-    } else {
-        btnOptical.classList.remove('active');
-        btnThermal.classList.add('active');
-    }
-}
-window.switchStreamType = switchStreamType;
-
 async function lockBaselineManual() {
     const targetCount = currentCount > 0 ? currentCount : 45;
     try {
@@ -329,14 +366,6 @@ async function lockBaselineManual() {
             baselineCount = data.baseline;
             if (topbarAttendanceStat) topbarAttendanceStat.textContent = `Quân số: ${currentCount || baselineCount}/${baselineCount}`;
 
-            // Add SYSTEM Event Card to Event Feed
-            addEventFeedCard({
-                category: 'SYSTEM',
-                time: new Date().toLocaleTimeString(),
-                desc: `Baseline điểm danh đã được khoá thủ công: ${data.baseline} quân nhân.`,
-                location: 'CAM-01 SÂN TẬP TRUNG',
-                isProcessed: true
-            });
             alert(`✓ Đã chốt sĩ số chuẩn: ${data.baseline} quân nhân`);
         }
     } catch (e) {
@@ -353,13 +382,7 @@ async function startAttendanceNow() {
             alert(data.message || 'Không mở được phiên điểm danh');
             return;
         }
-        addEventFeedCard({
-            category: 'SYSTEM',
-            time: new Date().toLocaleTimeString(),
-            desc: data.message,
-            location: 'CAM-01 SÂN TẬP TRUNG',
-            isProcessed: true
-        });
+        alert('✓ ' + (data.message || 'Đã mở phiên điểm danh'));
     } catch (e) {
         alert('Lỗi mở phiên điểm danh: ' + e.message);
     }
@@ -367,97 +390,10 @@ async function startAttendanceNow() {
 window.startAttendanceNow = startAttendanceNow;
 
 function takeQuickSnapshot() {
-    if (!videoCanvas) return;
-    const link = document.createElement('a');
-    link.download = `snapshot_CAM-01_${Date.now()}.jpg`;
-    link.href = videoCanvas.toDataURL('image/jpeg');
-    link.click();
+    // Tải ảnh gốc từ máy chủ, không chụp lại từ thẻ ảnh đang hiển thị
+    window.open(`/api/v1/cameras/${activeCameraId}/snapshot?overlay=1&download=1`, '_blank');
 }
 window.takeQuickSnapshot = takeQuickSnapshot;
-
-function confirmEventResolution(eventId) {
-    const card = document.getElementById(eventId);
-    if (!card) return;
-
-    const actionContainer = card.querySelector('.event-card-actions');
-    if (actionContainer) {
-        actionContainer.innerHTML = `
-            <button class="btn-event-clip" onclick="viewEventClip('clip')">▶️ Xem clip 10s</button>
-            <button class="btn-event-processed" disabled>✓ Đã xử lý</button>
-        `;
-    }
-
-    pendingEventsCount = Math.max(0, pendingEventsCount - 1);
-    if (pendingEventsBadge) {
-        pendingEventsBadge.textContent = `${pendingEventsCount} chờ xử lý`;
-    }
-}
-window.confirmEventResolution = confirmEventResolution;
-
-function addEventFeedCard(eventData) {
-    if (!eventsListContainer) return;
-
-    const cardId = `event-${Date.now()}`;
-    const card = document.createElement('div');
-    const catLower = (eventData.category || 'SYSTEM').toLowerCase();
-    card.className = `event-card event-${catLower}`;
-    card.id = cardId;
-
-    const catClass = `cat-${catLower}`;
-    const actionBtn = eventData.isProcessed
-        ? `<button class="btn-event-processed" disabled>✓ Đã xử lý</button>`
-        : `<button class="btn-event-confirm" onclick="confirmEventResolution('${cardId}')">Xác nhận xử lý</button>`;
-
-    card.innerHTML = `
-        <div class="event-card-header">
-            <span class="event-category ${catClass}">${eventData.category}</span>
-            <span class="event-time">${eventData.time || new Date().toLocaleTimeString()}</span>
-        </div>
-        <p class="event-desc">${eventData.desc || eventData.message}</p>
-        <div class="event-location">${eventData.location || 'CAM-01 SÂN TẬP TRUNG'}</div>
-        <div class="event-card-actions">
-            <button class="btn-event-clip" onclick="viewEventClip('${cardId}')">▶️ Xem clip 10s</button>
-            ${actionBtn}
-        </div>
-    `;
-
-    eventsListContainer.insertBefore(card, eventsListContainer.firstChild);
-
-    if (!eventData.isProcessed) {
-        pendingEventsCount++;
-        if (pendingEventsBadge) pendingEventsBadge.textContent = `${pendingEventsCount} chờ xử lý`;
-    }
-}
-
-
-// ----------------- VIDEO STREAM & WEBSOCKET -----------------
-function switchMode(mode) {
-    currentInputMode = mode;
-    const modeVideoBtn = document.getElementById('mode-video-btn');
-    const modeRtspBtn = document.getElementById('mode-rtsp-btn');
-    const videoSourcePanel = document.getElementById('video-source-panel');
-    const rtspSourcePanel = document.getElementById('rtsp-source-panel');
-
-    if (mode === 'video') {
-        videoSourcePanel.style.display = 'block';
-        rtspSourcePanel.style.display = 'none';
-        modeVideoBtn.classList.add('active');
-        modeRtspBtn.classList.remove('active');
-    } else {
-        videoSourcePanel.style.display = 'none';
-        rtspSourcePanel.style.display = 'block';
-        modeVideoBtn.classList.remove('active');
-        modeRtspBtn.classList.add('active');
-    }
-}
-window.switchMode = switchMode;
-
-function setRtspDemo(event) {
-    event.preventDefault();
-    const rtspUrlInput = document.getElementById('rtsp-url');
-    if (rtspUrlInput) rtspUrlInput.value = 'rtsp://wowzaec2demo.streamlock.net/vod/mp4:BigBuckBunny_115k.mov';
-}
-window.setRtspDemo = setRtspDemo;
 
 async function quickStartStream() {
     if (overlayStatusText) overlayStatusText.textContent = 'Đang khởi chạy luồng giám sát CAM-01...';
@@ -465,7 +401,7 @@ async function quickStartStream() {
         const res = await fetch('/api/start?mode=video', { method: 'POST' });
         const data = await res.json();
         if (data.status === 'success') {
-            connectWebSocket();
+            startStream();
         } else {
             // If no video uploaded, show source modal
             toggleSourceModal();
@@ -489,7 +425,7 @@ async function startRtspStream() {
         const data = await res.json();
         if (data.status === 'success') {
             toggleSourceModal();
-            connectWebSocket();
+            startStream();
         } else {
             alert('Lỗi: ' + data.message);
         }
@@ -543,7 +479,7 @@ if (uploadForm) {
                     uploadStatus.textContent = `✓ Đã tải xong video`;
                     uploadStatus.style.color = '#0a8f4c';
                     toggleSourceModal();
-                    connectWebSocket();
+                    startStream();
                 }
             }
         } catch (err) {
@@ -554,145 +490,203 @@ if (uploadForm) {
     });
 }
 
-function connectWebSocket() {
-    if (ws && ws.readyState === WebSocket.OPEN) return;
+// ----------------- LUỒNG HÌNH (MJPEG) VÀ SỰ KIỆN (SSE) -----------------
+// Hình và dữ liệu đi hai đường khác nhau: thẻ <img> nhận MJPEG, EventSource nhận
+// sự kiện. Không còn nhồi khung hình base64 qua WebSocket rồi vẽ lên canvas.
 
+let eventSource = null;
+let statusTimer = null;
+let lastEventId = null;
+let activeCameraId = 'cam_01';
+
+function streamUrl(cameraId, overlay) {
+    return `/api/v1/cameras/${cameraId}/stream.mjpg?overlay=${overlay ? 1 : 0}&_=${Date.now()}`;
+}
+
+function attachStream(imgEl, cameraId, overlay) {
+    if (!imgEl) return;
+    imgEl.src = streamUrl(cameraId, overlay);
+    imgEl.onerror = () => { imgEl.removeAttribute('src'); };
+}
+
+function detachStream(imgEl) {
+    // Bỏ src để trình duyệt đóng kết nối; không làm thì luồng vẫn chạy ngầm
+    if (imgEl) imgEl.removeAttribute('src');
+}
+
+function startStream() {
+    const img = document.getElementById('video-stream');
+    if (!img) return;
+    if (loadingOverlay) loadingOverlay.style.display = 'none';
     isProcessing = true;
-    if (loadingOverlay) loadingOverlay.style.display = 'flex';
-    if (overlayStatusText) overlayStatusText.textContent = 'Đang kết nối luồng giám sát CAM-01...';
-    if (overlayStartBtn) overlayStartBtn.style.display = 'none';
-
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws`;
-    ws = new WebSocket(wsUrl);
-
-    ws.onopen = () => {
-        if (loadingOverlay) loadingOverlay.style.display = 'none';
-    };
-
-    ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        handleWebSocketMessage(data);
-    };
-
-    ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        if (loadingOverlay) loadingOverlay.style.display = 'flex';
-        if (overlayStatusText) overlayStatusText.textContent = 'Mất kết nối tới CAM-01';
-        if (overlayStartBtn) overlayStartBtn.style.display = 'block';
+    attachStream(img, activeCameraId, isAiOverlayEnabled);
+    img.onerror = () => {
         isProcessing = false;
-    };
-
-    ws.onclose = () => {
         if (loadingOverlay) loadingOverlay.style.display = 'flex';
-        if (overlayStatusText) overlayStatusText.textContent = 'Luồng giám sát CAM-01 đã tạm dừng';
+        if (overlayStatusText) overlayStatusText.textContent = 'Luồng giám sát chưa chạy';
         if (overlayStartBtn) overlayStartBtn.style.display = 'block';
-        isProcessing = false;
     };
 }
+window.startStream = startStream;
 
-function handleWebSocketMessage(data) {
-    switch (data.type) {
-        case 'frame_update':
-            updateFrame(data);
-            break;
-        case 'alert':
-            handleStreamAlert(data);
-            break;
-        case 'attendance_complete':
-            handleAttendanceComplete(data.log);
-            break;
-        case 'system_event':
-            addEventFeedCard({
-                category: 'SYSTEM',
-                time: new Date(data.timestamp).toLocaleTimeString(),
-                desc: data.message,
-                location: 'CAM-01 SÂN TẬP TRUNG',
-                isProcessed: true
-            });
-            break;
-        case 'processing_complete':
-            if (loadingOverlay) loadingOverlay.style.display = 'flex';
-            if (overlayStatusText) overlayStatusText.textContent = 'Đã hoàn tất ca giám sát';
-            if (overlayStartBtn) overlayStartBtn.style.display = 'block';
-            if (ws) { ws.close(); ws = null; }
-            break;
-    }
+function switchMonitorCamera(cameraId) {
+    activeCameraId = cameraId || activeCameraId;
+    startStream();
 }
+window.switchMonitorCamera = switchMonitorCamera;
 
-function updateFrame(data) {
-    if (!videoCanvas) return;
+// ---------- kênh sự kiện ----------
 
-    const img = new Image();
-    img.onload = () => {
-        videoCanvas.width = img.width;
-        videoCanvas.height = img.height;
-        const ctx = videoCanvas.getContext('2d');
-        ctx.drawImage(img, 0, 0);
-    };
-    img.src = 'data:image/jpeg;base64,' + data.frame;
+function connectEventStream() {
+    if (eventSource) return;
+    const since = lastEventId ? `?since_event_id=${encodeURIComponent(lastEventId)}` : '';
+    eventSource = new EventSource(`/api/v1/events/stream${since}`);
 
-    if (data.server_time) syncServerClock(data.server_time);
-
-    currentCount = data.count;
-    if (typeof data.baseline === 'number') baselineCount = data.baseline;
-
-    if (topbarAttendanceStat) {
-        const unknown = data.unidentified_count || 0;
-        const suffix = unknown > 0 ? ` (${unknown} chưa định danh)` : '';
-        topbarAttendanceStat.textContent = `Quân số: ${currentCount}/${baselineCount}${suffix}`;
-    }
-
-    const attBtn = document.getElementById('attendance-btn-text');
-    if (attBtn) {
-        const att = data.attendance;
-        if (att && att.active) {
-            const remain = att.remaining_seconds || 0;
-            const mm = String(Math.floor(remain / 60)).padStart(2, '0');
-            const ss = String(remain % 60).padStart(2, '0');
-            const phaseLabel = att.phase_label || 'Điểm danh';
-            const total = att.required || att.roster_size || 0;
-            attBtn.textContent = `${phaseLabel} ${mm}:${ss} · ${att.present}/${total}`;
-        } else {
-            attBtn.textContent = 'Điểm danh ngay';
+    eventSource.onmessage = (msg) => {
+        try {
+            handleAiEvent(JSON.parse(msg.data));
+        } catch (e) {
+            console.error('Bản tin sự kiện không hợp lệ:', e);
         }
-    }
+    };
+
+    eventSource.onerror = () => {
+        // EventSource tự nối lại; đóng hẳn để lần sau mở kèm since_event_id,
+        // nhờ vậy không mất sự kiện phát sinh trong lúc đứt kết nối.
+        eventSource.close();
+        eventSource = null;
+        setTimeout(connectEventStream, 3000);
+    };
 }
 
-function handleAttendanceComplete(log) {
-    if (!log) return;
+const EVENT_LABELS = {
+    ABSENT: 'THIẾU QUÂN SỐ',
+    LATE: 'ĐI CHẬM',
+    EARLY_LEAVE: 'VỀ SỚM',
+    INTRUSION: 'VI PHẠM AN TOÀN',
+    SYSTEM: 'HỆ THỐNG'
+};
+const EVENT_CLASS = {
+    ABSENT: 'event-absent',
+    LATE: 'event-absent',
+    EARLY_LEAVE: 'event-absent',
+    INTRUSION: 'event-safety',
+    SYSTEM: 'event-system'
+};
 
-    const desc = log.absent > 0
-        ? `Chốt điểm danh ${log.unit}: có mặt ${log.present}/${log.required}, vắng ${log.absent} — ${log.absent_personnel.join(', ')}`
-        : `Chốt điểm danh ${log.unit}: đủ quân số ${log.present}/${log.required}`;
+function handleAiEvent(event) {
+    lastEventId = event.id;
 
-    addEventFeedCard({
-        category: log.absent > 0 ? 'ABSENT' : 'SYSTEM',
-        time: `${log.date} ${log.time}`,
-        desc: desc,
-        location: 'CAM-01 SÂN TẬP TRUNG',
-        isProcessed: log.absent === 0
-    });
+    if (event.type !== 'SYSTEM') incrementAlertCount();
+    renderEventCard(eventsListContainer, event, true);
 
-    loadAttendanceLogs();
-}
-
-function handleStreamAlert(data) {
-    incrementAlertCount();
-
-    if (!isSirenMuted && alertBanner && alertMessage) {
-        alertMessage.textContent = `⚠️ ${data.message} lúc ${new Date(data.timestamp).toLocaleTimeString()}`;
+    if (event.type === 'INTRUSION') {
+        onIntrusionEvent(event);
+    } else if (event.severity !== 'info' && alertBanner && alertMessage && !isSirenMuted) {
+        alertMessage.textContent = `⚠️ ${event.message}`;
         alertBanner.style.display = 'flex';
         setTimeout(() => { alertBanner.style.display = 'none'; }, 10000);
     }
 
-    addEventFeedCard({
-        category: data.category || 'ABSENT',
-        time: new Date(data.timestamp).toLocaleTimeString(),
-        desc: data.message,
-        location: 'CAM-01 SÂN TẬP TRUNG',
-        isProcessed: false
-    });
+    if (event.type === 'SYSTEM' && event.detail && event.detail.code === 'check_closed') {
+        loadAttendanceLogs();
+    }
+}
+
+function renderEventCard(container, event, prepend) {
+    if (!container) return;
+    const hint = container.querySelector('.empty-hint');
+    if (hint) hint.remove();
+
+    const card = document.createElement('div');
+    card.className = `event-card ${EVENT_CLASS[event.type] || 'event-system'}`;
+    card.id = `evt-${event.id}`;
+
+    const time = new Date(event.occurred_at).toLocaleTimeString('vi-VN');
+    const place = [event.camera_name, event.area_name].filter(Boolean).join(' · ');
+    const clipBtn = event.clip_url
+        ? `<button class="btn-event-clip" onclick="viewEventClip('${event.clip_id}')">▶️ Xem clip 10s</button>` : '';
+    const ackBtn = event.acked
+        ? `<button class="btn-event-processed" disabled>✓ ${event.acked_by || 'Đã xử lý'}</button>`
+        : `<button class="btn-event-confirm" onclick="ackEvent('${event.id}')">Xác nhận xử lý</button>`;
+
+    card.innerHTML = `
+        <div class="event-card-header">
+            <span class="event-category cat-${(event.type || '').toLowerCase()}">${EVENT_LABELS[event.type] || event.type}</span>
+            <span class="event-time">${time}</span>
+        </div>
+        <p class="event-desc">${event.message}</p>
+        ${event.snapshot_url ? `<img class="event-thumb" src="${event.snapshot_url}" onclick="openEvidence('${event.snapshot_url}','${event.message.replace(/'/g, '')}')" alt="Ảnh sự kiện">` : ''}
+        <div class="event-location">${place}</div>
+        <div class="event-card-actions">${clipBtn}${ackBtn}</div>
+    `;
+
+    if (prepend) container.prepend(card); else container.appendChild(card);
+    while (container.children.length > 60) container.lastElementChild.remove();
+}
+
+async function ackEvent(eventId) {
+    const who = document.querySelector('.user-name');
+    try {
+        const res = await fetch(`/api/v1/events/${eventId}/ack`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ acked_by: (who && who.textContent) || 'Chỉ huy trực ban' })
+        });
+        if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+        const updated = await res.json();
+
+        document.querySelectorAll(`#evt-${eventId} .event-card-actions`).forEach(el => {
+            el.innerHTML = `<button class="btn-event-processed" disabled>✓ ${updated.acked_by}</button>`;
+        });
+        pendingEventsCount = Math.max(0, pendingEventsCount - 1);
+        if (pendingEventsBadge) pendingEventsBadge.textContent = `${pendingEventsCount} chờ xử lý`;
+        if (currentSafetyType) loadSafetyDashboard();
+    } catch (e) {
+        alert('Không xác nhận được: ' + e.message);
+    }
+}
+window.ackEvent = ackEvent;
+
+// ---------- chỉ số trực tiếp ----------
+// MJPEG chỉ mang hình, các con số lấy bằng cách hỏi máy chủ định kỳ.
+
+async function pollLiveStatus() {
+    try {
+        const [statusRes, attRes] = await Promise.all([
+            fetch('/api/status'), fetch('/api/attendance/status')
+        ]);
+        const status = await statusRes.json();
+        const att = (await attRes.json()).attendance || {};
+
+        isProcessing = !!status.is_processing;
+        currentCount = status.current_count || 0;
+        if (typeof status.baseline_count === 'number') baselineCount = status.baseline_count;
+
+        if (topbarAttendanceStat) {
+            topbarAttendanceStat.textContent = `Quân số: ${currentCount}/${baselineCount || 0}`;
+        }
+
+        const attBtn = document.getElementById('attendance-btn-text');
+        if (attBtn) {
+            if (att.active) {
+                const remain = att.remaining_seconds || 0;
+                const mm = String(Math.floor(remain / 60)).padStart(2, '0');
+                const ss = String(remain % 60).padStart(2, '0');
+                attBtn.textContent = `${att.phase_label || 'Điểm danh'} ${mm}:${ss} · ${att.present}/${att.required || 0}`;
+            } else {
+                attBtn.textContent = 'Điểm danh ngay';
+            }
+        }
+    } catch (e) {
+        /* máy chủ bận thì bỏ qua nhịp này */
+    }
+}
+
+function startLivePolling() {
+    if (statusTimer) return;
+    pollLiveStatus();
+    statusTimer = setInterval(pollLiveStatus, 2000);
 }
 
 
@@ -971,17 +965,6 @@ function closeAlert() {
 }
 window.closeAlert = closeAlert;
 
-function triggerMockAlarm() {
-    handleStreamAlert({
-        timestamp: new Date().toISOString(),
-        message: "Phát hiện đối tượng xâm nhập vượt vạch an toàn khu vực SÂN TẬP TRUNG!",
-        category: "SAFETY",
-        count: currentCount,
-        baseline: baselineCount,
-        image_path: ""
-    });
-}
-window.triggerMockAlarm = triggerMockAlarm;
 
 
 // ----------------- ROI & ZONE RULES (F-06) -----------------
@@ -1078,21 +1061,24 @@ function onRoiCanvasClick(e) {
 let roiBackgroundImage = null;
 
 async function captureFrameForRoi() {
+    // overlay=0: lấy khung hình GỐC. Dùng ảnh đã vẽ lớp phủ thì sẽ vẽ vùng mới
+    // đè lên chính hình các vùng cũ, càng chỉnh càng lệch.
     try {
-        const res = await fetch('/api/snapshot');
-        const data = await res.json();
-        if (data.status === 'success' && data.frame) {
-            const img = new Image();
-            img.onload = () => {
-                roiBackgroundImage = img;
-                redrawRoiCanvas();
-            };
-            img.src = 'data:image/jpeg;base64,' + data.frame;
-        } else {
+        const res = await fetch(`/api/v1/cameras/${activeCameraId}/snapshot?overlay=0&_=${Date.now()}`);
+        if (!res.ok) {
             alert('Chưa có luồng video đang chạy. Hãy bắt đầu giám sát hoặc tải video trước.');
+            return;
         }
+        const blob = await res.blob();
+        const img = new Image();
+        img.onload = () => {
+            URL.revokeObjectURL(img.src);
+            roiBackgroundImage = img;
+            redrawRoiCanvas();
+        };
+        img.src = URL.createObjectURL(blob);
     } catch (e) {
-        console.error('Error capturing ROI background:', e);
+        console.error('Không lấy được ảnh nền để vẽ vùng:', e);
     }
 }
 window.captureFrameForRoi = captureFrameForRoi;
@@ -1100,6 +1086,7 @@ window.captureFrameForRoi = captureFrameForRoi;
 function redrawRoiCanvas() {
     if (!roiCanvas) return;
     const ctx = roiCanvas.getContext('2d');
+    if (!ctx) return;
     const w = roiCanvas.width;
     const h = roiCanvas.height;
 
@@ -1253,14 +1240,6 @@ async function saveZoneRules(e) {
                 zoneSaveStatus.textContent = `✓ ${data.message}`;
                 zoneSaveStatus.style.color = '#0a8f4c';
             }
-            // Add system event
-            addEventFeedCard({
-                category: 'SYSTEM',
-                time: new Date().toLocaleTimeString(),
-                desc: `Đã cập nhật Vùng & Luật F-06: "${config.zone_name}" (${config.rule_type}).`,
-                location: 'CAM-01 SÂN TẬP TRUNG',
-                isProcessed: true
-            });
         } else {
             throw new Error(data.detail || 'Lỗi khi lưu cấu hình');
         }
@@ -1597,15 +1576,629 @@ window.exportAttendanceLogsCsv = exportAttendanceLogsCsv;
 
 
 // ----------------- INITIALIZATION -----------------
-document.addEventListener('DOMContentLoaded', () => {
-    loadRegisteredFaces();
 
-    fetch('/api/status')
-        .then(r => r.json())
-        .then(data => {
-            if (data.is_processing) {
-                connectWebSocket();
-            }
-        })
-        .catch(e => console.error(e));
+
+
+// =====================================================================
+// PHÂN HỆ I & II — LỊCH, TIẾN ĐỘ, GIÁM SÁT QUÂN SỐ
+// Hai phân hệ dùng chung một bộ hàm, chỉ khác training_type. Doc yêu cầu
+// hai nhóm màn riêng nhưng nghiệp vụ giống hệt nhau nên không nhân đôi code.
+// =====================================================================
+
+let currentTrainingType = 'dao_tao';
+let currentSafetyType = null;
+let attendanceDetailData = { items: [], session: null };
+let safetyPollTimer = null;
+let isSafetySirenMuted = false;
+
+const TRAINING_LABEL = { dao_tao: 'Đào tạo', chien_dau: 'Chiến đấu' };
+const STATE_CLASS = {
+    upcoming: 'status-neutral', check_start: 'status-active',
+    running: 'status-ok', check_end: 'status-active', finished: 'status-neutral'
+};
+
+function esc(text) {
+    return String(text == null ? '' : text).replace(/[&<>"]/g, c =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+}
+
+function fmtTime(iso) {
+    if (!iso) return '—';
+    return new Date(iso).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+}
+
+async function getJson(url) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error((await res.text()).slice(0, 200));
+    return res.json();
+}
+
+// ----------------- MÀN 1.1: LỊCH & TIẾN ĐỘ -----------------
+
+async function loadTrainingSchedule() {
+    const tbody = document.getElementById('dt-schedule-tbody');
+    if (!tbody) return;
+
+    const dateEl = document.getElementById('dt-schedule-date');
+    const q = (document.getElementById('dt-schedule-search') || {}).value || '';
+    const date = (dateEl && dateEl.value) ? `&date=${dateEl.value}` : '';
+
+    try {
+        const data = await getJson(`/api/v1/summary/training?training_type=dao_tao${date}`);
+        const rows = data.sessions.filter(s =>
+            !q || `${s.name} ${s.unit}`.toLowerCase().includes(q.toLowerCase()));
+
+        document.getElementById('dt-metric-running').textContent = data.stats.running_sessions;
+        const pct = Math.round(data.stats.overall_progress_pct || 0);
+        document.getElementById('dt-metric-progress').textContent = `${pct}%`;
+        document.getElementById('dt-metric-progress-bar').style.width = `${pct}%`;
+        document.getElementById('dt-metric-headcount').textContent =
+            `${data.stats.present_total}/${data.stats.required_total}`;
+        document.getElementById('dt-metric-violations').textContent = data.stats.violation_total;
+
+        tbody.innerHTML = rows.length ? '' :
+            `<tr><td colspan="8" class="empty-row">Không có lịch huấn luyện nào cho ngày này</td></tr>`;
+
+        rows.forEach(s => {
+            const prog = Math.round(s.progress_pct || 0);
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><span class="status-tag status-active">${esc(s.shift || '—')}</span></td>
+                <td><strong>${esc(s.name)}</strong></td>
+                <td>${esc(s.unit || '—')}</td>
+                <td class="font-mono">${esc(s.planned || '')}</td>
+                <td><span class="status-tag ${STATE_CLASS[s.state] || 'status-neutral'}">${esc(s.state_label)}</span></td>
+                <td>
+                    <div class="progress-track"><div class="progress-fill" style="width:${prog}%"></div></div>
+                    <span class="progress-text">${prog}% · ${s.actual_minutes || 0}/${s.scheduled_minutes || 0} phút</span>
+                </td>
+                <td><strong>${s.present_start || 0}</strong> / ${s.required || 0}</td>
+                <td><button class="btn-event-clip" onclick="openSessionDetail('${s.id}','${s.schedule_id}')">Xem chi tiết</button></td>`;
+            tbody.appendChild(tr);
+        });
+    } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="8" class="empty-row">Lỗi tải lịch: ${esc(e.message)}</td></tr>`;
+    }
+}
+window.loadTrainingSchedule = loadTrainingSchedule;
+
+// ----------------- MÀN 1.2: CHI TIẾT LỊCH -----------------
+
+let sessionDetailId = null;
+let sessionDetailFrom = 'dt-schedule';
+
+async function openSessionDetail(sessionId, scheduleId) {
+    sessionDetailId = sessionId || scheduleId;
+    sessionDetailFrom = 'dt-schedule';
+    switchNavTab('session-detail');
+
+    try {
+        const sch = await getJson(`/api/v1/schedules/${scheduleId}`);
+        document.getElementById('sd-title').textContent = (sch.name || '').toUpperCase();
+        document.getElementById('sd-subtitle').textContent =
+            `${sch.shift || ''} · ${sch.start_time}–${sch.end_time} · ${sch.unit || 'Toàn đơn vị'}`;
+
+        // Trường giáo viên / thao trường / bài học do hệ thống quản lý gửi kèm khi
+        // tạo ca; service AI giữ nguyên và trả lại, ở đây chỉ hiển thị.
+        const info = [
+            ['Tên bài học', sch.lesson_name],
+            ['Giáo viên phụ trách', sch.instructor],
+            ['Thao trường', sch.field],
+            ['Đội học / Lớp', sch.class_name],
+            ['Khung giờ', `${sch.start_time} – ${sch.end_time}`],
+            ['Cửa sổ điểm danh', `${sch.check_window_mins} phút mỗi mốc`],
+            ['Dung sai đi chậm', `${sch.late_tolerance_mins} phút`],
+            ['Sĩ số chuẩn', sch.required_count || '—'],
+            ['Trạng thái', sch.state_label]
+        ];
+        document.getElementById('sd-info').innerHTML = info.map(([k, v]) =>
+            `<div class="detail-item"><span class="detail-key">${k}</span>
+             <span class="detail-val">${esc(v || '—')}</span></div>`).join('');
+
+        const btn = document.getElementById('sd-btn-watch');
+        btn.style.display = ['check_start', 'running', 'check_end'].includes(sch.state) ? '' : 'none';
+    } catch (e) {
+        document.getElementById('sd-subtitle').textContent = `Lỗi tải ca: ${e.message}`;
+    }
+
+    await loadSessionChecks(sessionDetailId);
+}
+window.openSessionDetail = openSessionDetail;
+
+async function loadSessionChecks(sessionId) {
+    const tbody = document.getElementById('sd-checks-tbody');
+    if (!tbody) return;
+    try {
+        const checks = await getJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/checks`);
+        tbody.innerHTML = checks.length ? '' :
+            `<tr><td colspan="5" class="empty-row">Buổi chưa diễn ra — cả hai mốc đều bằng 0</td></tr>`;
+        checks.forEach(c => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><strong>${esc(c.phase_label)}</strong></td>
+                <td class="font-mono">${esc(c.time || '—')}</td>
+                <td class="text-green"><strong>${c.present}</strong></td>
+                <td class="${c.absent > 0 ? 'text-amber' : ''}">${c.absent}</td>
+                <td>${c.evidence_url
+                    ? `<img class="evidence-thumb" src="${c.evidence_url}" onclick="openEvidence('${c.evidence_url}','Điểm danh ${esc(c.phase_label)}')" alt="Ảnh bằng chứng">`
+                    : '<span class="muted">Chưa có</span>'}</td>`;
+            tbody.appendChild(tr);
+        });
+    } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="5" class="empty-row">Chưa có biên bản điểm danh</td></tr>`;
+    }
+}
+
+function backFromSessionDetail() { switchNavTab(sessionDetailFrom); }
+window.backFromSessionDetail = backFromSessionDetail;
+
+function watchSessionAttendance() { openAttendanceDetail(sessionDetailId, sessionDetailId); }
+window.watchSessionAttendance = watchSessionAttendance;
+
+// ----------------- MÀN 2.1 / 4.1: TỔNG HỢP QUÂN SỐ -----------------
+
+async function loadAttendanceSummary() {
+    const tbody = document.getElementById('as-tbody');
+    if (!tbody) return;
+
+    const label = TRAINING_LABEL[currentTrainingType];
+    document.getElementById('as-title').textContent =
+        `TỔNG HỢP GIÁM SÁT QUÂN SỐ HUẤN LUYỆN ${label.toUpperCase()}`;
+    document.getElementById('as-subtitle').textContent =
+        `CÁC LỚP ĐANG DIỄN RA TRÊN THAO TRƯỜNG · CẬP NHẬT THEO THỜI GIAN THỰC`;
+
+    try {
+        const data = await getJson(`/api/v1/summary/training?training_type=${currentTrainingType}`);
+        document.getElementById('as-metric-running').textContent = data.stats.running_sessions;
+        document.getElementById('as-metric-present').textContent = data.stats.present_total;
+        document.getElementById('as-metric-required').textContent = data.stats.required_total;
+        document.getElementById('as-metric-violations').textContent = data.stats.violation_total;
+
+        tbody.innerHTML = data.sessions.length ? '' :
+            `<tr><td colspan="8" class="empty-row">Chưa có lớp nào thuộc phân hệ ${label.toLowerCase()}</td></tr>`;
+
+        data.sessions.forEach(s => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><strong>${esc(s.name)}</strong><br><span class="muted">${esc(s.shift || '')}</span></td>
+                <td>${esc(s.unit || '—')}</td>
+                <td><span class="status-tag ${STATE_CLASS[s.state] || 'status-neutral'}">${esc(s.state_label)}</span></td>
+                <td class="text-green"><strong>${s.present_start || 0}</strong></td>
+                <td>${s.present_end || 0}</td>
+                <td>${s.required || 0}</td>
+                <td class="${s.violation_count > 0 ? 'text-amber' : ''}"><strong>${s.violation_count || 0}</strong></td>
+                <td><button class="btn-event-clip" onclick="openAttendanceDetail('${s.id}','${s.schedule_id}')">Xem chi tiết điểm danh</button></td>`;
+            tbody.appendChild(tr);
+        });
+    } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="8" class="empty-row">Lỗi tải dữ liệu: ${esc(e.message)}</td></tr>`;
+    }
+}
+window.loadAttendanceSummary = loadAttendanceSummary;
+
+// ----------------- MÀN 2.2 / 4.2: CHI TIẾT + HÌNH ẢNH AI -----------------
+
+const VIOLATION_TAG = {
+    late: '<span class="viol-tag viol-late">Đi chậm</span>',
+    early_leave: '<span class="viol-tag viol-early">Chưa hết giờ đã về</span>',
+    absent: '<span class="viol-tag viol-absent">Không tham gia</span>'
+};
+
+async function openAttendanceDetail(sessionId, scheduleId) {
+    attendanceDetailData.session = sessionId || scheduleId;
+    switchNavTab('attendance-detail');
+
+    document.getElementById('ad-title').textContent =
+        `CHI TIẾT GIÁM SÁT QUÂN SỐ · ${TRAINING_LABEL[currentTrainingType].toUpperCase()}`;
+
+    attachStream(document.getElementById('ad-stream'), activeCameraId, true);
+    document.getElementById('ad-camera-caption').textContent =
+        'Camera AI đang giám sát lớp học — khung xanh là quân nhân đã định danh';
+
+    try {
+        const data = await getJson(
+            `/api/v1/sessions/${encodeURIComponent(attendanceDetailData.session)}/attendance`);
+        attendanceDetailData.items = data.items || [];
+
+        const sm = data.summary || {};
+        document.getElementById('ad-metrics').innerHTML = `
+            <div class="metric-card"><span class="metric-label">Sĩ số yêu cầu</span><span class="metric-val">${sm.required || 0}</span></div>
+            <div class="metric-card"><span class="metric-label">Đủ giờ</span><span class="metric-val text-green">${sm.present || 0}</span></div>
+            <div class="metric-card"><span class="metric-label">Đi chậm</span><span class="metric-val text-amber">${sm.late || 0}</span></div>
+            <div class="metric-card"><span class="metric-label">Về sớm</span><span class="metric-val text-amber">${sm.early_leave || 0}</span></div>
+            <div class="metric-card"><span class="metric-label">Không tham gia</span><span class="metric-val text-red">${sm.absent || 0}</span></div>`;
+        document.getElementById('ad-subtitle').textContent =
+            `Quân số danh sách ${sm.required || 0} · ${attendanceDetailData.items.length} bản ghi`;
+    } catch (e) {
+        attendanceDetailData.items = [];
+        document.getElementById('ad-subtitle').textContent = `Chưa có dữ liệu điểm danh: ${e.message}`;
+        document.getElementById('ad-metrics').innerHTML = '';
+    }
+
+    await loadAttendanceEvidence(attendanceDetailData.session);
+    renderAttendanceDetail();
+}
+window.openAttendanceDetail = openAttendanceDetail;
+
+async function loadAttendanceEvidence(sessionId) {
+    const box = document.getElementById('ad-evidence');
+    if (!box) return;
+    try {
+        const checks = await getJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/checks`);
+        const withPhoto = checks.filter(c => c.evidence_url);
+        box.innerHTML = withPhoto.length ? '' :
+            '<p class="empty-hint">Chưa có ảnh điểm danh nào được chụp</p>';
+        withPhoto.forEach(c => {
+            box.insertAdjacentHTML('beforeend', `
+                <figure class="evidence-figure">
+                    <img src="${c.evidence_url}" alt="Ảnh điểm danh ${esc(c.phase_label)}"
+                         onclick="openEvidence('${c.evidence_url}','Điểm danh ${esc(c.phase_label)} — ${c.present} có mặt')">
+                    <figcaption>
+                        <strong>${esc(c.phase_label)}</strong> · ${esc(c.time || '')} · ${c.present} có mặt
+                        <a class="btn-download" href="${c.evidence_url}" download>⬇ Tải ảnh</a>
+                    </figcaption>
+                </figure>`);
+        });
+    } catch (e) {
+        box.innerHTML = '<p class="empty-hint">Chưa có ảnh điểm danh nào được chụp</p>';
+    }
+}
+
+function renderAttendanceDetail() {
+    const tbody = document.getElementById('ad-tbody');
+    if (!tbody) return;
+
+    const filter = (document.getElementById('ad-filter') || {}).value || 'all';
+    const q = ((document.getElementById('ad-search') || {}).value || '').toLowerCase();
+
+    let items = attendanceDetailData.items;
+    if (filter !== 'all') items = items.filter(i => (i.violations || []).includes(filter));
+    if (q) items = items.filter(i => {
+        const p = i.person || {};
+        return `${p.rank || ''} ${p.name || ''} ${p.military_id || ''}`.toLowerCase().includes(q);
+    });
+
+    tbody.innerHTML = items.length ? '' :
+        `<tr><td colspan="6" class="empty-row">Không có quân nhân nào khớp bộ lọc</td></tr>`;
+
+    items.forEach(i => {
+        const p = i.person || {};
+        const tags = (i.violations || []).map(v => VIOLATION_TAG[v] || v).join(' ')
+            || '<span class="viol-tag viol-ok">Đủ giờ</span>';
+        const extra = [];
+        if (i.late_minutes) extra.push(`chậm ${i.late_minutes}′`);
+        if (i.early_leave_minutes) extra.push(`về sớm ${i.early_leave_minutes}′`);
+
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td><strong>${esc(p.rank || '')} ${esc(p.name || '')}</strong></td>
+            <td class="font-mono">${esc(p.military_id || '—')}</td>
+            <td>${esc(p.unit || '—')}</td>
+            <td class="font-mono">${fmtTime(i.first_seen)}</td>
+            <td class="font-mono">${fmtTime(i.last_seen)}</td>
+            <td>${tags}${extra.length ? `<br><span class="muted">${extra.join(' · ')}</span>` : ''}</td>`;
+        tbody.appendChild(tr);
+    });
+}
+window.renderAttendanceDetail = renderAttendanceDetail;
+
+function backFromAttendanceDetail() {
+    detachStream(document.getElementById('ad-stream'));
+    switchNavTab(currentTrainingType === 'dao_tao' ? 'dt-attendance' : 'cd-attendance');
+}
+window.backFromAttendanceDetail = backFromAttendanceDetail;
+
+
+// =====================================================================
+// MÀN 3.1 / 5.1 — DASHBOARD GIÁM SÁT AN TOÀN BẮN ĐẠN THẬT
+// =====================================================================
+
+let activeIntrusion = null;
+
+async function loadSafetyDashboard() {
+    const label = TRAINING_LABEL[currentSafetyType] || '';
+    document.getElementById('sf-title').textContent =
+        `GIÁM SÁT AN TOÀN BẮN ĐẠN THẬT · HUẤN LUYỆN ${label.toUpperCase()}`;
+    document.getElementById('sf-subtitle').textContent =
+        'PHÁT HIỆN ĐỐI TƯỢNG ĐI VÀO VÙNG CẤM CỦA TRƯỜNG BẮN THEO THỜI GIAN THỰC';
+
+    try {
+        const data = await getJson('/api/v1/summary/safety');
+        const stateEl = document.getElementById('sf-state');
+        stateEl.className = `safety-state-pill state-${data.state}`;
+        document.getElementById('sf-state-label').textContent = data.state_label;
+
+        const badge = document.getElementById('sf-pending-badge');
+        if (badge) badge.textContent = `${data.pending_count} chờ xử lý`;
+        pendingEventsCount = data.pending_count;
+
+        const cam = (data.cameras || [])[0];
+        if (cam) {
+            attachStream(document.getElementById('sf-stream'), cam.id, true);
+            document.getElementById('sf-camera-caption').textContent =
+                `${cam.name} · ${cam.area_name || ''} · ${cam.status === 'online' ? 'đang giám sát' : 'chưa chạy'}`;
+        }
+
+        const list = document.getElementById('sf-events-list');
+        list.innerHTML = '';
+        if (!data.events.length) {
+            list.innerHTML = '<p class="empty-hint">Chưa ghi nhận vi phạm an toàn nào</p>';
+        } else {
+            data.events.forEach(ev => renderEventCard(list, ev, false));
+        }
+
+        renderViolationGallery(data.events);
+        setActiveIntrusion(data.active_intrusion);
+    } catch (e) {
+        console.error('Lỗi tải dashboard an toàn:', e);
+    }
+}
+window.loadSafetyDashboard = loadSafetyDashboard;
+
+function renderViolationGallery(events) {
+    const gallery = document.getElementById('sf-gallery');
+    if (!gallery) return;
+    const withPhoto = events.filter(e => e.snapshot_url);
+    gallery.innerHTML = withPhoto.length ? '' :
+        '<p class="empty-hint">Thư viện trống — chưa có ảnh vi phạm nào được ghi nhận</p>';
+
+    withPhoto.forEach(ev => {
+        const when = new Date(ev.occurred_at).toLocaleString('vi-VN');
+        gallery.insertAdjacentHTML('beforeend', `
+            <figure class="violation-card ${ev.acked ? 'acked' : ''}">
+                <img src="${ev.snapshot_url}" alt="Ảnh vi phạm an toàn"
+                     onclick="openEvidence('${ev.snapshot_url}','${esc(ev.message)}')">
+                <figcaption>
+                    <span class="viol-time">${when}</span>
+                    <span class="viol-place">${esc(ev.camera_name || '')} · ${esc((ev.detail || {}).zone_name || '')}</span>
+                    <span class="viol-msg">${esc(ev.message)}</span>
+                    <span class="viol-actions">
+                        <a class="btn-download" href="${ev.snapshot_url}" download>⬇ Tải ảnh</a>
+                        ${ev.acked
+                            ? `<span class="viol-acked">✓ ${esc(ev.acked_by || 'đã xử lý')}</span>`
+                            : `<button class="btn-event-confirm" onclick="ackEvent('${ev.id}')">Xác nhận xử lý</button>`}
+                    </span>
+                </figcaption>
+            </figure>`);
+    });
+}
+
+function setActiveIntrusion(event) {
+    activeIntrusion = event || null;
+    const banner = document.getElementById('safety-alert-banner');
+    if (!banner) return;
+
+    if (!activeIntrusion) {
+        banner.style.display = 'none';
+        banner.classList.remove('blinking');
+        return;
+    }
+
+    document.getElementById('safety-banner-title').textContent =
+        (activeIntrusion.detail || {}).zone_name
+            ? `PHÁT HIỆN ĐỐI TƯỢNG TRONG ${String((activeIntrusion.detail || {}).zone_name).toUpperCase()}`
+            : 'PHÁT HIỆN ĐỐI TƯỢNG TRONG VÙNG CẤM';
+    document.getElementById('safety-banner-desc').textContent =
+        `${activeIntrusion.message} — ${new Date(activeIntrusion.occurred_at).toLocaleTimeString('vi-VN')}`;
+    banner.style.display = 'flex';
+    if (!isSafetySirenMuted) banner.classList.add('blinking');
+}
+
+function onIntrusionEvent(event) {
+    // Đang mở màn an toàn thì dựng lại banner và thư viện ngay
+    if (currentSafetyType) {
+        setActiveIntrusion(event);
+        loadSafetyDashboard();
+    }
+}
+
+async function ackActiveIntrusion() {
+    if (!activeIntrusion) return;
+    await ackEvent(activeIntrusion.id);
+    setActiveIntrusion(null);
+}
+window.ackActiveIntrusion = ackActiveIntrusion;
+
+function toggleSafetySiren() {
+    isSafetySirenMuted = !isSafetySirenMuted;
+    const btn = document.getElementById('btn-safety-siren');
+    const banner = document.getElementById('safety-alert-banner');
+    if (btn) btn.textContent = isSafetySirenMuted ? '🔔 Bật cảnh báo âm thanh' : '🔕 Tắt cảnh báo âm thanh';
+    if (banner) banner.classList.toggle('blinking', !isSafetySirenMuted && !!activeIntrusion);
+}
+window.toggleSafetySiren = toggleSafetySiren;
+
+
+// =====================================================================
+// MÀN 8.1 — QUẢN LÝ THIẾT BỊ CAMERA
+// =====================================================================
+
+const CAMERA_STATUS_TAG = {
+    online: '<span class="status-tag status-ok">Trực tuyến</span>',
+    offline: '<span class="status-tag status-neutral">Ngoại tuyến</span>',
+    disabled: '<span class="status-tag status-neutral">Đã tắt</span>',
+    error: '<span class="status-tag status-danger">Lỗi</span>'
+};
+
+async function loadCameras() {
+    const tbody = document.getElementById('cameras-tbody');
+    if (!tbody) return;
+    try {
+        const data = await getJson('/api/v1/cameras');
+        tbody.innerHTML = data.items.length ? '' :
+            '<tr><td colspan="7" class="empty-row">Chưa có thiết bị camera nào</td></tr>';
+
+        data.items.forEach(c => {
+            const running = c.status === 'online';
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td class="font-mono">${esc(c.code || c.id)}</td>
+                <td><strong>${esc(c.name)}</strong></td>
+                <td class="font-mono source-uri">${esc(c.source_type)} · ${esc(c.source_uri || '(chưa khai)')}</td>
+                <td>${esc(c.area_name || '—')}</td>
+                <td>${c.target_fps || 5}</td>
+                <td>${CAMERA_STATUS_TAG[c.status] || c.status}</td>
+                <td class="row-actions">
+                    <button class="btn-event-clip" onclick="toggleCameraRun('${c.id}', ${running})">
+                        ${running ? '⏹ Dừng' : '▶ Chạy'}</button>
+                    <button class="btn-event-clip" onclick='openCameraModal(${JSON.stringify(c)})'>Sửa</button>
+                    <button class="btn-row-danger" onclick="deleteCamera('${c.id}','${esc(c.name)}')">Xoá</button>
+                </td>`;
+            tbody.appendChild(tr);
+        });
+
+        // Ô chọn camera ở màn giám sát trực tiếp
+        const select = document.getElementById('monitor-camera-select');
+        if (select) {
+            select.innerHTML = data.items
+                .map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+            select.value = activeCameraId;
+        }
+    } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="7" class="empty-row">Lỗi tải danh sách: ${esc(e.message)}</td></tr>`;
+    }
+}
+window.loadCameras = loadCameras;
+
+function openCameraModal(camera) {
+    const modal = document.getElementById('camera-modal');
+    if (!modal) return;
+    const cam = camera || {};
+    document.getElementById('camera-modal-title').textContent =
+        cam.id ? 'Cập nhật thiết bị camera' : 'Thêm thiết bị camera';
+    document.getElementById('cam-id').value = cam.id || '';
+    document.getElementById('cam-name').value = cam.name || '';
+    document.getElementById('cam-code').value = cam.code || '';
+    document.getElementById('cam-area').value = cam.area_name || '';
+    document.getElementById('cam-source-type').value = cam.source_type || 'rtsp';
+    document.getElementById('cam-source-uri').value = cam.source_uri || '';
+    document.getElementById('cam-fps').value = cam.target_fps || 5;
+    document.getElementById('cam-form-status').textContent = '';
+    modal.style.display = 'flex';
+}
+window.openCameraModal = openCameraModal;
+
+function closeCameraModal() {
+    const modal = document.getElementById('camera-modal');
+    if (modal) modal.style.display = 'none';
+}
+window.closeCameraModal = closeCameraModal;
+
+async function submitCameraForm(event) {
+    event.preventDefault();
+    const id = document.getElementById('cam-id').value;
+    const status = document.getElementById('cam-form-status');
+    const body = {
+        name: document.getElementById('cam-name').value.trim(),
+        code: document.getElementById('cam-code').value.trim() || null,
+        area_name: document.getElementById('cam-area').value.trim() || null,
+        source_type: document.getElementById('cam-source-type').value,
+        source_uri: document.getElementById('cam-source-uri').value.trim(),
+        target_fps: parseInt(document.getElementById('cam-fps').value, 10) || 5
+    };
+
+    try {
+        const res = await fetch(id ? `/api/v1/cameras/${id}` : '/api/v1/cameras', {
+            method: id ? 'PATCH' : 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        if (!res.ok) throw new Error(describeApiError(await res.json()));
+        closeCameraModal();
+        loadCameras();
+    } catch (e) {
+        status.textContent = `✗ ${e.message}`;
+        status.style.color = '#dc2626';
+    }
+}
+window.submitCameraForm = submitCameraForm;
+
+// Backend trả 422 kèm danh sách lỗi theo từng trường; dựng lại thành câu đọc được
+function describeApiError(payload) {
+    const detail = payload && payload.detail;
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) {
+        return detail.map(d => {
+            const field = (d.loc || []).filter(x => x !== 'body').join('.');
+            return field ? `${field}: ${d.msg}` : d.msg;
+        }).join('; ');
+    }
+    return 'Dữ liệu không hợp lệ';
+}
+
+async function toggleCameraRun(cameraId, isRunning) {
+    try {
+        const res = await fetch(`/api/v1/cameras/${cameraId}/${isRunning ? 'stop' : 'start'}`,
+                                { method: 'POST' });
+        if (!res.ok) throw new Error(describeApiError(await res.json()));
+        activeCameraId = cameraId;
+        setTimeout(loadCameras, 800);
+    } catch (e) {
+        alert(e.message);
+    }
+}
+window.toggleCameraRun = toggleCameraRun;
+
+async function deleteCamera(cameraId, name) {
+    if (!confirm(`Xoá camera "${name}"? Các vùng giám sát của nó cũng bị xoá theo.`)) return;
+    try {
+        const res = await fetch(`/api/v1/cameras/${cameraId}`, { method: 'DELETE' });
+        if (!res.ok && res.status !== 204) throw new Error(describeApiError(await res.json()));
+        loadCameras();
+    } catch (e) {
+        alert(e.message);
+    }
+}
+window.deleteCamera = deleteCamera;
+
+
+// ----------------- Hàm còn thiếu của modal nguồn camera -----------------
+
+function switchMode(mode) {
+    currentInputMode = mode;
+    const isVideo = mode === 'video';
+    document.getElementById('mode-video-btn').classList.toggle('active', isVideo);
+    document.getElementById('mode-rtsp-btn').classList.toggle('active', !isVideo);
+    document.getElementById('video-source-panel').style.display = isVideo ? '' : 'none';
+    document.getElementById('rtsp-source-panel').style.display = isVideo ? 'none' : '';
+}
+window.switchMode = switchMode;
+
+function setRtspDemo(event) {
+    event.preventDefault();
+    document.getElementById('rtsp-url').value =
+        'rtsp://wowzaec2demo.streamlock.net/vod/mp4:BigBuckBunny_115k.mp4';
+}
+window.setRtspDemo = setRtspDemo;
+
+
+// =====================================================================
+// KHỞI TẠO
+// Đặt cuối file để mọi biến trạng thái phía trên đã được khai báo xong.
+// =====================================================================
+
+document.addEventListener('DOMContentLoaded', async () => {
+    loadRegisteredFaces();
+    connectEventStream();
+    startLivePolling();
+
+    // Nạp sẵn các sự kiện gần đây để dòng sự kiện không trống khi mới mở trang
+    try {
+        const recent = await getJson('/api/v1/events?page_size=20');
+        recent.items.slice().reverse().forEach(ev => {
+            lastEventId = lastEventId || ev.id;
+            renderEventCard(eventsListContainer, ev, true);
+        });
+        pendingEventsCount = recent.items.filter(e => !e.acked).length;
+        if (pendingEventsBadge) pendingEventsBadge.textContent = `${pendingEventsCount} chờ xử lý`;
+    } catch (e) {
+        console.error('Không nạp được sự kiện gần đây:', e);
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const dateInput = document.getElementById('dt-schedule-date');
+    if (dateInput) dateInput.value = today;
+
+    // Vào thẳng màn giám sát quân số của phân hệ đào tạo
+    switchNavTab('dt-attendance');
 });

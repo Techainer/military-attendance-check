@@ -1691,3 +1691,253 @@ input:checked + .slider:before {
     font-weight: 600;
     margin-top: 2px;
 }
+
+/* ===================================================================
+   MÀN HÌNH THEO PHÂN HỆ — tiến độ, chi tiết, an toàn, camera
+   =================================================================== */
+
+.nav-glyph {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    font-size: 15px;
+    line-height: 1;
+}
+
+/* Luồng MJPEG thay cho canvas: giữ đúng khung như cũ */
+#video-stream,
+#ad-stream,
+#sf-stream {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+    background: #0b1220;
+}
+
+.empty-hint,
+.empty-row {
+    text-align: center;
+    color: #94a3b8;
+    padding: 22px 12px;
+    font-size: 13px;
+}
+
+.muted { color: #94a3b8; font-size: 12px; }
+.text-red { color: #dc2626; }
+
+/* --- thanh tiến độ --- */
+.progress-track {
+    width: 100%;
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.25);
+    overflow: hidden;
+    margin-top: 6px;
+}
+.progress-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #0a8f4c, #22c55e);
+    transition: width 0.4s ease;
+}
+.progress-text { font-size: 11px; color: #64748b; }
+
+/* --- lưới thông tin chi tiết ca --- */
+.detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px;
+    margin-top: 16px;
+}
+.detail-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    background: rgba(148, 163, 184, 0.08);
+    border: 1px solid rgba(148, 163, 184, 0.18);
+}
+.detail-key { font-size: 11px; text-transform: uppercase; color: #64748b; letter-spacing: 0.04em; }
+.detail-val { font-size: 14px; font-weight: 600; color: #0f172a; }
+
+/* --- màn chi tiết điểm danh: camera + ảnh bằng chứng --- */
+.attendance-detail-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.6fr) minmax(260px, 1fr);
+    gap: 16px;
+    margin: 16px 0;
+}
+.camera-caption { font-size: 12px; color: #64748b; margin-top: 8px; }
+
+.evidence-column { display: flex; flex-direction: column; gap: 10px; }
+.evidence-title {
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    color: #475569;
+    text-transform: uppercase;
+    margin: 0;
+}
+.evidence-thumbs { display: flex; flex-direction: column; gap: 12px; }
+.evidence-figure { margin: 0; border-radius: 10px; overflow: hidden; border: 1px solid rgba(148,163,184,0.25); }
+.evidence-figure img { width: 100%; display: block; cursor: zoom-in; }
+.evidence-figure figcaption {
+    padding: 8px 10px;
+    font-size: 12px;
+    background: rgba(148, 163, 184, 0.1);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+}
+.evidence-thumb { width: 84px; border-radius: 6px; cursor: zoom-in; display: block; }
+.event-thumb { width: 100%; border-radius: 6px; margin: 8px 0; cursor: zoom-in; }
+
+.btn-download {
+    margin-left: auto;
+    font-size: 11px;
+    font-weight: 600;
+    color: #0a8f4c;
+    text-decoration: none;
+    white-space: nowrap;
+}
+.btn-download:hover { text-decoration: underline; }
+
+/* --- nhãn vi phạm giờ giấc --- */
+.viol-tag {
+    display: inline-block;
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    margin-right: 4px;
+}
+.viol-ok      { background: rgba(34, 197, 94, 0.15);  color: #15803d; }
+.viol-late    { background: rgba(245, 158, 11, 0.18); color: #b45309; }
+.viol-early   { background: rgba(56, 130, 246, 0.16); color: #1d4ed8; }
+.viol-absent  { background: rgba(220, 38, 38, 0.14);  color: #b91c1c; }
+
+/* --- dashboard an toàn --- */
+.safety-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.7fr) minmax(280px, 1fr);
+    gap: 16px;
+    margin-top: 16px;
+}
+
+.safety-state-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    border-radius: 999px;
+    font-weight: 700;
+    font-size: 13px;
+    background: rgba(34, 197, 94, 0.14);
+    color: #15803d;
+}
+.safety-state-pill .pill-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: currentColor;
+}
+.safety-state-pill.state-warning { background: rgba(245, 158, 11, 0.16); color: #b45309; }
+.safety-state-pill.state-danger  { background: rgba(220, 38, 38, 0.16);  color: #b91c1c; }
+
+.safety-banner {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding: 16px 20px;
+    margin-bottom: 16px;
+    border-radius: 12px;
+    background: #b91c1c;
+    color: #fff;
+    box-shadow: 0 8px 24px rgba(185, 28, 28, 0.35);
+}
+.safety-banner.blinking { animation: safety-flash 1s steps(1, end) infinite; }
+@keyframes safety-flash {
+    0%, 49%   { background: #b91c1c; }
+    50%, 100% { background: #7f1d1d; }
+}
+.safety-banner-body { display: flex; align-items: center; gap: 14px; }
+.safety-banner-icon { font-size: 30px; line-height: 1; }
+.safety-banner-body strong { font-size: 15px; letter-spacing: 0.04em; }
+.safety-banner-body p { margin: 4px 0 0; font-size: 13px; opacity: 0.92; }
+.safety-banner-actions { display: flex; gap: 10px; }
+.btn-mute {
+    padding: 9px 16px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    background: transparent;
+    color: #fff;
+    font-weight: 600;
+    cursor: pointer;
+}
+.btn-mute:hover { background: rgba(255, 255, 255, 0.14); }
+
+@media (prefers-reduced-motion: reduce) {
+    .safety-banner.blinking { animation: none; }
+}
+
+/* --- thư viện ảnh vi phạm --- */
+.violation-gallery {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 14px;
+    margin-top: 12px;
+}
+.violation-card {
+    margin: 0;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid rgba(220, 38, 38, 0.35);
+    background: #fff;
+}
+.violation-card.acked { border-color: rgba(148, 163, 184, 0.35); opacity: 0.8; }
+.violation-card img { width: 100%; display: block; cursor: zoom-in; aspect-ratio: 16/9; object-fit: cover; }
+.violation-card figcaption {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 10px 12px;
+    font-size: 12px;
+}
+.viol-time  { font-weight: 700; color: #0f172a; }
+.viol-place { color: #64748b; font-size: 11px; }
+.viol-msg   { color: #334155; }
+.viol-actions { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+.viol-acked { font-size: 11px; font-weight: 600; color: #15803d; }
+
+/* --- bảng camera --- */
+.source-uri {
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    color: #475569;
+}
+.row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.btn-row-danger {
+    padding: 5px 11px;
+    border-radius: 6px;
+    border: 1px solid rgba(220, 38, 38, 0.4);
+    background: transparent;
+    color: #b91c1c;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.btn-row-danger:hover { background: rgba(220, 38, 38, 0.08); }
+.status-danger { background: rgba(220, 38, 38, 0.14); color: #b91c1c; }
+.form-hint { font-size: 11px; color: #64748b; margin: 6px 0 0; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+
+@media (max-width: 1180px) {
+    .attendance-detail-grid,
+    .safety-grid { grid-template-columns: 1fr; }
+}

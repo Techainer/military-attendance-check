@@ -27,51 +27,59 @@
                 <button class="sidebar-toggle" title="Thu gọn menu">‹</button>
             </div>
 
-            <div class="nav-section-title">TÁC CHIẾN (CHÍNH)</div>
+            <div class="nav-section-title">PHÂN HỆ I · HUẤN LUYỆN ĐÀO TẠO</div>
             <nav class="sidebar-nav">
-                <a href="#monitoring" class="nav-item active" id="nav-monitoring" onclick="switchNavTab('monitoring')">
-                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-                        <line x1="8" y1="21" x2="16" y2="21"></line>
-                        <line x1="12" y1="17" x2="12" y2="21"></line>
-                    </svg>
+                <a href="#dt-schedule" class="nav-item" id="nav-dt-schedule" onclick="switchNavTab('dt-schedule')">
+                    <span class="nav-icon nav-glyph">🗓</span>
+                    <span>Lịch &amp; Tiến độ</span>
+                </a>
+                <a href="#dt-attendance" class="nav-item active" id="nav-dt-attendance" onclick="switchNavTab('dt-attendance')">
+                    <span class="nav-icon nav-glyph">🎖</span>
+                    <span>Giám sát quân số</span>
+                </a>
+                <a href="#dt-safety" class="nav-item" id="nav-dt-safety" onclick="switchNavTab('dt-safety')">
+                    <span class="nav-icon nav-glyph">🎯</span>
+                    <span>An toàn bắn đạn thật</span>
+                </a>
+            </nav>
+
+            <div class="nav-section-title">PHÂN HỆ II · HUẤN LUYỆN CHIẾN ĐẤU</div>
+            <nav class="sidebar-nav">
+                <a href="#cd-attendance" class="nav-item" id="nav-cd-attendance" onclick="switchNavTab('cd-attendance')">
+                    <span class="nav-icon nav-glyph">🎖</span>
+                    <span>Giám sát quân số</span>
+                </a>
+                <a href="#cd-safety" class="nav-item" id="nav-cd-safety" onclick="switchNavTab('cd-safety')">
+                    <span class="nav-icon nav-glyph">🎯</span>
+                    <span>An toàn bắn đạn thật</span>
+                </a>
+            </nav>
+
+            <div class="nav-section-title">PHÂN HỆ III · QUẢN TRỊ HỆ THỐNG</div>
+            <nav class="sidebar-nav">
+                <a href="#monitoring" class="nav-item" id="nav-monitoring" onclick="switchNavTab('monitoring')">
+                    <span class="nav-icon nav-glyph">📹</span>
                     <span>Giám sát trực tiếp</span>
                 </a>
+                <a href="#schedule" class="nav-item" id="nav-schedule" onclick="switchNavTab('schedule')">
+                    <span class="nav-icon nav-glyph">⚙️</span>
+                    <span>Cấu hình giám sát</span>
+                </a>
                 <a href="#zones" class="nav-item" id="nav-zones" onclick="switchNavTab('zones')">
-                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
-                        <polyline points="2 17 12 22 22 17"></polyline>
-                        <polyline points="2 12 12 17 22 12"></polyline>
-                    </svg>
-                    <span>Quản lý Vùng & Luật (F-06)</span>
+                    <span class="nav-icon nav-glyph">⬡</span>
+                    <span>Vùng giám sát</span>
+                </a>
+                <a href="#cameras" class="nav-item" id="nav-cameras" onclick="switchNavTab('cameras')">
+                    <span class="nav-icon nav-glyph">🎥</span>
+                    <span>Thiết bị camera</span>
                 </a>
                 <a href="#registration" class="nav-item" id="nav-registration" onclick="switchNavTab('registration')">
-                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-                        <circle cx="8.5" cy="7" r="4"></circle>
-                        <line x1="20" y1="8" x2="20" y2="14"></line>
-                        <line x1="23" y1="11" x2="17" y2="11"></line>
-                    </svg>
-                    <span>Đăng ký Khuôn mặt</span>
-                </a>
-                <a href="#schedule" class="nav-item" id="nav-schedule" onclick="switchNavTab('schedule')">
-                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
-                        <line x1="16" y1="2" x2="16" y2="6"></line>
-                        <line x1="8" y1="2" x2="8" y2="6"></line>
-                        <line x1="3" y1="10" x2="21" y2="10"></line>
-                    </svg>
-                    <span>Cấu hình Thời khóa biểu</span>
+                    <span class="nav-icon nav-glyph">🪪</span>
+                    <span>Đăng ký khuôn mặt</span>
                 </a>
                 <a href="#logs" class="nav-item" id="nav-logs" onclick="switchNavTab('logs')">
-                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                        <polyline points="14 2 14 8 20 8"></polyline>
-                        <line x1="16" y1="13" x2="8" y2="13"></line>
-                        <line x1="16" y1="17" x2="8" y2="17"></line>
-                        <polyline points="10 9 9 9 8 9"></polyline>
-                    </svg>
-                    <span>Nhật ký & Điểm danh</span>
+                    <span class="nav-icon nav-glyph">📋</span>
+                    <span>Nhật ký điểm danh</span>
                 </a>
             </nav>
         </aside>
@@ -156,7 +164,7 @@
                             <!-- Surveillance Screen Viewport -->
                             <div class="surveillance-screen-card">
                                 <div class="video-container" id="main-video-container">
-                                    <canvas id="video-canvas"></canvas>
+                                    <img id="video-stream" alt="Luồng camera trực tiếp">
                                     <div id="loading-overlay" class="loading-overlay">
                                         <div class="overlay-msg-box">
                                             <div class="radar-spinner"></div>
@@ -185,12 +193,7 @@
                                 </div>
 
                                 <div class="toolbar-right-toggles">
-                                    <button class="stream-type-btn active" id="btn-optical-stream" onclick="switchStreamType('optical')">
-                                        Luồng quang học
-                                    </button>
-                                    <button class="stream-type-btn" id="btn-thermal-stream" onclick="switchStreamType('thermal')">
-                                        🌡️ Ảnh nhiệt IR
-                                    </button>
+                                    <select id="monitor-camera-select" class="filter-select" onchange="switchMonitorCamera(this.value)"></select>
                                 </div>
                             </div>
                         </div>
@@ -204,47 +207,7 @@
                                 </div>
 
                                 <div class="events-list" id="events-list-container">
-                                    <!-- Event 1: SYSTEM -->
-                                    <div class="event-card event-system" id="event-system-1">
-                                        <div class="event-card-header">
-                                            <span class="event-category cat-system">SYSTEM</span>
-                                            <span class="event-time">06:42:11</span>
-                                        </div>
-                                        <p class="event-desc">Baseline điểm danh ca sáng đã được khoá: 45 quân nhân.</p>
-                                        <div class="event-location">CAM-01 SÂN TẬP TRUNG</div>
-                                        <div class="event-card-actions">
-                                            <button class="btn-event-clip" onclick="viewEventClip('clip1')">▶️ Xem clip 10s</button>
-                                            <button class="btn-event-processed" disabled>✓ Đã xử lý</button>
-                                        </div>
-                                    </div>
-
-                                    <!-- Event 2: ABSENT -->
-                                    <div class="event-card event-absent" id="event-absent-1">
-                                        <div class="event-card-header">
-                                            <span class="event-category cat-absent">ABSENT</span>
-                                            <span class="event-time">06:58:03</span>
-                                        </div>
-                                        <p class="event-desc">Phát hiện thiếu 05 quân nhân so với baseline (45/50).</p>
-                                        <div class="event-location">CAM-01 SÂN TẬP TRUNG</div>
-                                        <div class="event-card-actions">
-                                            <button class="btn-event-clip" onclick="viewEventClip('clip2')">▶️ Xem clip 10s</button>
-                                            <button class="btn-event-confirm" onclick="confirmEventResolution('event-absent-1')">Xác nhận xử lý</button>
-                                        </div>
-                                    </div>
-
-                                    <!-- Event 3: SAFETY -->
-                                    <div class="event-card event-safety" id="event-safety-1">
-                                        <div class="event-card-header">
-                                            <span class="event-category cat-safety">SAFETY</span>
-                                            <span class="event-time">07:14:52</span>
-                                        </div>
-                                        <p class="event-desc">Người vượt vạch an toàn trong thời gian tập trung.</p>
-                                        <div class="event-location">CAM-01 SÂN TẬP TRUNG</div>
-                                        <div class="event-card-actions">
-                                            <button class="btn-event-clip" onclick="viewEventClip('clip3')">▶️ Xem clip 10s</button>
-                                            <button class="btn-event-confirm" onclick="confirmEventResolution('event-safety-1')">Xác nhận xử lý</button>
-                                        </div>
-                                    </div>
+                                    <p class="empty-hint">Chưa có sự kiện nào. Bắt đầu giám sát để nhận cảnh báo tự động.</p>
                                 </div>
                             </div>
                         </div>
@@ -536,6 +499,278 @@
                     </div>
                 </section>
 
+                <!-- MÀN 1.1 — TỔNG HỢP LỊCH & TIẾN ĐỘ HUẤN LUYỆN ĐÀO TẠO -->
+                <section id="view-dt-schedule" class="page-view">
+                    <div class="glass-card section-card">
+                        <div class="card-header flex-between">
+                            <div>
+                                <h2>TỔNG HỢP LỊCH VÀ TIẾN ĐỘ HUẤN LUYỆN ĐÀO TẠO</h2>
+                                <p class="card-subtitle">LỊCH HUẤN LUYỆN TOÀN ĐƠN VỊ VÀ TIẾN ĐỘ THỰC HIỆN THEO THỜI GIAN THỰC</p>
+                            </div>
+                            <div class="table-filters">
+                                <input type="date" id="dt-schedule-date" class="filter-select" onchange="loadTrainingSchedule()">
+                                <input type="text" id="dt-schedule-search" class="filter-select" placeholder="Lọc theo lớp / đơn vị" oninput="loadTrainingSchedule()">
+                            </div>
+                        </div>
+
+                        <div class="log-metrics-grid">
+                            <div class="metric-card">
+                                <span class="metric-label">Lớp đang huấn luyện</span>
+                                <span class="metric-val" id="dt-metric-running">0</span>
+                            </div>
+                            <div class="metric-card">
+                                <span class="metric-label">Tiến độ hoàn thành chung</span>
+                                <span class="metric-val text-green" id="dt-metric-progress">0%</span>
+                                <div class="progress-track"><div class="progress-fill" id="dt-metric-progress-bar"></div></div>
+                            </div>
+                            <div class="metric-card">
+                                <span class="metric-label">Quân số thực tế / yêu cầu</span>
+                                <span class="metric-val" id="dt-metric-headcount">0/0</span>
+                            </div>
+                            <div class="metric-card">
+                                <span class="metric-label">Vi phạm giờ giấc</span>
+                                <span class="metric-val text-amber" id="dt-metric-violations">0</span>
+                            </div>
+                        </div>
+
+                        <div class="table-responsive">
+                            <table class="personnel-table">
+                                <thead>
+                                    <tr>
+                                        <th>CA</th>
+                                        <th>NỘI DUNG HUẤN LUYỆN</th>
+                                        <th>ĐƠN VỊ</th>
+                                        <th>KHUNG GIỜ</th>
+                                        <th>TRẠNG THÁI</th>
+                                        <th>TIẾN ĐỘ THỰC TẾ</th>
+                                        <th>QUÂN SỐ</th>
+                                        <th>THAO TÁC</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="dt-schedule-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- MÀN 1.2 — CHI TIẾT LỊCH HUẤN LUYỆN -->
+                <section id="view-session-detail" class="page-view">
+                    <div class="glass-card section-card">
+                        <div class="card-header flex-between">
+                            <div>
+                                <button class="btn-toolbar-neutral" onclick="backFromSessionDetail()">← Quay lại</button>
+                                <h2 id="sd-title" style="margin-top: 12px;">CHI TIẾT LỊCH HUẤN LUYỆN</h2>
+                                <p class="card-subtitle" id="sd-subtitle"></p>
+                            </div>
+                            <button class="btn-primary-green" id="sd-btn-watch" onclick="watchSessionAttendance()">
+                                🎖️ Giám sát quân số
+                            </button>
+                        </div>
+
+                        <div class="detail-grid" id="sd-info"></div>
+
+                        <div class="card-header" style="margin-top: 20px;">
+                            <h2>ĐỐI CHIẾU QUÂN SỐ ĐẦU BUỔI · CUỐI BUỔI</h2>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="personnel-table">
+                                <thead>
+                                    <tr><th>MỐC ĐIỂM DANH</th><th>GIỜ CHỐT</th><th>CÓ MẶT</th><th>VẮNG</th><th>BẰNG CHỨNG</th></tr>
+                                </thead>
+                                <tbody id="sd-checks-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- MÀN 2.1 / 4.1 — TỔNG HỢP GIÁM SÁT QUÂN SỐ -->
+                <section id="view-attendance-summary" class="page-view">
+                    <div class="glass-card section-card">
+                        <div class="card-header flex-between">
+                            <div>
+                                <h2 id="as-title">TỔNG HỢP GIÁM SÁT QUÂN SỐ</h2>
+                                <p class="card-subtitle" id="as-subtitle"></p>
+                            </div>
+                            <button class="btn-toolbar-neutral" onclick="loadAttendanceSummary()">↻ Làm mới</button>
+                        </div>
+
+                        <div class="log-metrics-grid">
+                            <div class="metric-card">
+                                <span class="metric-label">Tổng số lớp đang học</span>
+                                <span class="metric-val" id="as-metric-running">0</span>
+                            </div>
+                            <div class="metric-card">
+                                <span class="metric-label">Quân số thực tế có mặt</span>
+                                <span class="metric-val text-green" id="as-metric-present">0</span>
+                            </div>
+                            <div class="metric-card">
+                                <span class="metric-label">Sĩ số yêu cầu</span>
+                                <span class="metric-val" id="as-metric-required">0</span>
+                            </div>
+                            <div class="metric-card">
+                                <span class="metric-label">Ca vi phạm giờ giấc</span>
+                                <span class="metric-val text-amber" id="as-metric-violations">0</span>
+                            </div>
+                        </div>
+
+                        <div class="table-responsive">
+                            <table class="personnel-table">
+                                <thead>
+                                    <tr>
+                                        <th>LỚP / NỘI DUNG</th>
+                                        <th>ĐƠN VỊ</th>
+                                        <th>TRẠNG THÁI</th>
+                                        <th>ĐẦU BUỔI</th>
+                                        <th>CUỐI BUỔI</th>
+                                        <th>SĨ SỐ CHUẨN</th>
+                                        <th>VI PHẠM</th>
+                                        <th>THAO TÁC</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="as-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- MÀN 2.2 / 4.2 — CHI TIẾT GIÁM SÁT QUÂN SỐ VÀ HÌNH ẢNH AI -->
+                <section id="view-attendance-detail" class="page-view">
+                    <div class="glass-card section-card">
+                        <div class="card-header flex-between">
+                            <div>
+                                <button class="btn-toolbar-neutral" onclick="backFromAttendanceDetail()">← Quay lại</button>
+                                <h2 id="ad-title" style="margin-top: 12px;">CHI TIẾT GIÁM SÁT QUÂN SỐ</h2>
+                                <p class="card-subtitle" id="ad-subtitle"></p>
+                            </div>
+                            <div class="table-filters">
+                                <input type="text" id="ad-search" class="filter-select" placeholder="Tìm quân nhân" oninput="renderAttendanceDetail()">
+                                <select id="ad-filter" class="filter-select" onchange="renderAttendanceDetail()">
+                                    <option value="all">Tất cả trạng thái</option>
+                                    <option value="absent">Không tham gia</option>
+                                    <option value="late">Đi chậm</option>
+                                    <option value="early_leave">Chưa hết giờ đã về</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="attendance-detail-grid">
+                            <div class="surveillance-screen-card">
+                                <div class="video-container">
+                                    <img id="ad-stream" alt="Camera giám sát lớp">
+                                </div>
+                                <p class="camera-caption" id="ad-camera-caption"></p>
+                            </div>
+
+                            <div class="evidence-column">
+                                <h3 class="evidence-title">ẢNH ĐIỂM DANH DO AI CHỤP</h3>
+                                <div id="ad-evidence" class="evidence-thumbs"></div>
+                            </div>
+                        </div>
+
+                        <div class="log-metrics-grid" id="ad-metrics"></div>
+
+                        <div class="table-responsive">
+                            <table class="personnel-table">
+                                <thead>
+                                    <tr>
+                                        <th>QUÂN NHÂN</th>
+                                        <th>SỐ HIỆU</th>
+                                        <th>ĐƠN VỊ</th>
+                                        <th>THẤY LẦN ĐẦU</th>
+                                        <th>THẤY LẦN CUỐI</th>
+                                        <th>TRẠNG THÁI</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="ad-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- MÀN 3.1 / 5.1 — DASHBOARD GIÁM SÁT AN TOÀN BẮN ĐẠN THẬT -->
+                <section id="view-safety" class="page-view">
+                    <div id="safety-alert-banner" class="safety-banner" style="display: none;">
+                        <div class="safety-banner-body">
+                            <span class="safety-banner-icon">⚠</span>
+                            <div>
+                                <strong id="safety-banner-title">PHÁT HIỆN ĐỐI TƯỢNG TRONG VÙNG CẤM</strong>
+                                <p id="safety-banner-desc"></p>
+                            </div>
+                        </div>
+                        <div class="safety-banner-actions">
+                            <button class="btn-mute" onclick="toggleSafetySiren()" id="btn-safety-siren">🔕 Tắt cảnh báo âm thanh</button>
+                            <button class="btn-primary-green" onclick="ackActiveIntrusion()">✓ Xác nhận xử lý</button>
+                        </div>
+                    </div>
+
+                    <div class="glass-card section-card">
+                        <div class="card-header flex-between">
+                            <div>
+                                <h2 id="sf-title">TRUNG TÂM GIÁM SÁT AN TOÀN BẮN ĐẠN THẬT</h2>
+                                <p class="card-subtitle" id="sf-subtitle"></p>
+                            </div>
+                            <div class="safety-state-pill" id="sf-state">
+                                <span class="pill-dot"></span><span id="sf-state-label">Bình thường</span>
+                            </div>
+                        </div>
+
+                        <div class="safety-grid">
+                            <div class="surveillance-screen-card">
+                                <div class="video-container">
+                                    <img id="sf-stream" alt="Camera trường bắn">
+                                </div>
+                                <p class="camera-caption" id="sf-camera-caption"></p>
+                            </div>
+
+                            <div class="glass-card events-feed-card">
+                                <div class="events-feed-header">
+                                    <h2>PHÁT HIỆN XÂM NHẬP</h2>
+                                    <span class="pending-badge" id="sf-pending-badge">0 chờ xử lý</span>
+                                </div>
+                                <div class="events-list" id="sf-events-list"></div>
+                            </div>
+                        </div>
+
+                        <div class="card-header" style="margin-top: 20px;">
+                            <div>
+                                <h2>THƯ VIỆN HÌNH ẢNH VI PHẠM</h2>
+                                <p class="card-subtitle">ẢNH DO AI TỰ ĐỘNG GHI NHẬN, KHOANH ĐỎ ĐỐI TƯỢNG VI PHẠM</p>
+                            </div>
+                        </div>
+                        <div class="violation-gallery" id="sf-gallery"></div>
+                    </div>
+                </section>
+
+                <!-- MÀN 8.1 — QUẢN LÝ THIẾT BỊ CAMERA -->
+                <section id="view-cameras" class="page-view">
+                    <div class="glass-card section-card">
+                        <div class="card-header flex-between">
+                            <div>
+                                <h2>QUẢN LÝ THIẾT BỊ CAMERA GIÁM SÁT</h2>
+                                <p class="card-subtitle">DANH SÁCH CAMERA, NGUỒN TÍN HIỆU VÀ KHU VỰC TRỰC THUỘC</p>
+                            </div>
+                            <button class="btn-primary-green" onclick="openCameraModal()">➕ Thêm thiết bị</button>
+                        </div>
+
+                        <div class="table-responsive">
+                            <table class="personnel-table">
+                                <thead>
+                                    <tr>
+                                        <th>MÃ</th>
+                                        <th>TÊN CAMERA</th>
+                                        <th>NGUỒN TÍN HIỆU</th>
+                                        <th>KHU VỰC</th>
+                                        <th>FPS</th>
+                                        <th>TRẠNG THÁI</th>
+                                        <th>THAO TÁC</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="cameras-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
                 <!-- VIEW 5: NHẬT KÝ & ĐIỂM DANH -->
                 <section id="view-logs" class="page-view">
                     <div class="glass-card section-card">
@@ -649,6 +884,57 @@
     </div>
 
     <!-- Schedule Add Modal -->
+    <!-- Modal thêm / sửa thiết bị camera -->
+    <div id="camera-modal" class="modal-backdrop" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="camera-modal-title">Thêm thiết bị camera</h3>
+                <button class="modal-close" onclick="closeCameraModal()">×</button>
+            </div>
+            <form id="camera-form" onsubmit="submitCameraForm(event)">
+                <input type="hidden" id="cam-id">
+                <div class="form-group">
+                    <label>Tên camera</label>
+                    <input type="text" id="cam-name" placeholder="Sân tập trung" required class="form-input">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Mã camera</label>
+                        <input type="text" id="cam-code" placeholder="CAM-01" class="form-input">
+                    </div>
+                    <div class="form-group">
+                        <label>Khu vực</label>
+                        <input type="text" id="cam-area" placeholder="Thao trường số 1" class="form-input">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Loại nguồn</label>
+                        <select id="cam-source-type" class="form-input form-select" required>
+                            <option value="rtsp">RTSP (camera mạng)</option>
+                            <option value="file">Tệp video</option>
+                            <option value="webcam">Webcam</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Số khung hình/giây xử lý</label>
+                        <input type="number" id="cam-fps" value="5" min="1" max="25" class="form-input">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Đường dẫn nguồn</label>
+                    <input type="text" id="cam-source-uri" placeholder="rtsp://10.0.0.21:554/stream1" required class="form-input font-mono">
+                    <p class="form-hint">Nguồn RTSP phải là URL đầy đủ. Tệp video ghi đường dẫn trên máy chủ.</p>
+                </div>
+                <p id="cam-form-status" class="status-message"></p>
+                <div class="modal-actions">
+                    <button type="button" class="btn-toolbar-neutral" onclick="closeCameraModal()">Hủy bỏ</button>
+                    <button type="submit" class="btn-primary-green">Lưu thiết bị</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <div id="schedule-modal" class="modal-backdrop" style="display: none;">
         <div class="modal-content glass-card">
             <div class="modal-header">
@@ -739,11 +1025,6 @@
                 </div>
             </div>
         </div>
-    </div>
-
-    <!-- Floating Alarm Button -->
-    <div class="floating-mockup-btn">
-        <button onclick="triggerMockAlarm()" class="btn-alarm-demo">🚨 Mô phỏng cảnh báo xâm nhập</button>
     </div>
 
     <script src="/static/app.js"></script>

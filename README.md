@@ -35,6 +35,9 @@ python tests/test_ai.py           # vi phạm giờ giấc, xâm nhập, kho s�
 python tests/test_api.py          # sự kiện, kết quả điểm danh, kênh SSE
 python tests/test_zones_stream.py # vùng giám sát, luồng MJPEG
 python tests/test_config_api.py   # camera, thời khoá biểu, đối chiếu hợp đồng
+
+# Giao diện: cần máy chủ đang chạy và gói jsdom
+npm install jsdom && node tests/test_ui.mjs
 ```
 
 Lưu ý: test ghi đè `data/cameras.json`, `data/schedules.json` và
