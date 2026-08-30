@@ -2,7 +2,7 @@
 
 from fastapi import FastAPI, WebSocket, UploadFile, File, Form, WebSocketDisconnect, BackgroundTasks, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, Response, StreamingResponse
 import asyncio
 import shutil
 import time
@@ -14,12 +14,16 @@ import base64
 from pathlib import Path
 from typing import Optional, List
 
+from pydantic import ValidationError
+
 from app import clock
 from app.video_processor import VideoProcessor
 from app.monitor import AttendanceMonitor
 from app.face_engine import FaceEngine
 from app.attendance import AttendanceManager, person_label
 from app.events import CAMERA_ID, CAMERA_NAME, EventStore
+from app.safety import RULE_ATTENDANCE, ZoneStore
+from app.schemas import AckInput, ZoneInput, ZonePatch
 from app.storage import read_json_list, write_json_list
 
 
@@ -53,6 +57,8 @@ monitor = AttendanceMonitor(alerts_dir=str(alerts_path))
 face_engine = FaceEngine(data_dir=str(data_path))
 events = EventStore(data_dir=str(data_path))
 attendance = AttendanceManager(data_dir=str(data_path), face_engine=face_engine, events=events)
+# API cũ /api/zones và API v1 đọc ghi chung kho này, nên cấu hình không bị lệch
+zone_store = ZoneStore(str(data_path))
 
 current_video_path = None
 active_connections: List[WebSocket] = []
@@ -213,15 +219,11 @@ async def update_registered_face(
 
 @app.get("/api/zones")
 async def get_zone_rules():
-    """Get configured ROI polygon and tripwire rules."""
-    zone_file = data_path / "zone_rules.json"
-    if zone_file.exists():
-        try:
-            with open(zone_file, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"Error loading zone rules: {e}")
-    
+    """Cấu hình vùng theo định dạng cũ, dựng từ cùng kho dữ liệu với API v1."""
+    legacy = zone_store.to_legacy()
+    if legacy["polygon_points"]:
+        return legacy
+
     return {
         "zone_name": "Khu vực tập trung",
         "rule_type": "Cảnh báo Xâm nhập 24/7",
@@ -243,15 +245,13 @@ async def get_zone_rules():
 
 @app.post("/api/zones")
 async def save_zone_rules(config: dict):
-    """Save configured ROI polygon and tripwire rules."""
-    zone_file = data_path / "zone_rules.json"
+    """Lưu cấu hình kiểu cũ. Các vùng cấm cấu hình qua API v1 được giữ nguyên."""
     try:
-        with open(zone_file, "w", encoding="utf-8") as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
+        zone_store.merge_legacy(config)
         return {
             "status": "success",
             "message": "Đã lưu cấu hình Vùng & Luật (F-06) thành công!",
-            "data": config
+            "data": zone_store.to_legacy()
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi khi lưu cấu hình: {str(e)}")
@@ -660,19 +660,15 @@ async def v1_stream_events(type: Optional[str] = None, camera_id: Optional[str] 
 
 
 @app.post("/api/v1/events/{event_id}/ack")
-async def v1_ack_event(event_id: str, body: dict):
+async def v1_ack_event(event_id: str, body: AckInput):
     """Xác nhận đã xử lý một sự kiện. Kết quả được lưu, khác với nút giả trước đây."""
-    acked_by = (body or {}).get("acked_by")
-    if not acked_by:
-        raise HTTPException(status_code=422, detail="Thiếu tên người xác nhận (acked_by)")
-
     existing = events.get(event_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="Không tìm thấy sự kiện")
     if existing.get("acked"):
         raise HTTPException(status_code=409, detail="Sự kiện đã được xác nhận trước đó")
 
-    return events.ack(event_id, acked_by, (body or {}).get("note"))
+    return events.ack(event_id, body.acked_by, body.note)
 
 
 @app.get("/api/v1/events/{event_id}/clip")
@@ -829,3 +825,146 @@ async def v1_training_summary():
         },
         "sessions": sessions,
     }
+
+
+# ----------------- API v1: vùng giám sát -----------------
+
+
+def _zone_or_404(zone_id: str) -> tuple:
+    zones = zone_store.all_zones()
+    for index, zone in enumerate(zones):
+        if zone.get("id") == zone_id:
+            return zones, index
+    raise HTTPException(status_code=404, detail="Không tìm thấy vùng giám sát")
+
+
+def _reject_second_attendance_zone(zones: List[dict], rule: str, skip_id: Optional[str] = None):
+    """Mỗi camera chỉ có một vùng đếm quân số; hai vùng thì sĩ số lấy theo vùng nào?"""
+    if rule != RULE_ATTENDANCE:
+        return
+    existing = next((z for z in zones
+                     if z.get("rule") == RULE_ATTENDANCE and z.get("id") != skip_id), None)
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Camera đã có vùng đếm quân số '{existing.get('name')}'. "
+                   f"Sửa vùng đó hoặc đổi nó sang loại khác trước."
+        )
+
+
+@app.get("/api/v1/cameras/{camera_id}/zones")
+async def v1_list_zones(camera_id: str):
+    """Các vùng đã cấu hình trên camera."""
+    return [z for z in zone_store.all_zones()
+            if z.get("camera_id", CAMERA_ID) == camera_id]
+
+
+@app.post("/api/v1/cameras/{camera_id}/zones", status_code=201)
+async def v1_create_zone(camera_id: str, payload: ZoneInput):
+    """Thêm vùng cho camera. Vòng xử lý video áp dụng ngay, không cần khởi động lại."""
+    zones = zone_store.all_zones()
+    _reject_second_attendance_zone(
+        [z for z in zones if z.get("camera_id", CAMERA_ID) == camera_id], payload.rule
+    )
+
+    zone = payload.to_record(f"zone_{int(time.time() * 1000)}", camera_id)
+    zones.append(zone)
+    zone_store.save(zones)
+    return zone
+
+
+@app.patch("/api/v1/zones/{zone_id}")
+async def v1_update_zone(zone_id: str, payload: ZonePatch):
+    """Cập nhật vùng. Toàn bộ bản ghi sau khi trộn được kiểm tra lại."""
+    zones, index = _zone_or_404(zone_id)
+    existing = zones[index]
+
+    try:
+        merged = payload.apply_to(existing)
+    except ValidationError as e:
+        # errors() mặc định kèm object ValueError trong ctx, không serialise được
+        raise HTTPException(
+            status_code=422,
+            detail=e.errors(include_url=False, include_context=False, include_input=False),
+        )
+
+    camera_id = existing.get("camera_id", CAMERA_ID)
+    _reject_second_attendance_zone(
+        [z for z in zones if z.get("camera_id", CAMERA_ID) == camera_id],
+        merged.rule, skip_id=zone_id
+    )
+
+    zones[index] = merged.to_record(zone_id, camera_id)
+    zone_store.save(zones)
+    return zones[index]
+
+
+@app.delete("/api/v1/zones/{zone_id}", status_code=204)
+async def v1_delete_zone(zone_id: str):
+    """Xoá vùng khỏi cấu hình."""
+    zones, index = _zone_or_404(zone_id)
+    zones.pop(index)
+    zone_store.save(zones)
+    return Response(status_code=204)
+
+
+# ----------------- API v1: luồng hình -----------------
+
+def _current_jpeg(overlay: int) -> Optional[bytes]:
+    from app.video_processor import latest_jpeg
+    frame = latest_jpeg["overlay"] if overlay else latest_jpeg["clean"]
+    # Nguồn không có bản gốc (chỉ dựng được bản đã vẽ) thì thà trả hình có lớp
+    # phủ còn hơn trả về rỗng
+    return frame or latest_jpeg["overlay"]
+
+
+@app.get("/api/v1/cameras/{camera_id}/stream.mjpg")
+async def v1_camera_stream(camera_id: str, overlay: int = 1, fps: int = 5):
+    """Luồng hình trực tiếp dạng MJPEG, dùng thẳng trong thẻ <img>.
+
+    Không cần WebSocket, không cần canvas, trình duyệt tự nối lại khi đứt.
+    """
+    if camera_id != CAMERA_ID:
+        raise HTTPException(status_code=404, detail="Không tìm thấy camera")
+    if _current_jpeg(overlay) is None:
+        raise HTTPException(status_code=409, detail="Camera chưa được bật xử lý")
+
+    interval = 1.0 / max(1, min(25, fps))
+    boundary = b"--frame\r\n"
+
+    async def generator():
+        from app import video_processor as vp
+        last_revision = -1
+        while True:
+            # Chỉ gửi khi có khung hình mới, không bơm lại cùng một khung
+            if vp.frame_revision != last_revision:
+                frame = _current_jpeg(overlay)
+                if frame is None:
+                    break
+                last_revision = vp.frame_revision
+                yield (boundary + b"Content-Type: image/jpeg\r\n"
+                       + f"Content-Length: {len(frame)}\r\n\r\n".encode() + frame + b"\r\n")
+            await asyncio.sleep(interval)
+
+    return StreamingResponse(
+        generator(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/v1/cameras/{camera_id}/snapshot")
+async def v1_camera_snapshot(camera_id: str, overlay: int = 0, download: int = 0):
+    """Ảnh tĩnh khung hình hiện tại: nền để vẽ vùng, và nút chụp nhanh."""
+    if camera_id != CAMERA_ID:
+        raise HTTPException(status_code=404, detail="Không tìm thấy camera")
+
+    frame = _current_jpeg(overlay)
+    if frame is None:
+        raise HTTPException(status_code=409, detail="Camera chưa có khung hình nào")
+
+    headers = {"Cache-Control": "no-cache, no-store"}
+    if download:
+        stamp = clock.now().strftime("%Y%m%d_%H%M%S")
+        headers["Content-Disposition"] = f'attachment; filename="{camera_id}_{stamp}.jpg"'
+    return Response(content=frame, media_type="image/jpeg", headers=headers)

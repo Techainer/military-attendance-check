@@ -312,7 +312,7 @@ paths:
       - $ref: '#/components/parameters/CameraId'
     get:
       tags: [Vùng giám sát]
-      summary: Các vùng đã cấu hình trên camera
+      summary: Các vùng đã cấu hình trên camera (kể cả vùng đang tắt)
       responses:
         '200':
           description: OK
@@ -331,10 +331,14 @@ paths:
             schema: { $ref: '#/components/schemas/ZoneInput' }
       responses:
         '201':
-          description: Đã tạo
+          description: Đã tạo. Vòng xử lý video áp dụng ngay, không cần khởi động lại.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Zone' }
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
 
   /zones/{zone_id}:
     parameters:
@@ -345,22 +349,33 @@ paths:
     patch:
       tags: [Vùng giám sát]
       summary: Cập nhật vùng
+      description: |
+        Chỉ gửi trường cần đổi. Bản ghi sau khi trộn được kiểm tra lại toàn bộ,
+        vì đổi mỗi `kind` cũng có thể làm số điểm hoặc luật trở nên không hợp lệ.
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/ZoneInput' }
+            schema: { $ref: '#/components/schemas/ZonePatch' }
       responses:
         '200':
           description: OK
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Zone' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
     delete:
       tags: [Vùng giám sát]
       summary: Xoá vùng
       responses:
         '204': { description: Đã xoá }
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   # ------------------------------------------------------------------
   # Quân nhân & Lớp
@@ -1281,9 +1296,21 @@ components:
     # ---------------- vùng ----------------
     ZoneInput:
       type: object
+      description: |
+        Ràng buộc backend kiểm tra, trả 422 kèm tên trường nếu sai:
+        - `kind: polygon` chỉ đi với `rule` `attendance_area` hoặc
+          `restricted_area`; `kind: tripwire` chỉ đi với `crossing_line`.
+        - Vùng kín cần **từ 3 điểm**; vạch an toàn cần **đúng 2 điểm** — phần
+          phát hiện cắt vạch chỉ dùng hai điểm, nhận nhiều hơn sẽ gây hiểu nhầm
+          là vẽ được đường gấp khúc.
+        - Các điểm không được trùng nhau.
+        - Phải bật ít nhất một trong `detect_human` / `detect_object`.
+
+        Ngoài ra mỗi camera chỉ được có **một** vùng `attendance_area`; thêm
+        vùng thứ hai trả 409, vì sĩ số sẽ không biết lấy theo vùng nào.
       required: [name, kind, rule, points]
       properties:
-        name: { type: string, example: Khối chắn tuyến bắn }
+        name: { type: string, minLength: 1, maxLength: 120, example: Khối chắn tuyến bắn }
         kind: { $ref: '#/components/schemas/ZoneKind' }
         rule: { $ref: '#/components/schemas/ZoneRule' }
         points:
@@ -1292,12 +1319,13 @@ components:
           items: { $ref: '#/components/schemas/Point' }
         detect_human: { type: boolean, default: true }
         detect_object: { type: boolean, default: false }
-        enabled: { type: boolean, default: true }
-        active_schedule_ids:
-          type: array
+        enabled:
+          type: boolean
+          default: true
           description: |
-            Chỉ áp dụng vùng trong khung giờ của các ca này. Rỗng = áp dụng 24/7.
-          items: { type: string }
+            Vùng tắt vẫn được lưu và hiển thị nhưng không sinh cảnh báo. Vạch an
+            toàn chuyển từ cấu hình cũ sang luôn ở trạng thái tắt, vì trước đây
+            nó chỉ là hình vẽ — bật lên là bắt đầu réo còi.
 
     Zone:
       allOf:
@@ -1307,6 +1335,23 @@ components:
           properties:
             id: { type: string }
             camera_id: { type: string }
+
+    ZonePatch:
+      type: object
+      description: |
+        Cập nhật một phần. Trường bỏ trống thì giữ nguyên giá trị cũ; mọi ràng
+        buộc của `ZoneInput` vẫn được kiểm tra trên bản ghi sau khi trộn.
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        kind: { $ref: '#/components/schemas/ZoneKind' }
+        rule: { $ref: '#/components/schemas/ZoneRule' }
+        points:
+          type: array
+          minItems: 2
+          items: { $ref: '#/components/schemas/Point' }
+        detect_human: { type: boolean }
+        detect_object: { type: boolean }
+        enabled: { type: boolean }
 
     # ---------------- quân nhân & lớp ----------------
     Person:

@@ -56,7 +56,8 @@ class ZoneStore:
         self._cache: List[dict] = []
         self._mtime = None
 
-    def zones(self) -> List[dict]:
+    def all_zones(self) -> List[dict]:
+        """Mọi vùng đã cấu hình, kể cả vùng đang tắt (dùng cho màn quản trị)."""
         if not self.zone_file.exists():
             return []
         mtime = self.zone_file.stat().st_mtime
@@ -64,6 +65,18 @@ class ZoneStore:
             self._mtime = mtime
             self._cache = self._parse()
         return self._cache
+
+    def zones(self) -> List[dict]:
+        """Các vùng đang bật — phần vòng xử lý video thực sự dùng."""
+        return [z for z in self.all_zones() if z.get("enabled", True)]
+
+    def save(self, zones: List[dict]) -> None:
+        """Ghi lại toàn bộ danh sách vùng. Vòng xử lý tự nhận cấu hình mới."""
+        self.zone_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.zone_file, "w", encoding="utf-8") as f:
+            json.dump({"zones": zones}, f, ensure_ascii=False, indent=2)
+        # Buộc đọc lại ở lần truy cập kế tiếp, không chờ so sánh mtime
+        self._mtime = None
 
     def _parse(self) -> List[dict]:
         try:
@@ -74,7 +87,7 @@ class ZoneStore:
             return []
 
         if isinstance(data.get("zones"), list):
-            return [z for z in data["zones"] if z.get("enabled", True)]
+            return list(data["zones"])
 
         # Cấu hình theo định dạng cũ: một polygon để đếm quân số, một vạch an toàn
         zones = []
@@ -95,10 +108,67 @@ class ZoneStore:
                 "name": "Vạch an toàn",
                 "kind": "tripwire",
                 "rule": RULE_CROSSING,
-                "points": tripwire,
-                "enabled": True,
+                "points": tripwire[:2],
+                # Trong cấu hình cũ vạch chỉ là hình vẽ, không sinh cảnh báo. Bật
+                # sẵn ở đây thì mọi hệ thống đang chạy bỗng dưng réo còi.
+                "enabled": False,
             })
         return zones
+
+    # ---------- tương thích với định dạng cũ ----------
+    # Giao diện hiện tại vẫn gọi /api/zones với một polygon và một vạch. Hai API
+    # đọc ghi chung một file, nên phần này quy đổi qua lại thay vì tách kho dữ liệu.
+
+    def to_legacy(self) -> dict:
+        """Dựng lại payload kiểu cũ từ danh sách vùng."""
+        zones = self.all_zones()
+        polygon = next((z for z in zones if z.get("rule") == RULE_ATTENDANCE), None)
+        tripwire = next((z for z in zones if z.get("rule") == RULE_CROSSING), None)
+        return {
+            "zone_name": (polygon or {}).get("name", "Khu vực tập trung"),
+            "rule_type": (polygon or {}).get("legacy_rule_type", "Cảnh báo Xâm nhập 24/7"),
+            "detect_human": (polygon or {}).get("detect_human", True),
+            "detect_object": (polygon or {}).get("detect_object", True),
+            "polygon_points": (polygon or {}).get("points", []),
+            "tripwire_points": (tripwire or {}).get("points", []),
+        }
+
+    def merge_legacy(self, payload: dict) -> List[dict]:
+        """Ghi payload kiểu cũ vào kho, giữ nguyên các vùng cấm đã cấu hình riêng."""
+        kept = [z for z in self.all_zones()
+                if z.get("rule") not in (RULE_ATTENDANCE, RULE_CROSSING)]
+
+        polygon = payload.get("polygon_points") or []
+        if len(polygon) >= 3:
+            kept.append({
+                "id": "zone_attendance",
+                "name": payload.get("zone_name", "Khu vực tập trung"),
+                "kind": "polygon",
+                "rule": RULE_ATTENDANCE,
+                "points": polygon,
+                "detect_human": bool(payload.get("detect_human", True)),
+                "detect_object": bool(payload.get("detect_object", True)),
+                "legacy_rule_type": payload.get("rule_type"),
+                "enabled": True,
+            })
+
+        tripwire = payload.get("tripwire_points") or []
+        if len(tripwire) >= 2:
+            kept.append({
+                "id": "zone_tripwire",
+                "name": "Vạch an toàn",
+                "kind": "tripwire",
+                "rule": RULE_CROSSING,
+                "points": tripwire[:2],
+                # Vạch kế thừa từ cấu hình cũ vốn chỉ là hình vẽ, nên để tắt sẵn;
+                # bật lên là bắt đầu sinh cảnh báo, phải do người dùng chủ động.
+                "enabled": False,
+                "detect_human": True,
+                "detect_object": False,
+            })
+
+        self.save(kept)
+        return kept
 
     def attendance_polygon(self, width: int, height: int) -> Optional[np.ndarray]:
         """Polygon dùng để lọc quân số. ``None`` nếu chưa cấu hình vùng nào."""

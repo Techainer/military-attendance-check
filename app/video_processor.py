@@ -29,6 +29,28 @@ latest_event_clips: Dict[str, List[str]] = {}
 MAX_STORED_CLIPS = 20
 
 
+# Khung hình JPEG mới nhất, phục vụ luồng MJPEG và ảnh chụp nhanh. Giữ cả bản
+# có lớp phủ AI lẫn bản gốc để tham số ``overlay`` là thật, không phải chỉ đổi
+# nhãn nút bấm trên giao diện.
+latest_jpeg: Dict[str, Optional[bytes]] = {"overlay": None, "clean": None}
+# Tăng mỗi khung hình mới; luồng MJPEG dựa vào đây để biết đã có hình mới chưa
+# thay vì gửi lại đúng một khung nhiều lần.
+frame_revision = 0
+
+
+def publish_frame(overlay_jpeg: bytes, clean_jpeg: Optional[bytes]) -> None:
+    global frame_revision
+    latest_jpeg["overlay"] = overlay_jpeg
+    latest_jpeg["clean"] = clean_jpeg
+    frame_revision += 1
+
+
+def clear_frames() -> None:
+    """Luồng dừng thì bỏ khung hình cũ, tránh phát lại hình đã chết."""
+    latest_jpeg["overlay"] = None
+    latest_jpeg["clean"] = None
+
+
 def keep_clip(clip_id: str, frames: List[str]) -> str:
     """Lưu một đoạn phát lại và bỏ bớt các đoạn cũ nhất."""
     latest_event_clips[clip_id] = frames
@@ -593,6 +615,10 @@ class VideoProcessor:
                 _, buffer = cv2.imencode('.jpg', display_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
                 frame_b64 = base64.b64encode(buffer).decode('utf-8')
 
+                # Khung hình cho luồng MJPEG: bản có lớp phủ và bản gốc
+                _, clean_buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                publish_frame(buffer.tobytes(), clean_buffer.tobytes())
+
                 # Store into global 10-second rolling clip buffer
                 global_clip_buffer.append(frame_b64)
 
@@ -665,6 +691,8 @@ class VideoProcessor:
                 reader.stop()
             elif cap:
                 cap.release()
+
+            clear_frames()
 
             if self.attendance is not None and self.attendance.session is not None:
                 if self._stop_requested:

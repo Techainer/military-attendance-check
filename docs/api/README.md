@@ -14,8 +14,11 @@ phần còn lại (CRUD khu vực / camera / lớp, MJPEG đa camera) vẫn là 
 | `/events`, `/events/stream`, `/events/{id}/ack`, `/events/{id}/clip` | ✅ chạy được |
 | `/sessions/{id}/attendance` | ✅ chạy được |
 | `/summary/safety`, `/summary/training` | ✅ chạy được |
-| `/areas`, `/cameras`, `/classes`, `/schedules`, `/zones` | ⏳ chưa hiện thực |
-| `/cameras/{id}/stream.mjpg` | ⏳ chưa hiện thực — tạm dùng WebSocket `/ws` cũ |
+| `/cameras/{id}/zones`, `/zones/{id}` | ✅ chạy được |
+| `/cameras/{id}/stream.mjpg`, `/cameras/{id}/snapshot` | ✅ chạy được |
+| `/areas`, `/cameras` (CRUD), `/classes`, `/schedules` v1 | ⏳ chưa hiện thực |
+
+Giai đoạn POC chạy một camera, `camera_id` cố định là `cam_01`; gọi id khác trả 404.
 
 ## Xem tài liệu
 
@@ -44,6 +47,10 @@ es.onmessage = (e) => handleEvent(JSON.parse(e.data));
 
 Màn tổng hợp nhiều lớp cần sự kiện mà không cần hình → chỉ mở SSE, không mở
 `stream.mjpg`. Đừng nhồi hai thứ vào một kênh.
+
+`overlay=0` trả **khung hình gốc**, không phải bản đã vẽ — đây là dữ liệu thật
+cho nút "Bật/Tắt lớp phủ AI". Ảnh nền để vẽ vùng nên lấy
+`/cameras/{id}/snapshot?overlay=0`, nếu không sẽ vẽ đè lên chính các vùng cũ.
 
 **2. Mọi tài nguyên đều mang `camera_id`,** kể cả giai đoạn hệ thống mới chạy
 một camera. Đừng hardcode `CAM-01` ở giao diện.
