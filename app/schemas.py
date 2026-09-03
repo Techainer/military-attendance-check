@@ -117,6 +117,13 @@ class ZonePatch(BaseModel):
         return ZoneInput.model_validate(merged)
 
 
+class LoginInput(BaseModel):
+    """Thông tin đăng nhập. Bản POC chỉ có hai tài khoản khai cứng."""
+
+    username: str = Field(min_length=1, max_length=60)
+    password: str = Field(min_length=1, max_length=200)
+
+
 class AckInput(BaseModel):
     """Xác nhận đã xử lý một sự kiện."""
 

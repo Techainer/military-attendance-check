@@ -2604,50 +2604,83 @@ window.setRtspDemo = setRtspDemo;
 // =====================================================================
 
 const ROLES = {
-    cbqh: {
-        label: 'Cán bộ quản lý',
-        user: 'Đại uý Nguyễn Văn Hùng',
-        avatar: 'H',
-        home: 'attendance'
-    },
-    qtht: {
-        label: 'Quản trị hệ thống',
-        user: 'Thiếu tá Lê Quang Trung',
-        avatar: 'T',
-        home: 'monitoring'
-    }
+    cbqh: { home: 'attendance' },
+    qtht: { home: 'monitoring' }
 };
 
-let currentRole = 'cbqh';
+let currentRole = null;
+let currentUser = null;
 
-function switchRole(role) {
-    if (!ROLES[role]) return;
-    currentRole = role;
-    const cfg = ROLES[role];
+function applyRole(user) {
+    currentUser = user;
+    currentRole = user.role;
 
-    document.querySelectorAll('.role-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.id === `role-btn-${role}`);
-    });
-
-    // Mục chỉ dành cho QTHT thì ẩn khi đang ở vai trò CBQH
+    // Mục chỉ dành cho QTHT thì ẩn với CBQH
     document.querySelectorAll('.role-only').forEach(el => {
-        el.style.display = el.dataset.role === role ? '' : 'none';
+        el.style.display = el.dataset.role === currentRole ? '' : 'none';
     });
 
     const nameEl = document.getElementById('user-name');
+    const roleEl = document.getElementById('user-role');
     const avatarEl = document.getElementById('user-avatar');
-    if (nameEl) nameEl.textContent = `${cfg.user} · ${cfg.label}`;
-    if (avatarEl) avatarEl.textContent = cfg.avatar;
-
-    try { localStorage.setItem('horus_role', role); } catch (e) { /* chế độ riêng tư */ }
-
-    // Đang đứng ở màn mà vai trò mới không được xem thì đưa về màn chính
-    const activeNav = document.querySelector('.sidebar-nav .nav-item.active');
-    const hidden = activeNav && activeNav.closest('.role-only')
-        && activeNav.closest('.role-only').style.display === 'none';
-    if (hidden || !activeNav) switchNavTab(cfg.home);
+    if (nameEl) nameEl.textContent = user.display_name;
+    if (roleEl) roleEl.textContent = user.role_label;
+    if (avatarEl) avatarEl.textContent = user.avatar;
 }
-window.switchRole = switchRole;
+window.applyRole = applyRole;
+
+function fillDemoLogin(username) {
+    document.getElementById('login-username').value = username;
+    document.getElementById('login-password').value = `${username}@2026`;
+    document.getElementById('login-error').textContent = '';
+}
+window.fillDemoLogin = fillDemoLogin;
+
+async function handleLogin(event) {
+    event.preventDefault();
+    const btn = document.getElementById('login-submit');
+    const err = document.getElementById('login-error');
+    err.textContent = '';
+    btn.disabled = true;
+
+    try {
+        const res = await fetch('/api/v1/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                username: document.getElementById('login-username').value,
+                password: document.getElementById('login-password').value
+            })
+        });
+        if (!res.ok) throw new Error(describeApiError(await res.json()));
+
+        const user = await res.json();
+        try { localStorage.setItem('horus_user', JSON.stringify(user)); } catch (e) { /* chế độ riêng tư */ }
+        enterApp(user);
+    } catch (e) {
+        err.textContent = `✗ ${e.message}`;
+        err.style.color = '#dc2626';
+        document.getElementById('login-password').value = '';
+    } finally {
+        btn.disabled = false;
+    }
+}
+window.handleLogin = handleLogin;
+
+function enterApp(user) {
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('app-layout').style.display = '';
+    applyRole(user);
+    startAppSession();
+    switchNavTab(ROLES[user.role].home);
+}
+
+function handleLogout() {
+    try { localStorage.removeItem('horus_user'); } catch (e) { /* chế độ riêng tư */ }
+    // Nạp lại trang cho sạch: đóng kênh sự kiện, luồng hình và các hẹn giờ
+    window.location.reload();
+}
+window.handleLogout = handleLogout;
 
 
 // =====================================================================
@@ -2655,12 +2688,21 @@ window.switchRole = switchRole;
 // Đặt cuối file để mọi biến trạng thái phía trên đã được khai báo xong.
 // =====================================================================
 
-document.addEventListener('DOMContentLoaded', async () => {
+let appSessionStarted = false;
+
+async function startAppSession() {
+    if (appSessionStarted) return;
+    appSessionStarted = true;
+
     loadRegisteredFaces();
     connectEventStream();
     startLivePolling();
 
-    // Nạp sẵn các sự kiện gần đây để dòng sự kiện không trống khi mới mở trang
+    const today = new Date().toISOString().slice(0, 10);
+    const dateInput = document.getElementById('dt-schedule-date');
+    if (dateInput) dateInput.value = today;
+
+    // Nạp sẵn các sự kiện gần đây để dòng sự kiện không trống khi mới vào
     try {
         const recent = await getJson('/api/v1/events?page_size=20');
         recent.items.slice().reverse().forEach(ev => {
@@ -2672,13 +2714,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (e) {
         console.error('Không nạp được sự kiện gần đây:', e);
     }
+}
 
-    const today = new Date().toISOString().slice(0, 10);
-    const dateInput = document.getElementById('dt-schedule-date');
-    if (dateInput) dateInput.value = today;
+document.addEventListener('DOMContentLoaded', () => {
+    // Đã đăng nhập lần trước thì vào thẳng, khỏi gõ lại
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem('horus_user') || 'null'); } catch (e) { saved = null; }
 
-    let saved = 'cbqh';
-    try { saved = localStorage.getItem('horus_role') || 'cbqh'; } catch (e) { /* chế độ riêng tư */ }
-    switchRole(ROLES[saved] ? saved : 'cbqh');
-    switchNavTab(ROLES[currentRole].home);
+    if (saved && ROLES[saved.role]) {
+        enterApp(saved);
+    } else {
+        document.getElementById('login-screen').style.display = 'flex';
+        document.getElementById('app-layout').style.display = 'none';
+    }
 });

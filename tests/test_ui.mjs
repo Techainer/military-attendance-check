@@ -63,15 +63,97 @@ try {
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-console.log('\n[1] Trang khởi động không lỗi');
-window.document.dispatchEvent(new window.Event('DOMContentLoaded', { bubbles: true }));
-await sleep(2500);
+// Test tự tạo dữ liệu nó cần, không dựa vào bộ test khác đã chạy trước hay
+// script seed — chạy độc lập theo thứ tự nào cũng ra kết quả như nhau.
+async function ensureFixtures() {
+    const existing = await (await fetch(BASE + '/api/v1/schedules')).json();
+    const have = new Set(existing.items.map(s => s.training_type));
 
-check('app.js nạp và chạy không ném lỗi', jsErrors.length === 0, jsErrors.slice(0, 3).join(' | '));
-check('kênh sự kiện SSE được mở',
-    EventSourceCalls.some(u => u.includes('/api/v1/events/stream')), EventSourceCalls.join(','));
+    const fixtures = [
+        { id: 'dao_tao', body: {
+            name: 'Huấn luyện bắn súng (fixture)', training_type: 'dao_tao',
+            start_time: '07:00', end_time: '11:30', unit: 'Đại đội 1', shift: 'Ca sáng',
+            required_count: 40, lesson_name: 'Bài 3 — Ngắm bắn', instructor: 'Đại uý Phạm Minh Đức',
+            field: 'Trường bắn số 1' } },
+        { id: 'chien_dau', body: {
+            name: 'Huấn luyện chiến thuật (fixture)', training_type: 'chien_dau',
+            start_time: '13:00', end_time: '16:30', unit: 'Đại đội 2', shift: 'Ca chiều',
+            required_count: 32, lesson_name: 'Bài 5 — Vận động', instructor: 'Thiếu tá Nguyễn Hữu Thắng',
+            field: 'Thao trường số 2' } },
+    ];
+
+    for (const f of fixtures) {
+        if (have.has(f.id)) continue;
+        await fetch(BASE + '/api/v1/schedules', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(f.body)
+        });
+    }
+}
+await ensureFixtures();
 
 const doc = window.document;
+
+console.log('\n[0] Đăng nhập');
+window.document.dispatchEvent(new window.Event('DOMContentLoaded', { bubbles: true }));
+await sleep(600);
+
+check('chưa đăng nhập thì hiện màn đăng nhập',
+    doc.getElementById('login-screen').style.display === 'flex',
+    doc.getElementById('login-screen').style.display);
+check('chưa đăng nhập thì chưa vào hệ thống',
+    doc.getElementById('app-layout').style.display === 'none');
+check('chưa đăng nhập thì CHƯA mở kênh sự kiện', EventSourceCalls.length === 0,
+    EventSourceCalls.join(','));
+
+// Sai mật khẩu
+doc.getElementById('login-username').value = 'cbqh';
+doc.getElementById('login-password').value = 'sai-mat-khau';
+await window.handleLogin({ preventDefault() {} });
+await sleep(500);
+check('sai mật khẩu thì báo lỗi, không cho vào',
+    doc.getElementById('login-error').textContent.includes('✗')
+    && doc.getElementById('app-layout').style.display === 'none',
+    doc.getElementById('login-error').textContent);
+check('sai mật khẩu thì xoá ô mật khẩu',
+    doc.getElementById('login-password').value === '');
+
+// Tài khoản lạ
+doc.getElementById('login-username').value = 'khong-ton-tai';
+doc.getElementById('login-password').value = 'gi-do';
+await window.handleLogin({ preventDefault() {} });
+await sleep(400);
+check('tài khoản không tồn tại cũng bị từ chối',
+    doc.getElementById('app-layout').style.display === 'none');
+
+// Đăng nhập đúng bằng nút điền nhanh
+window.fillDemoLogin('cbqh');
+check('nút tài khoản demo điền sẵn thông tin',
+    doc.getElementById('login-username').value === 'cbqh'
+    && doc.getElementById('login-password').value === 'cbqh@2026');
+await window.handleLogin({ preventDefault() {} });
+await sleep(1800);
+
+check('đăng nhập đúng thì vào được hệ thống',
+    doc.getElementById('app-layout').style.display !== 'none'
+    && doc.getElementById('login-screen').style.display === 'none');
+check('hiện tên người đăng nhập',
+    doc.getElementById('user-name').textContent.includes('Nguyễn Văn Hùng'),
+    doc.getElementById('user-name').textContent);
+check('hiện vai trò của tài khoản',
+    doc.getElementById('user-role').textContent === 'Cán bộ quản lý',
+    doc.getElementById('user-role').textContent);
+check('CBQH đăng nhập thì không thấy phân hệ III',
+    [...doc.querySelectorAll('.role-only')].every(el => el.style.display === 'none'));
+check('vào bằng CBQH thì mở màn giám sát quân số',
+    doc.querySelector('.page-view.active').id === 'view-attendance-summary',
+    doc.querySelector('.page-view.active').id);
+
+console.log('\n[1] Trang chạy không lỗi sau khi đăng nhập');
+check('app.js nạp và chạy không ném lỗi', jsErrors.length === 0, jsErrors.slice(0, 3).join(' | '));
+check('kênh sự kiện SSE mở sau khi đăng nhập',
+    EventSourceCalls.some(u => u.includes('/api/v1/events/stream')), EventSourceCalls.join(','));
+
 const activeView = doc.querySelector('.page-view.active');
 check('có đúng một màn hình đang hiển thị',
     doc.querySelectorAll('.page-view.active').length === 1, String(doc.querySelectorAll('.page-view.active').length));
@@ -79,7 +161,12 @@ check('vào thẳng màn giám sát quân số',
     activeView && activeView.id === 'view-attendance-summary', activeView && activeView.id);
 
 console.log('\n[2] Điều hướng qua đủ các màn');
-window.switchRole('qtht');   // vai trò rộng nhất, xem được mọi màn
+// Đăng nhập bằng QTHT để xem được mọi màn
+const qtht = await (await fetch(BASE + '/api/v1/auth/login', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ username: 'qtht', password: 'qtht@2026' })
+})).json();
+window.applyRole(qtht);
 const tabs = ['schedule-progress', 'attendance', 'safety', 'logs',
               'monitoring', 'schedule', 'zones', 'cameras', 'registration'];
 for (const tab of tabs) {
@@ -121,35 +208,31 @@ check('nút lọc sáng đúng nút đang chọn',
     doc.querySelector('#tt-filter-attendance .tt-btn.active').dataset.tt === undefined
     || doc.querySelector('#tt-filter-attendance .tt-btn.active').dataset.tt === '');
 
-console.log('\n[3b] Phân quyền theo vai trò');
-window.switchRole('cbqh');
-await sleep(400);
-const hiddenForCbqh = [...doc.querySelectorAll('.role-only')].every(el => el.style.display === 'none');
-check('CBQH không thấy phân hệ III', hiddenForCbqh);
-check('CBQH vẫn thấy nghiệp vụ huấn luyện',
-    doc.getElementById('nav-attendance').offsetParent !== undefined);
-check('đổi vai trò thì đổi luôn tên người dùng',
-    doc.getElementById('user-name').textContent.includes('Cán bộ quản lý'),
-    doc.getElementById('user-name').textContent);
+console.log('\n[3b] Hai tài khoản thấy hai bộ menu khác nhau');
+const cbqhUser = await (await fetch(BASE + '/api/v1/auth/login', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ username: 'cbqh', password: 'cbqh@2026' })
+})).json();
 
-window.switchRole('qtht');
-await sleep(400);
-const shownForQtht = [...doc.querySelectorAll('.role-only')].every(el => el.style.display !== 'none');
-check('QTHT thấy thêm phân hệ III', shownForQtht);
-check('vai trò QTHT hiện đúng tên',
-    doc.getElementById('user-name').textContent.includes('Quản trị hệ thống'),
-    doc.getElementById('user-name').textContent);
-
-// Đang đứng ở màn của QTHT rồi chuyển sang CBQH thì phải bị đưa về màn hợp lệ
-window.switchNavTab('cameras');
-await sleep(500);
-window.switchRole('cbqh');
-await sleep(700);
-check('đổi về CBQH khi đang ở màn quản trị thì tự chuyển về màn hợp lệ',
-    doc.querySelector('.page-view.active').id !== 'view-cameras',
-    doc.querySelector('.page-view.active').id);
-window.switchRole('qtht');
+window.applyRole(cbqhUser);
 await sleep(300);
+check('CBQH không thấy phân hệ III',
+    [...doc.querySelectorAll('.role-only')].every(el => el.style.display === 'none'));
+check('CBQH vẫn thấy nghiệp vụ huấn luyện',
+    doc.getElementById('nav-attendance') !== null);
+check('tài khoản CBQH hiện đúng vai trò',
+    doc.getElementById('user-role').textContent === 'Cán bộ quản lý',
+    doc.getElementById('user-role').textContent);
+
+window.applyRole(qtht);
+await sleep(300);
+check('QTHT thấy thêm phân hệ III',
+    [...doc.querySelectorAll('.role-only')].every(el => el.style.display !== 'none'));
+check('tài khoản QTHT hiện đúng vai trò',
+    doc.getElementById('user-role').textContent === 'Quản trị hệ thống',
+    doc.getElementById('user-role').textContent);
+check('hai tài khoản khác tên hiển thị',
+    cbqhUser.display_name !== qtht.display_name);
 
 console.log('\n[4] Dashboard an toàn');
 window.switchNavTab('safety');
@@ -232,7 +315,7 @@ check('ảnh nền vẽ vùng lấy khung hình GỐC, không lấy bản đã v
     src.includes('snapshot?overlay=0'));
 
 console.log('\n[7b] Vùng cấm bắn đạn thật tách khỏi vùng đếm quân số');
-window.switchRole('qtht');
+window.applyRole(qtht);
 window.switchNavTab('zones');
 await sleep(1200);
 

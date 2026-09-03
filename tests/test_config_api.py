@@ -209,6 +209,39 @@ check("báo đủ chỉ số vận hành",
        "registered_personnel", "pending_events"} <= set(r.json()), str(set(r.json())))
 
 # ================================================================ hợp đồng
+print("\n[4b] Đăng nhập hai tài khoản")
+
+for user, pw, role, label in [("cbqh", "cbqh@2026", "cbqh", "Cán bộ quản lý"),
+                              ("qtht", "qtht@2026", "qtht", "Quản trị hệ thống")]:
+    r = client.post("/api/v1/auth/login", json={"username": user, "password": pw})
+    check(f"đăng nhập {user} -> 200", r.status_code == 200, r.text[:200])
+    if r.status_code == 200:
+        body = r.json()
+        check(f"{user} trả đúng vai trò", body["role"] == role, str(body))
+        check(f"{user} có tên và nhãn vai trò hiển thị được",
+              body["display_name"] and body["role_label"] == label, str(body))
+        check(f"{user} KHÔNG trả mật khẩu về cho giao diện",
+              "password" not in body, str(body))
+
+for label, body, code in [
+    ("sai mật khẩu", {"username": "cbqh", "password": "sai"}, 401),
+    ("tài khoản lạ", {"username": "khongco", "password": "cbqh@2026"}, 401),
+    ("mật khẩu rỗng", {"username": "cbqh", "password": ""}, 422),
+    ("thiếu tài khoản", {"password": "cbqh@2026"}, 422),
+]:
+    r = client.post("/api/v1/auth/login", json=body)
+    check(f"từ chối: {label} -> {code}", r.status_code == code, f"nhận {r.status_code}")
+
+r = client.post("/api/v1/auth/login", json={"username": "  CBQH  ", "password": "cbqh@2026"})
+check("tên tài khoản không phân biệt hoa thường và khoảng trắng thừa",
+      r.status_code == 200, str(r.status_code))
+
+# Vai trò chỉ để giao diện hiện menu; API không kiểm quyền, phải nói rõ chứ
+# không để người dùng tưởng đã có bảo mật.
+r = client.get("/api/v1/cameras")
+check("API vẫn gọi được khi chưa đăng nhập (POC không có phiên)",
+      r.status_code == 200, str(r.status_code))
+
 print("\n[5] Hợp đồng khớp code")
 
 spec = yaml.safe_load(open(Path(__file__).resolve().parent.parent / "docs/api/openapi.yaml"))

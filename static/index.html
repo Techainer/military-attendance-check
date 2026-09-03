@@ -10,7 +10,50 @@
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <div class="app-layout">
+    <div id="login-screen" class="login-screen">
+        <form class="login-card" id="login-form" onsubmit="handleLogin(event)">
+            <div class="login-brand">
+                <div class="brand-logo">
+                    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon>
+                    </svg>
+                </div>
+                <div>
+                    <h1>HỆ THỐNG GIÁM SÁT HUẤN LUYỆN</h1>
+                    <p>Tích hợp trí tuệ nhân tạo · V1.0</p>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="login-username">Tài khoản</label>
+                <input type="text" id="login-username" class="form-input" autocomplete="username"
+                       placeholder="cbqh hoặc qtht" required autofocus>
+            </div>
+
+            <div class="form-group">
+                <label for="login-password">Mật khẩu</label>
+                <input type="password" id="login-password" class="form-input" autocomplete="current-password" required>
+            </div>
+
+            <p id="login-error" class="status-message"></p>
+            <button type="submit" class="btn-primary-green login-submit" id="login-submit">Đăng nhập</button>
+
+            <div class="login-hint">
+                <strong>Tài khoản demo</strong>
+                <button type="button" class="login-demo-btn" onclick="fillDemoLogin('cbqh')">
+                    <span>cbqh / cbqh@2026</span>
+                    <span class="muted">Cán bộ quản lý — nghiệp vụ huấn luyện</span>
+                </button>
+                <button type="button" class="login-demo-btn" onclick="fillDemoLogin('qtht')">
+                    <span>qtht / qtht@2026</span>
+                    <span class="muted">Quản trị hệ thống — thêm phân hệ III</span>
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <div class="app-layout" id="app-layout" style="display: none;">
         <!-- Sidebar Navigation -->
         <aside class="sidebar">
             <div class="brand-header">
@@ -108,20 +151,14 @@
                         🔔
                         <span class="noti-badge" id="header-noti-badge">0</span>
                     </button>
-                    <div class="role-switcher" id="role-switcher">
-                        <button class="role-btn active" id="role-btn-cbqh" onclick="switchRole('cbqh')"
-                                title="Cán bộ quản lý — theo dõi huấn luyện và quân số">
-                            CBQH
-                        </button>
-                        <button class="role-btn" id="role-btn-qtht" onclick="switchRole('qtht')"
-                                title="Quản trị hệ thống — thêm quyền cấu hình phân hệ III">
-                            QTHT
-                        </button>
-                    </div>
                     <div class="user-badge">
                         <div class="avatar-letter" id="user-avatar">H</div>
-                        <span class="user-name" id="user-name">Đại uý Nguyễn Văn Hùng</span>
+                        <div class="user-block">
+                            <span class="user-name" id="user-name">—</span>
+                            <span class="user-role" id="user-role">—</span>
+                        </div>
                     </div>
+                    <button class="logout-btn" onclick="handleLogout()" title="Đăng xuất">Đăng xuất</button>
                 </div>
             </header>
 

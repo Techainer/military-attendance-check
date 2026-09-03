@@ -2156,3 +2156,94 @@ input:checked + .slider:before {
 
 .row-clickable { cursor: pointer; }
 .row-clickable:hover { background: rgba(10, 143, 76, 0.06); }
+
+/* ===================================================================
+   MÀN ĐĂNG NHẬP
+   =================================================================== */
+
+.login-screen {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: linear-gradient(140deg, #0f2419 0%, #0b1220 55%, #101a2c 100%);
+}
+
+.login-card {
+    width: min(420px, 100%);
+    padding: 30px 28px;
+    border-radius: 16px;
+    background: #fff;
+    box-shadow: 0 24px 60px rgba(2, 12, 8, 0.5);
+}
+
+.login-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 24px;
+    padding-bottom: 18px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+}
+.login-brand h1 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: #0f172a;
+}
+.login-brand p { margin: 3px 0 0; font-size: 11px; color: #64748b; letter-spacing: 0.06em; }
+
+.login-submit { width: 100%; margin-top: 6px; padding: 11px; }
+.login-submit:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.login-hint {
+    margin-top: 22px;
+    padding-top: 16px;
+    border-top: 1px dashed rgba(148, 163, 184, 0.4);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.login-hint > strong {
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #64748b;
+}
+.login-demo-btn {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 9px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    background: rgba(148, 163, 184, 0.08);
+    text-align: left;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    color: #0f172a;
+}
+.login-demo-btn:hover { border-color: #0a8f4c; background: rgba(10, 143, 76, 0.08); }
+.login-demo-btn .muted { font-weight: 400; font-size: 11px; }
+
+/* Người dùng đang đăng nhập trên thanh tiêu đề */
+.user-block { display: flex; flex-direction: column; line-height: 1.25; }
+.user-role { font-size: 11px; color: #64748b; }
+.logout-btn {
+    padding: 7px 14px;
+    border-radius: 8px;
+    border: 1px solid rgba(148, 163, 184, 0.4);
+    background: transparent;
+    color: #475569;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.logout-btn:hover { border-color: #dc2626; color: #b91c1c; background: rgba(220, 38, 38, 0.06); }

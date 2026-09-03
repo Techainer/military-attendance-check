@@ -66,6 +66,8 @@ tags:
     description: Chỉ số nhanh cho màn tổng hợp và dashboard an toàn (đầu ra)
   - name: Sự kiện
     description: Dòng sự kiện AI, cảnh báo an toàn, xác nhận xử lý (đầu ra)
+  - name: Đăng nhập
+    description: Xác thực tối thiểu cho bản POC — không phải ranh giới bảo mật
   - name: Hệ thống
 
 paths:
@@ -650,6 +652,34 @@ paths:
   # ------------------------------------------------------------------
   # Hệ thống
   # ------------------------------------------------------------------
+  /auth/login:
+    post:
+      tags: [Đăng nhập]
+      summary: Đăng nhập, trả về vai trò
+      description: |
+        Bản POC có hai tài khoản khai cứng trong `app/auth.py`, không cơ sở dữ liệu.
+
+        **Không phải ranh giới bảo mật.** Không tạo phiên, không cấp token, và
+        các endpoint khác **không kiểm quyền** — gọi thẳng API vẫn làm được mọi
+        thứ. Chỉ dùng để giao diện biết hiện menu nào.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginInput' }
+      responses:
+        '200':
+          description: Đúng tài khoản
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoggedInUser' }
+        '401':
+          description: Sai tài khoản hoặc mật khẩu
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
   /system/time:
     get:
       tags: [Hệ thống]
@@ -732,6 +762,29 @@ components:
   schemas:
 
     # ---------------- chung ----------------
+    LoginInput:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string, minLength: 1, maxLength: 60, example: cbqh }
+        password: { type: string, minLength: 1, maxLength: 200, format: password }
+
+    LoggedInUser:
+      type: object
+      required: [username, role, display_name, role_label, avatar]
+      properties:
+        username: { type: string, example: cbqh }
+        role:
+          type: string
+          description: '`cbqh` xem nghiệp vụ huấn luyện; `qtht` có thêm phân hệ III.'
+          enum: [cbqh, qtht]
+        display_name: { type: string, example: Đại uý Nguyễn Văn Hùng }
+        role_label: { type: string, example: Cán bộ quản lý }
+        avatar:
+          type: string
+          description: Một ký tự dựng sẵn cho ô đại diện.
+          example: H
+
     Problem:
       type: object
       required: [title, status]

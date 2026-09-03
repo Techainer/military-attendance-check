@@ -23,8 +23,9 @@ from app.face_engine import FaceEngine
 from app.attendance import AttendanceManager, person_label
 from app.events import CAMERA_ID, CAMERA_NAME, EventStore
 from app.safety import RULE_ATTENDANCE, ZoneStore
-from app.schemas import (AckInput, CameraInput, CameraPatch, ScheduleInput,
-                         SchedulePatch, ZoneInput, ZonePatch)
+from app.auth import authenticate
+from app.schemas import (AckInput, CameraInput, CameraPatch, LoginInput,
+                         ScheduleInput, SchedulePatch, ZoneInput, ZonePatch)
 from app.storage import read_json_list, write_json_list
 
 
@@ -1223,6 +1224,21 @@ async def v1_session_checks(session_id: str):
         {**checks[phase], "evidence_url": checks[phase].get("evidence")}
         for phase in ("start", "end", "manual") if phase in checks
     ]
+
+
+# ----------------- API v1: đăng nhập -----------------
+
+@app.post("/api/v1/auth/login")
+async def v1_login(body: LoginInput):
+    """Kiểm tra tài khoản và trả về vai trò để giao diện hiện đúng menu.
+
+    Không tạo phiên và không cấp token: các endpoint khác **không** kiểm quyền.
+    Xem ghi chú trong ``app/auth.py``.
+    """
+    user = authenticate(body.username, body.password)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Sai tài khoản hoặc mật khẩu")
+    return user
 
 
 # ----------------- API v1: hệ thống -----------------

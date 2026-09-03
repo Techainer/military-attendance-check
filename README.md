@@ -43,6 +43,21 @@ npm install jsdom && node tests/test_ui.mjs
 Lưu ý: test ghi đè `data/cameras.json`, `data/schedules.json` và
 `data/zone_rules.json`. Sao lưu trước nếu đang có cấu hình thật trên máy.
 
+## Tài khoản
+
+Bản POC có hai tài khoản khai cứng trong `app/auth.py`, không cơ sở dữ liệu:
+
+| Tài khoản | Mật khẩu | Vai trò | Xem được |
+|---|---|---|---|
+| `cbqh` | `cbqh@2026` | Cán bộ quản lý | Nghiệp vụ huấn luyện (phân hệ I + II) |
+| `qtht` | `qtht@2026` | Quản trị hệ thống | Thêm phân hệ III: camera, vùng, thời khoá biểu, đăng ký khuôn mặt |
+
+Đổi mật khẩu bằng biến môi trường `CBQH_PASSWORD` và `QTHT_PASSWORD`.
+
+**Đây không phải bảo mật thật.** Không có phiên, không có token, và các endpoint
+khác không kiểm quyền — gọi thẳng API vẫn làm được mọi thứ. Vai trò chỉ để giao
+diện hiện đúng menu.
+
 ## Dữ liệu chạy thử
 
 ```bash
