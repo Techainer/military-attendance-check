@@ -75,12 +75,13 @@ const doc = window.document;
 const activeView = doc.querySelector('.page-view.active');
 check('có đúng một màn hình đang hiển thị',
     doc.querySelectorAll('.page-view.active').length === 1, String(doc.querySelectorAll('.page-view.active').length));
-check('vào thẳng màn giám sát quân số đào tạo',
+check('vào thẳng màn giám sát quân số',
     activeView && activeView.id === 'view-attendance-summary', activeView && activeView.id);
 
-console.log('\n[2] Điều hướng qua đủ các màn theo tài liệu');
-const tabs = ['dt-schedule', 'dt-attendance', 'dt-safety', 'cd-attendance', 'cd-safety',
-              'monitoring', 'schedule', 'zones', 'cameras', 'registration', 'logs'];
+console.log('\n[2] Điều hướng qua đủ các màn');
+window.switchRole('qtht');   // vai trò rộng nhất, xem được mọi màn
+const tabs = ['schedule-progress', 'attendance', 'safety', 'logs',
+              'monitoring', 'schedule', 'zones', 'cameras', 'registration'];
 for (const tab of tabs) {
     jsErrors.length = 0;
     window.switchNavTab(tab);
@@ -90,19 +91,68 @@ for (const tab of tabs) {
           jsErrors.slice(0, 2).join(' | ') || 'không có màn nào hiển thị');
 }
 
-console.log('\n[3] Hai phân hệ dùng chung khung nhìn nhưng khác dữ liệu');
-window.switchNavTab('dt-attendance');
+console.log('\n[3] Phân hệ I và II là một màn, tách bằng bộ lọc loại huấn luyện');
+window.switchNavTab('attendance');
 await sleep(900);
-const dtTitle = doc.getElementById('as-title').textContent;
-window.switchNavTab('cd-attendance');
+const rowsAll = doc.querySelectorAll('#as-tbody tr').length;
+const titleAll = doc.getElementById('as-title').textContent;
+
+window.setTrainingFilter('dao_tao');
 await sleep(900);
-const cdTitle = doc.getElementById('as-title').textContent;
-check('phân hệ đào tạo có tiêu đề riêng', dtTitle.includes('ĐÀO TẠO'), dtTitle);
-check('phân hệ chiến đấu có tiêu đề riêng', cdTitle.includes('CHIẾN ĐẤU'), cdTitle);
-check('hai phân hệ không dùng chung tiêu đề', dtTitle !== cdTitle);
+const rowsDt = doc.querySelectorAll('#as-tbody tr').length;
+const titleDt = doc.getElementById('as-title').textContent;
+
+window.setTrainingFilter('chien_dau');
+await sleep(900);
+const rowsCd = doc.querySelectorAll('#as-tbody tr').length;
+const titleCd = doc.getElementById('as-title').textContent;
+
+window.setTrainingFilter('');
+await sleep(900);
+
+check('không lọc thì thấy cả hai loại', rowsAll >= 1, String(rowsAll));
+check('lọc đào tạo ra ít ca hơn tổng', rowsDt < rowsAll, `${rowsDt} / ${rowsAll}`);
+check('lọc chiến đấu ra ít ca hơn tổng', rowsCd < rowsAll, `${rowsCd} / ${rowsAll}`);
+check('hai loại cộng lại bằng tổng', rowsDt + rowsCd === rowsAll, `${rowsDt}+${rowsCd} vs ${rowsAll}`);
+check('tiêu đề đổi theo loại đang lọc',
+    titleDt.includes('ĐÀO TẠO') && titleCd.includes('CHIẾN ĐẤU') && !titleAll.includes('ĐÀO TẠO'),
+    `${titleAll} | ${titleDt} | ${titleCd}`);
+check('nút lọc sáng đúng nút đang chọn',
+    doc.querySelector('#tt-filter-attendance .tt-btn.active').dataset.tt === undefined
+    || doc.querySelector('#tt-filter-attendance .tt-btn.active').dataset.tt === '');
+
+console.log('\n[3b] Phân quyền theo vai trò');
+window.switchRole('cbqh');
+await sleep(400);
+const hiddenForCbqh = [...doc.querySelectorAll('.role-only')].every(el => el.style.display === 'none');
+check('CBQH không thấy phân hệ III', hiddenForCbqh);
+check('CBQH vẫn thấy nghiệp vụ huấn luyện',
+    doc.getElementById('nav-attendance').offsetParent !== undefined);
+check('đổi vai trò thì đổi luôn tên người dùng',
+    doc.getElementById('user-name').textContent.includes('Cán bộ quản lý'),
+    doc.getElementById('user-name').textContent);
+
+window.switchRole('qtht');
+await sleep(400);
+const shownForQtht = [...doc.querySelectorAll('.role-only')].every(el => el.style.display !== 'none');
+check('QTHT thấy thêm phân hệ III', shownForQtht);
+check('vai trò QTHT hiện đúng tên',
+    doc.getElementById('user-name').textContent.includes('Quản trị hệ thống'),
+    doc.getElementById('user-name').textContent);
+
+// Đang đứng ở màn của QTHT rồi chuyển sang CBQH thì phải bị đưa về màn hợp lệ
+window.switchNavTab('cameras');
+await sleep(500);
+window.switchRole('cbqh');
+await sleep(700);
+check('đổi về CBQH khi đang ở màn quản trị thì tự chuyển về màn hợp lệ',
+    doc.querySelector('.page-view.active').id !== 'view-cameras',
+    doc.querySelector('.page-view.active').id);
+window.switchRole('qtht');
+await sleep(300);
 
 console.log('\n[4] Dashboard an toàn');
-window.switchNavTab('dt-safety');
+window.switchNavTab('safety');
 await sleep(1200);
 check('có chỉ báo trạng thái an toàn',
     !!doc.getElementById('sf-state-label').textContent.trim(),
@@ -123,6 +173,28 @@ check('luồng camera trường bắn được gắn',
     (doc.getElementById('sf-stream').getAttribute('src') || '').includes('stream.mjpg'),
     doc.getElementById('sf-stream').getAttribute('src'));
 
+console.log('\n[4b] Lịch huấn luyện và form tạo ca');
+window.switchNavTab('schedule-progress');
+await sleep(1200);
+const schRows = doc.querySelectorAll('#dt-schedule-tbody tr');
+check('bảng lịch có dữ liệu giả lập', schRows.length >= 1, String(schRows.length));
+check('mỗi ca hiện nhãn loại huấn luyện',
+    doc.querySelector('#dt-schedule-tbody .tt-tag') !== null);
+check('có thanh tiến độ', doc.querySelector('#dt-schedule-tbody .progress-fill') !== null);
+
+window.openScheduleModal();
+await sleep(200);
+check('mở được form tạo ca từ màn lịch',
+    doc.getElementById('schedule-modal').style.display === 'flex');
+check('form có ô chọn loại huấn luyện',
+    doc.getElementById('sch-training-type') !== null);
+check('form có giáo viên / thao trường / bài học cho màn chi tiết',
+    doc.getElementById('sch-instructor') && doc.getElementById('sch-field')
+    && doc.getElementById('sch-lesson-name'));
+window.closeScheduleModal();
+check('đóng được form tạo ca',
+    doc.getElementById('schedule-modal').style.display === 'none');
+
 console.log('\n[5] Quản lý camera');
 window.switchNavTab('cameras');
 await sleep(1000);
@@ -136,7 +208,7 @@ window.closeCameraModal();
 check('đóng được form', doc.getElementById('camera-modal').style.display === 'none');
 
 console.log('\n[6] Rời màn thì ngắt luồng hình, không chạy ngầm');
-window.switchNavTab('dt-safety');
+window.switchNavTab('safety');
 await sleep(600);
 const sfBefore = doc.getElementById('sf-stream').getAttribute('src');
 window.switchNavTab('logs');
@@ -167,6 +239,10 @@ console.log();
 if (failures.length) {
     console.log(`${failures.length} kiểm thử KHÔNG đạt:`);
     failures.forEach(f => console.log('  -', f));
+    dom.window.close();
     process.exit(1);
 }
 console.log('Tất cả kiểm thử giao diện đạt.');
+// jsdom giữ timer và kết nối sống, không tự thoát; đóng cửa sổ rồi kết thúc
+dom.window.close();
+process.exit(0);

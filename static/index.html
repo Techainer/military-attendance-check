@@ -27,43 +27,35 @@
                 <button class="sidebar-toggle" title="Thu gọn menu">‹</button>
             </div>
 
-            <div class="nav-section-title">PHÂN HỆ I · HUẤN LUYỆN ĐÀO TẠO</div>
+            <div class="nav-section-title">NGHIỆP VỤ HUẤN LUYỆN</div>
             <nav class="sidebar-nav">
-                <a href="#dt-schedule" class="nav-item" id="nav-dt-schedule" onclick="switchNavTab('dt-schedule')">
+                <a href="#schedule-progress" class="nav-item" id="nav-schedule-progress" onclick="switchNavTab('schedule-progress')">
                     <span class="nav-icon nav-glyph">🗓</span>
                     <span>Lịch &amp; Tiến độ</span>
                 </a>
-                <a href="#dt-attendance" class="nav-item active" id="nav-dt-attendance" onclick="switchNavTab('dt-attendance')">
+                <a href="#attendance" class="nav-item active" id="nav-attendance" onclick="switchNavTab('attendance')">
                     <span class="nav-icon nav-glyph">🎖</span>
                     <span>Giám sát quân số</span>
                 </a>
-                <a href="#dt-safety" class="nav-item" id="nav-dt-safety" onclick="switchNavTab('dt-safety')">
+                <a href="#safety" class="nav-item" id="nav-safety" onclick="switchNavTab('safety')">
                     <span class="nav-icon nav-glyph">🎯</span>
                     <span>An toàn bắn đạn thật</span>
                 </a>
-            </nav>
-
-            <div class="nav-section-title">PHÂN HỆ II · HUẤN LUYỆN CHIẾN ĐẤU</div>
-            <nav class="sidebar-nav">
-                <a href="#cd-attendance" class="nav-item" id="nav-cd-attendance" onclick="switchNavTab('cd-attendance')">
-                    <span class="nav-icon nav-glyph">🎖</span>
-                    <span>Giám sát quân số</span>
-                </a>
-                <a href="#cd-safety" class="nav-item" id="nav-cd-safety" onclick="switchNavTab('cd-safety')">
-                    <span class="nav-icon nav-glyph">🎯</span>
-                    <span>An toàn bắn đạn thật</span>
+                <a href="#logs" class="nav-item" id="nav-logs" onclick="switchNavTab('logs')">
+                    <span class="nav-icon nav-glyph">📋</span>
+                    <span>Nhật ký điểm danh</span>
                 </a>
             </nav>
 
-            <div class="nav-section-title">PHÂN HỆ III · QUẢN TRỊ HỆ THỐNG</div>
-            <nav class="sidebar-nav">
+            <div class="nav-section-title role-only" data-role="qtht">PHÂN HỆ III · QUẢN TRỊ HỆ THỐNG</div>
+            <nav class="sidebar-nav role-only" data-role="qtht">
                 <a href="#monitoring" class="nav-item" id="nav-monitoring" onclick="switchNavTab('monitoring')">
                     <span class="nav-icon nav-glyph">📹</span>
                     <span>Giám sát trực tiếp</span>
                 </a>
                 <a href="#schedule" class="nav-item" id="nav-schedule" onclick="switchNavTab('schedule')">
                     <span class="nav-icon nav-glyph">⚙️</span>
-                    <span>Cấu hình giám sát</span>
+                    <span>Cấu hình thời khoá biểu</span>
                 </a>
                 <a href="#zones" class="nav-item" id="nav-zones" onclick="switchNavTab('zones')">
                     <span class="nav-icon nav-glyph">⬡</span>
@@ -76,10 +68,6 @@
                 <a href="#registration" class="nav-item" id="nav-registration" onclick="switchNavTab('registration')">
                     <span class="nav-icon nav-glyph">🪪</span>
                     <span>Đăng ký khuôn mặt</span>
-                </a>
-                <a href="#logs" class="nav-item" id="nav-logs" onclick="switchNavTab('logs')">
-                    <span class="nav-icon nav-glyph">📋</span>
-                    <span>Nhật ký điểm danh</span>
                 </a>
             </nav>
         </aside>
@@ -120,9 +108,19 @@
                         🔔
                         <span class="noti-badge" id="header-noti-badge">0</span>
                     </button>
+                    <div class="role-switcher" id="role-switcher">
+                        <button class="role-btn active" id="role-btn-cbqh" onclick="switchRole('cbqh')"
+                                title="Cán bộ quản lý — theo dõi huấn luyện và quân số">
+                            CBQH
+                        </button>
+                        <button class="role-btn" id="role-btn-qtht" onclick="switchRole('qtht')"
+                                title="Quản trị hệ thống — thêm quyền cấu hình phân hệ III">
+                            QTHT
+                        </button>
+                    </div>
                     <div class="user-badge">
-                        <div class="avatar-letter">H</div>
-                        <span class="user-name">Đại úy Nguyễn Văn Hùng</span>
+                        <div class="avatar-letter" id="user-avatar">H</div>
+                        <span class="user-name" id="user-name">Đại uý Nguyễn Văn Hùng</span>
                     </div>
                 </div>
             </header>
@@ -470,8 +468,8 @@
                                 <h2>CẤU HÌNH THỜI KHÓA BIỂU & CA ĐIỂM DANH TÁC CHIẾN</h2>
                                 <p class="card-subtitle">LẬP LỊCH TRỰC, HUẤN LUYỆN VÀ TỰ ĐỘNG ĐIỂM DANH QUÂN SỐ THEO CA</p>
                             </div>
-                            <button class="btn-primary-green" onclick="toggleScheduleModal()">
-                                ➕ Thêm Ca Điểm Danh
+                            <button class="btn-primary-green" onclick="openScheduleModal()">
+                                ➕ Thêm ca huấn luyện
                             </button>
                         </div>
 
@@ -500,7 +498,7 @@
                 </section>
 
                 <!-- MÀN 1.1 — TỔNG HỢP LỊCH & TIẾN ĐỘ HUẤN LUYỆN ĐÀO TẠO -->
-                <section id="view-dt-schedule" class="page-view">
+                <section id="view-schedule-progress" class="page-view">
                     <div class="glass-card section-card">
                         <div class="card-header flex-between">
                             <div>
@@ -510,8 +508,16 @@
                             <div class="table-filters">
                                 <input type="date" id="dt-schedule-date" class="filter-select" onchange="loadTrainingSchedule()">
                                 <input type="text" id="dt-schedule-search" class="filter-select" placeholder="Lọc theo lớp / đơn vị" oninput="loadTrainingSchedule()">
+                                <button class="btn-primary-green" onclick="openScheduleModal()">➕ Thêm ca huấn luyện</button>
                             </div>
                         </div>
+
+                        <div class="training-filter" id="tt-filter-schedule">
+                            <button class="tt-btn active" data-tt="" onclick="setTrainingFilter('')">Tất cả</button>
+                            <button class="tt-btn" data-tt="dao_tao" onclick="setTrainingFilter('dao_tao')">Huấn luyện đào tạo</button>
+                            <button class="tt-btn" data-tt="chien_dau" onclick="setTrainingFilter('chien_dau')">Huấn luyện chiến đấu</button>
+                        </div>
+
 
                         <div class="log-metrics-grid">
                             <div class="metric-card">
@@ -593,6 +599,13 @@
                             </div>
                             <button class="btn-toolbar-neutral" onclick="loadAttendanceSummary()">↻ Làm mới</button>
                         </div>
+
+                        <div class="training-filter" id="tt-filter-attendance">
+                            <button class="tt-btn active" data-tt="" onclick="setTrainingFilter('')">Tất cả</button>
+                            <button class="tt-btn" data-tt="dao_tao" onclick="setTrainingFilter('dao_tao')">Huấn luyện đào tạo</button>
+                            <button class="tt-btn" data-tt="chien_dau" onclick="setTrainingFilter('chien_dau')">Huấn luyện chiến đấu</button>
+                        </div>
+
 
                         <div class="log-metrics-grid">
                             <div class="metric-card">
@@ -713,6 +726,13 @@
                                 <span class="pill-dot"></span><span id="sf-state-label">Bình thường</span>
                             </div>
                         </div>
+
+                        <div class="training-filter" id="tt-filter-safety">
+                            <button class="tt-btn active" data-tt="" onclick="setTrainingFilter('')">Tất cả</button>
+                            <button class="tt-btn" data-tt="dao_tao" onclick="setTrainingFilter('dao_tao')">Huấn luyện đào tạo</button>
+                            <button class="tt-btn" data-tt="chien_dau" onclick="setTrainingFilter('chien_dau')">Huấn luyện chiến đấu</button>
+                        </div>
+
 
                         <div class="safety-grid">
                             <div class="surveillance-screen-card">
@@ -938,15 +958,25 @@
     <div id="schedule-modal" class="modal-backdrop" style="display: none;">
         <div class="modal-content glass-card">
             <div class="modal-header">
-                <h3>Thêm Ca Điểm Danh & Thời Khóa Biểu Mới</h3>
-                <button class="btn-close-modal" onclick="toggleScheduleModal()">✕</button>
+                <h3 id="schedule-modal-title">Thêm ca huấn luyện</h3>
+                <button class="btn-close-modal" onclick="closeScheduleModal()">✕</button>
             </div>
             <form id="add-schedule-form" onsubmit="handleCreateSchedule(event)">
+                <input type="hidden" id="sch-id">
+
                 <div class="form-group">
-                    <label>Tên nhiệm vụ / Nội dung</label>
-                    <input type="text" id="sch-name-input" placeholder="Huấn luyện tác chiến ban đêm" required class="form-input">
+                    <label>Tên nhiệm vụ / Nội dung huấn luyện</label>
+                    <input type="text" id="sch-name-input" placeholder="Huấn luyện bắn súng tiểu liên AK" required class="form-input">
                 </div>
+
                 <div class="form-row-two">
+                    <div class="form-group">
+                        <label>Loại huấn luyện</label>
+                        <select id="sch-training-type" required class="form-input form-select">
+                            <option value="dao_tao">Huấn luyện đào tạo (Phân hệ I)</option>
+                            <option value="chien_dau">Huấn luyện chiến đấu (Phân hệ II)</option>
+                        </select>
+                    </div>
                     <div class="form-group">
                         <label>Ca trực</label>
                         <select id="sch-shift-select" required class="form-input form-select">
@@ -955,6 +985,9 @@
                             <option value="Ca đêm">Ca đêm</option>
                         </select>
                     </div>
+                </div>
+
+                <div class="form-row-two">
                     <div class="form-group">
                         <label>Đơn vị áp dụng</label>
                         <select id="sch-unit-select" required class="form-input form-select">
@@ -964,7 +997,12 @@
                             <option value="Tiểu đoàn 3">Tiểu đoàn 3</option>
                         </select>
                     </div>
+                    <div class="form-group">
+                        <label>Đội học / Lớp</label>
+                        <input type="text" id="sch-class-name" placeholder="Đội học A1" class="form-input">
+                    </div>
                 </div>
+
                 <div class="form-row-two">
                     <div class="form-group">
                         <label>Giờ bắt đầu</label>
@@ -975,9 +1013,26 @@
                         <input type="time" id="sch-end-time" value="11:30" required class="form-input">
                     </div>
                 </div>
+
                 <div class="form-row-two">
                     <div class="form-group">
-                        <label>Điểm danh trong N phút đầu giờ</label>
+                        <label>Tên bài học</label>
+                        <input type="text" id="sch-lesson-name" placeholder="Bài 3 — Ngắm bắn mục tiêu cố định" class="form-input">
+                    </div>
+                    <div class="form-group">
+                        <label>Giáo viên phụ trách</label>
+                        <input type="text" id="sch-instructor" placeholder="Thượng uý Trần Văn B" class="form-input">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Thao trường thực hiện</label>
+                    <input type="text" id="sch-field" placeholder="Trường bắn số 1" class="form-input">
+                </div>
+
+                <div class="form-row-two">
+                    <div class="form-group">
+                        <label>Điểm danh N phút mỗi mốc</label>
                         <input type="number" id="sch-window-input" value="5" min="1" max="60" required class="form-input">
                     </div>
                     <div class="form-group">
@@ -985,9 +1040,23 @@
                         <input type="number" id="sch-count-input" value="45" min="1" required class="form-input">
                     </div>
                 </div>
-                <button type="submit" class="btn-primary-green" style="margin-top: 12px;">
-                    Lưu Ca Thời Khóa Biểu
-                </button>
+
+                <div class="form-row-two">
+                    <div class="form-group">
+                        <label>Dung sai đi chậm (phút)</label>
+                        <input type="number" id="sch-late-tol" value="5" min="0" max="240" class="form-input">
+                    </div>
+                    <div class="form-group">
+                        <label>Dung sai về sớm (phút)</label>
+                        <input type="number" id="sch-early-tol" value="5" min="0" max="240" class="form-input">
+                    </div>
+                </div>
+
+                <p id="sch-form-status" class="status-message"></p>
+                <div class="modal-actions">
+                    <button type="button" class="btn-toolbar-neutral" onclick="closeScheduleModal()">Hủy bỏ</button>
+                    <button type="submit" class="btn-primary-green">Lưu ca huấn luyện</button>
+                </div>
             </form>
         </div>
     </div>

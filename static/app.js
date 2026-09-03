@@ -118,12 +118,11 @@ setInterval(fetchServerClock, 5 * 60 * 1000);
 // ----------------- NAVIGATION TABS -----------------
 let scheduleRefreshTimer = null;
 
-// Phân hệ I và II dùng chung khung nhìn, chỉ khác training_type
+// Phân hệ I và II không phải hai nhóm màn riêng: cùng một nghiệp vụ, chỉ khác
+// loại lịch. Nên dùng chung màn và tách bằng bộ lọc training_type.
 const SHARED_VIEW = {
-    'dt-attendance': 'attendance-summary',
-    'cd-attendance': 'attendance-summary',
-    'dt-safety': 'safety',
-    'cd-safety': 'safety'
+    'attendance': 'attendance-summary',
+    'safety': 'safety'
 };
 
 function switchNavTab(tabName) {
@@ -144,11 +143,9 @@ function switchNavTab(tabName) {
     if (mainImg && tabName !== 'monitoring') detachStream(mainImg);
 
     const titles = {
-        'dt-schedule': 'Đào tạo / Lịch & Tiến độ',
-        'dt-attendance': 'Đào tạo / Giám sát quân số',
-        'dt-safety': 'Đào tạo / An toàn bắn đạn thật',
-        'cd-attendance': 'Chiến đấu / Giám sát quân số',
-        'cd-safety': 'Chiến đấu / An toàn bắn đạn thật',
+        'schedule-progress': 'Lịch & Tiến độ huấn luyện',
+        'attendance': 'Giám sát quân số',
+        'safety': 'An toàn bắn đạn thật',
         'session-detail': 'Chi tiết lịch huấn luyện',
         'attendance-detail': 'Chi tiết giám sát quân số',
         'monitoring': 'Giám sát trực tiếp',
@@ -191,19 +188,19 @@ function switchNavTab(tabName) {
 
     if (safetyPollTimer) { clearInterval(safetyPollTimer); safetyPollTimer = null; }
     currentSafetyType = null;
+    currentTabName = tabName;
+
+    syncTrainingFilterButtons();
 
     switch (tabName) {
-        case 'dt-schedule':
+        case 'schedule-progress':
             loadTrainingSchedule();
             break;
-        case 'dt-attendance':
-        case 'cd-attendance':
-            currentTrainingType = tabName === 'dt-attendance' ? 'dao_tao' : 'chien_dau';
+        case 'attendance':
             loadAttendanceSummary();
             break;
-        case 'dt-safety':
-        case 'cd-safety':
-            currentSafetyType = tabName === 'dt-safety' ? 'dao_tao' : 'chien_dau';
+        case 'safety':
+            currentSafetyType = currentTrainingType;
             loadSafetyDashboard();
             // Màn hoạt động thời gian thực, giữ nguyên trang và tự làm mới
             safetyPollTimer = setInterval(loadSafetyDashboard, 15000);
@@ -1257,11 +1254,40 @@ window.saveZoneRules = saveZoneRules;
 const schedulesTbody = document.getElementById('schedules-tbody');
 const scheduleModal = document.getElementById('schedule-modal');
 
-function toggleScheduleModal() {
-    if (!scheduleModal) return;
-    scheduleModal.style.display = scheduleModal.style.display === 'none' ? 'flex' : 'none';
+function openScheduleModal(schedule) {
+    const modal = document.getElementById('schedule-modal');
+    if (!modal) return;
+    const sch = schedule || {};
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+
+    document.getElementById('schedule-modal-title').textContent =
+        sch.id ? 'Cập nhật ca huấn luyện' : 'Thêm ca huấn luyện';
+    set('sch-id', sch.id || '');
+    set('sch-name-input', sch.name || '');
+    // Ca mới mặc định theo loại đang lọc, đỡ phải chọn lại
+    set('sch-training-type', sch.training_type || currentTrainingType || 'dao_tao');
+    set('sch-shift-select', sch.shift || 'Ca sáng');
+    set('sch-unit-select', sch.unit || 'Đại đội 1');
+    set('sch-class-name', sch.class_name || '');
+    set('sch-start-time', sch.start_time || '07:00');
+    set('sch-end-time', sch.end_time || '11:30');
+    set('sch-lesson-name', sch.lesson_name || '');
+    set('sch-instructor', sch.instructor || '');
+    set('sch-field', sch.field || '');
+    set('sch-window-input', sch.check_window_mins || 5);
+    set('sch-count-input', sch.required_count || 45);
+    set('sch-late-tol', sch.late_tolerance_mins != null ? sch.late_tolerance_mins : 5);
+    set('sch-early-tol', sch.early_leave_tolerance_mins != null ? sch.early_leave_tolerance_mins : 5);
+    document.getElementById('sch-form-status').textContent = '';
+    modal.style.display = 'flex';
 }
-window.toggleScheduleModal = toggleScheduleModal;
+window.openScheduleModal = openScheduleModal;
+
+function closeScheduleModal() {
+    const modal = document.getElementById('schedule-modal');
+    if (modal) modal.style.display = 'none';
+}
+window.closeScheduleModal = closeScheduleModal;
 
 async function loadSchedules() {
     if (!schedulesTbody) return;
@@ -1336,37 +1362,46 @@ function renderSchedulesTable(schedules) {
 
 async function handleCreateSchedule(e) {
     e.preventDefault();
-    const name = document.getElementById('sch-name-input').value.trim();
-    const shift = document.getElementById('sch-shift-select').value;
-    const unit = document.getElementById('sch-unit-select').value;
-    const startTime = document.getElementById('sch-start-time').value;
-    const endTime = document.getElementById('sch-end-time').value;
-    const windowMins = parseInt(document.getElementById('sch-window-input').value) || 5;
-    const requiredCount = parseInt(document.getElementById('sch-count-input').value) || 45;
+    const val = (id) => (document.getElementById(id) || {}).value;
+    const num = (id, fallback) => parseInt(val(id), 10) || fallback;
+    const id = val('sch-id');
+    const status = document.getElementById('sch-form-status');
 
+    // Trường lõi AI đọc thì gửi đúng kiểu; lesson_name / instructor / field /
+    // class_name là của giao diện, backend giữ nguyên và trả lại.
     const payload = {
-        name,
-        shift,
-        unit,
-        start_time: startTime,
-        end_time: endTime,
-        check_window_mins: windowMins,
-        required_count: requiredCount
+        name: (val('sch-name-input') || '').trim(),
+        training_type: val('sch-training-type'),
+        shift: val('sch-shift-select'),
+        unit: val('sch-unit-select'),
+        class_name: (val('sch-class-name') || '').trim(),
+        start_time: val('sch-start-time'),
+        end_time: val('sch-end-time'),
+        lesson_name: (val('sch-lesson-name') || '').trim(),
+        instructor: (val('sch-instructor') || '').trim(),
+        field: (val('sch-field') || '').trim(),
+        check_window_mins: num('sch-window-input', 5),
+        required_count: num('sch-count-input', 45),
+        late_tolerance_mins: num('sch-late-tol', 5),
+        early_leave_tolerance_mins: num('sch-early-tol', 5)
     };
 
     try {
-        const res = await fetch('/api/schedules', {
-            method: 'POST',
+        const res = await fetch(id ? `/api/v1/schedules/${id}` : '/api/v1/schedules', {
+            method: id ? 'PATCH' : 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
-        if (res.ok) {
-            toggleScheduleModal();
-            loadSchedules();
-            alert('✓ Đã tạo ca thời khóa biểu mới!');
-        }
+        if (!res.ok) throw new Error(describeApiError(await res.json()));
+
+        closeScheduleModal();
+        loadSchedules();
+        loadTrainingSchedule();
     } catch (err) {
-        alert('Lỗi tạo thời khóa biểu: ' + err.message);
+        if (status) {
+            status.textContent = `✗ ${err.message}`;
+            status.style.color = '#dc2626';
+        }
     }
 }
 window.handleCreateSchedule = handleCreateSchedule;
@@ -1585,13 +1620,43 @@ window.exportAttendanceLogsCsv = exportAttendanceLogsCsv;
 // hai nhóm màn riêng nhưng nghiệp vụ giống hệt nhau nên không nhân đôi code.
 // =====================================================================
 
-let currentTrainingType = 'dao_tao';
+// Rỗng = xem cả hai loại huấn luyện. Phân hệ I và II chỉ khác nhau ở đây.
+let currentTrainingType = '';
+let currentTabName = 'attendance';
 let currentSafetyType = null;
 let attendanceDetailData = { items: [], session: null };
 let safetyPollTimer = null;
 let isSafetySirenMuted = false;
 
-const TRAINING_LABEL = { dao_tao: 'Đào tạo', chien_dau: 'Chiến đấu' };
+const TRAINING_LABEL = { dao_tao: 'Đào tạo', chien_dau: 'Chiến đấu', '': 'Toàn đơn vị' };
+const TRAINING_TAG = {
+    dao_tao: '<span class="tt-tag tt-dt">Đào tạo</span>',
+    chien_dau: '<span class="tt-tag tt-cd">Chiến đấu</span>'
+};
+
+function trainingQuery(prefix) {
+    return currentTrainingType ? `${prefix}training_type=${currentTrainingType}` : '';
+}
+
+function syncTrainingFilterButtons() {
+    document.querySelectorAll('.training-filter .tt-btn').forEach(btn => {
+        btn.classList.toggle('active', (btn.dataset.tt || '') === currentTrainingType);
+    });
+}
+
+function setTrainingFilter(value) {
+    currentTrainingType = value || '';
+    syncTrainingFilterButtons();
+
+    // Nạp lại đúng màn đang xem, không nạp cả ba
+    if (currentTabName === 'schedule-progress') loadTrainingSchedule();
+    else if (currentTabName === 'attendance') loadAttendanceSummary();
+    else if (currentTabName === 'safety') {
+        currentSafetyType = currentTrainingType;
+        loadSafetyDashboard();
+    }
+}
+window.setTrainingFilter = setTrainingFilter;
 const STATE_CLASS = {
     upcoming: 'status-neutral', check_start: 'status-active',
     running: 'status-ok', check_end: 'status-active', finished: 'status-neutral'
@@ -1624,7 +1689,7 @@ async function loadTrainingSchedule() {
     const date = (dateEl && dateEl.value) ? `&date=${dateEl.value}` : '';
 
     try {
-        const data = await getJson(`/api/v1/summary/training?training_type=dao_tao${date}`);
+        const data = await getJson(`/api/v1/summary/training?_=1${trainingQuery('&')}${date}`);
         const rows = data.sessions.filter(s =>
             !q || `${s.name} ${s.unit}`.toLowerCase().includes(q.toLowerCase()));
 
@@ -1643,7 +1708,8 @@ async function loadTrainingSchedule() {
             const prog = Math.round(s.progress_pct || 0);
             const tr = document.createElement('tr');
             tr.innerHTML = `
-                <td><span class="status-tag status-active">${esc(s.shift || '—')}</span></td>
+                <td>${TRAINING_TAG[s.training_type] || '<span class="tt-tag">—</span>'}
+                    <br><span class="muted">${esc(s.shift || '')}</span></td>
                 <td><strong>${esc(s.name)}</strong></td>
                 <td>${esc(s.unit || '—')}</td>
                 <td class="font-mono">${esc(s.planned || '')}</td>
@@ -1665,11 +1731,11 @@ window.loadTrainingSchedule = loadTrainingSchedule;
 // ----------------- MÀN 1.2: CHI TIẾT LỊCH -----------------
 
 let sessionDetailId = null;
-let sessionDetailFrom = 'dt-schedule';
+let sessionDetailFrom = 'schedule-progress';
 
 async function openSessionDetail(sessionId, scheduleId) {
     sessionDetailId = sessionId || scheduleId;
-    sessionDetailFrom = 'dt-schedule';
+    sessionDetailFrom = 'schedule-progress';
     switchNavTab('session-detail');
 
     try {
@@ -1741,26 +1807,30 @@ async function loadAttendanceSummary() {
     const tbody = document.getElementById('as-tbody');
     if (!tbody) return;
 
-    const label = TRAINING_LABEL[currentTrainingType];
-    document.getElementById('as-title').textContent =
-        `TỔNG HỢP GIÁM SÁT QUÂN SỐ HUẤN LUYỆN ${label.toUpperCase()}`;
+    document.getElementById('as-title').textContent = currentTrainingType
+        ? `TỔNG HỢP GIÁM SÁT QUÂN SỐ HUẤN LUYỆN ${TRAINING_LABEL[currentTrainingType].toUpperCase()}`
+        : 'TỔNG HỢP GIÁM SÁT QUÂN SỐ HUẤN LUYỆN';
     document.getElementById('as-subtitle').textContent =
-        `CÁC LỚP ĐANG DIỄN RA TRÊN THAO TRƯỜNG · CẬP NHẬT THEO THỜI GIAN THỰC`;
+        'CÁC LỚP ĐANG DIỄN RA TRÊN THAO TRƯỜNG · CẬP NHẬT THEO THỜI GIAN THỰC';
 
     try {
-        const data = await getJson(`/api/v1/summary/training?training_type=${currentTrainingType}`);
+        const data = await getJson(`/api/v1/summary/training?_=1${trainingQuery('&')}`);
         document.getElementById('as-metric-running').textContent = data.stats.running_sessions;
         document.getElementById('as-metric-present').textContent = data.stats.present_total;
         document.getElementById('as-metric-required').textContent = data.stats.required_total;
         document.getElementById('as-metric-violations').textContent = data.stats.violation_total;
 
         tbody.innerHTML = data.sessions.length ? '' :
-            `<tr><td colspan="8" class="empty-row">Chưa có lớp nào thuộc phân hệ ${label.toLowerCase()}</td></tr>`;
+            `<tr><td colspan="8" class="empty-row">
+                Chưa có lớp nào${currentTrainingType ? ` thuộc huấn luyện ${TRAINING_LABEL[currentTrainingType].toLowerCase()}` : ''}
+             </td></tr>`;
 
         data.sessions.forEach(s => {
             const tr = document.createElement('tr');
             tr.innerHTML = `
-                <td><strong>${esc(s.name)}</strong><br><span class="muted">${esc(s.shift || '')}</span></td>
+                <td><strong>${esc(s.name)}</strong><br>
+                    ${TRAINING_TAG[s.training_type] || ''}
+                    <span class="muted">${esc(s.shift || '')}</span></td>
                 <td>${esc(s.unit || '—')}</td>
                 <td><span class="status-tag ${STATE_CLASS[s.state] || 'status-neutral'}">${esc(s.state_label)}</span></td>
                 <td class="text-green"><strong>${s.present_start || 0}</strong></td>
@@ -1788,8 +1858,9 @@ async function openAttendanceDetail(sessionId, scheduleId) {
     attendanceDetailData.session = sessionId || scheduleId;
     switchNavTab('attendance-detail');
 
-    document.getElementById('ad-title').textContent =
-        `CHI TIẾT GIÁM SÁT QUÂN SỐ · ${TRAINING_LABEL[currentTrainingType].toUpperCase()}`;
+    document.getElementById('ad-title').textContent = currentTrainingType
+        ? `CHI TIẾT GIÁM SÁT QUÂN SỐ · ${TRAINING_LABEL[currentTrainingType].toUpperCase()}`
+        : 'CHI TIẾT GIÁM SÁT QUÂN SỐ';
 
     attachStream(document.getElementById('ad-stream'), activeCameraId, true);
     document.getElementById('ad-camera-caption').textContent =
@@ -1884,7 +1955,7 @@ window.renderAttendanceDetail = renderAttendanceDetail;
 
 function backFromAttendanceDetail() {
     detachStream(document.getElementById('ad-stream'));
-    switchNavTab(currentTrainingType === 'dao_tao' ? 'dt-attendance' : 'cd-attendance');
+    switchNavTab('attendance');
 }
 window.backFromAttendanceDetail = backFromAttendanceDetail;
 
@@ -1896,9 +1967,9 @@ window.backFromAttendanceDetail = backFromAttendanceDetail;
 let activeIntrusion = null;
 
 async function loadSafetyDashboard() {
-    const label = TRAINING_LABEL[currentSafetyType] || '';
-    document.getElementById('sf-title').textContent =
-        `GIÁM SÁT AN TOÀN BẮN ĐẠN THẬT · HUẤN LUYỆN ${label.toUpperCase()}`;
+    document.getElementById('sf-title').textContent = currentSafetyType
+        ? `GIÁM SÁT AN TOÀN BẮN ĐẠN THẬT · HUẤN LUYỆN ${TRAINING_LABEL[currentSafetyType].toUpperCase()}`
+        : 'TRUNG TÂM GIÁM SÁT AN TOÀN BẮN ĐẠN THẬT';
     document.getElementById('sf-subtitle').textContent =
         'PHÁT HIỆN ĐỐI TƯỢNG ĐI VÀO VÙNG CẤM CỦA TRƯỜNG BẮN THEO THỜI GIAN THỰC';
 
@@ -2173,6 +2244,61 @@ window.setRtspDemo = setRtspDemo;
 
 
 // =====================================================================
+// VAI TRÒ NGƯỜI DÙNG
+// CBQH: theo dõi huấn luyện và quân số (phân hệ I + II).
+// QTHT: có thêm phân hệ III — cấu hình camera, vùng, thời khoá biểu.
+// Đây là phân quyền phía giao diện cho bản POC; backend chưa có đăng nhập nên
+// không được coi là ranh giới bảo mật.
+// =====================================================================
+
+const ROLES = {
+    cbqh: {
+        label: 'Cán bộ quản lý',
+        user: 'Đại uý Nguyễn Văn Hùng',
+        avatar: 'H',
+        home: 'attendance'
+    },
+    qtht: {
+        label: 'Quản trị hệ thống',
+        user: 'Thiếu tá Lê Quang Trung',
+        avatar: 'T',
+        home: 'monitoring'
+    }
+};
+
+let currentRole = 'cbqh';
+
+function switchRole(role) {
+    if (!ROLES[role]) return;
+    currentRole = role;
+    const cfg = ROLES[role];
+
+    document.querySelectorAll('.role-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.id === `role-btn-${role}`);
+    });
+
+    // Mục chỉ dành cho QTHT thì ẩn khi đang ở vai trò CBQH
+    document.querySelectorAll('.role-only').forEach(el => {
+        el.style.display = el.dataset.role === role ? '' : 'none';
+    });
+
+    const nameEl = document.getElementById('user-name');
+    const avatarEl = document.getElementById('user-avatar');
+    if (nameEl) nameEl.textContent = `${cfg.user} · ${cfg.label}`;
+    if (avatarEl) avatarEl.textContent = cfg.avatar;
+
+    try { localStorage.setItem('horus_role', role); } catch (e) { /* chế độ riêng tư */ }
+
+    // Đang đứng ở màn mà vai trò mới không được xem thì đưa về màn chính
+    const activeNav = document.querySelector('.sidebar-nav .nav-item.active');
+    const hidden = activeNav && activeNav.closest('.role-only')
+        && activeNav.closest('.role-only').style.display === 'none';
+    if (hidden || !activeNav) switchNavTab(cfg.home);
+}
+window.switchRole = switchRole;
+
+
+// =====================================================================
 // KHỞI TẠO
 // Đặt cuối file để mọi biến trạng thái phía trên đã được khai báo xong.
 // =====================================================================
@@ -2199,6 +2325,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const dateInput = document.getElementById('dt-schedule-date');
     if (dateInput) dateInput.value = today;
 
-    // Vào thẳng màn giám sát quân số của phân hệ đào tạo
-    switchNavTab('dt-attendance');
+    let saved = 'cbqh';
+    try { saved = localStorage.getItem('horus_role') || 'cbqh'; } catch (e) { /* chế độ riêng tư */ }
+    switchRole(ROLES[saved] ? saved : 'cbqh');
+    switchNavTab(ROLES[currentRole].home);
 });
