@@ -43,6 +43,17 @@ npm install jsdom && node tests/test_ui.mjs
 Lưu ý: test ghi đè `data/cameras.json`, `data/schedules.json` và
 `data/zone_rules.json`. Sao lưu trước nếu đang có cấu hình thật trên máy.
 
+## Dữ liệu chạy thử
+
+```bash
+python scripts/seed_demo.py --reset
+```
+
+Tạo 5 ca huấn luyện đặt giờ **tương đối so với lúc chạy** nên mở giao diện là
+thấy đủ trạng thái (đã kết thúc, đang điểm danh đầu giờ, đang diễn ra, chưa tới
+giờ, ca đêm vắt qua nửa đêm), cả hai loại đào tạo và chiến đấu, kèm một biên bản
+điểm danh mẫu có đủ các dạng vi phạm giờ giấc.
+
 ## Requirements
 
 - Python 3.10 or higher

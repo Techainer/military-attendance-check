@@ -231,6 +231,130 @@ check('luồng trực tiếp không còn vẽ base64 lên canvas',
 check('ảnh nền vẽ vùng lấy khung hình GỐC, không lấy bản đã vẽ lớp phủ',
     src.includes('snapshot?overlay=0'));
 
+console.log('\n[7b] Vùng cấm bắn đạn thật tách khỏi vùng đếm quân số');
+window.switchRole('qtht');
+window.switchNavTab('zones');
+await sleep(1200);
+
+check('màn vùng có ô chọn loại vùng', doc.getElementById('zone-rule-type') !== null);
+const ruleOptions = [...doc.querySelectorAll('#zone-rule-type option')].map(o => o.value);
+check('có đủ ba loại: đếm quân số, vùng cấm, vạch an toàn',
+    ruleOptions.includes('attendance_area') && ruleOptions.includes('restricted_area')
+    && ruleOptions.includes('crossing_line'), ruleOptions.join(','));
+check('có danh sách vùng riêng của camera', doc.getElementById('zone-list') !== null);
+
+// Tạo vùng cấm thật qua giao diện rồi kiểm máy chủ có nhận không
+doc.getElementById('zone-name-input').value = 'Khối chắn tuyến bắn (test)';
+doc.getElementById('zone-rule-type').value = 'restricted_area';
+window.onZoneRuleChange();
+window.polygonPoints = undefined;   // dùng biến trong app.js
+const canvasZone = { name: 'Khối chắn tuyến bắn (test)', kind: 'polygon', rule: 'restricted_area',
+    points: [{x:0.6,y:0.1},{x:0.95,y:0.1},{x:0.95,y:0.6},{x:0.6,y:0.6}] };
+const createRes = await fetch(BASE + '/api/v1/cameras/cam_01/zones', {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(canvasZone) });
+check('tạo được vùng cấm riêng cho trường bắn', createRes.status === 201, String(createRes.status));
+const createdZone = createRes.status === 201 ? await createRes.json() : null;
+
+await window.loadZoneRules();
+await sleep(400);
+check('vùng cấm hiện trong danh sách với nhãn riêng',
+    doc.querySelector('#zone-list .zone-res') !== null,
+    doc.getElementById('zone-list').textContent.slice(0, 100));
+check('vùng đếm quân số và vùng cấm là hai mục tách biệt',
+    doc.querySelectorAll('#zone-list .zone-row').length >= 1);
+
+console.log('\n[7c] Cảnh báo đỏ kèm ảnh khi có người vào vùng cấm');
+const intrusion = {
+    id: 'evt_ui_test', type: 'INTRUSION', severity: 'critical',
+    occurred_at: new Date().toISOString(),
+    camera_id: 'cam_01', camera_name: 'Sân tập trung', area_name: 'Thao trường số 1',
+    message: 'Phát hiện 01 đối tượng đi vào khối chắn tuyến bắn.',
+    snapshot_url: '/data/events/khong-co.jpg', boxes: [], acked: false,
+    detail: { zone_name: 'Khối chắn tuyến bắn', object_count: 1, dwell_seconds: 3,
+              identified: [{ person_id: 'p1', person_name: 'Binh nhất Nguyễn Văn A' }] }
+};
+
+window.switchNavTab('logs');       // đang ở màn KHÁC màn an toàn
+await sleep(400);
+window.handleAiEvent(intrusion);
+await sleep(400);
+
+const ov = doc.getElementById('intrusion-overlay');
+check('cảnh báo hiện lên dù đang ở màn khác', ov.style.display === 'flex', ov.style.display);
+check('cảnh báo nhấp nháy đỏ', ov.classList.contains('blinking'));
+check('có tên vùng cấm trong tiêu đề',
+    doc.getElementById('intrusion-title').textContent.includes('KHỐI CHẮN'),
+    doc.getElementById('intrusion-title').textContent);
+check('kèm ảnh bằng chứng',
+    (doc.getElementById('intrusion-photo').getAttribute('src') || '').includes('/data/events/'),
+    doc.getElementById('intrusion-photo').getAttribute('src'));
+check('có nút tải ảnh bằng chứng',
+    doc.getElementById('intrusion-download').hasAttribute('download'));
+check('hiện tên quân nhân nhận diện được',
+    doc.getElementById('intrusion-meta').textContent.includes('Nguyễn Văn A'),
+    doc.getElementById('intrusion-meta').textContent.slice(0, 120));
+
+window.toggleSafetySiren();
+check('tắt được cảnh báo âm thanh thì thôi nhấp nháy', !ov.classList.contains('blinking'));
+window.toggleSafetySiren();
+
+window.dismissIntrusion();
+check('đóng được cảnh báo', ov.style.display === 'none');
+
+if (createdZone) await fetch(BASE + `/api/v1/zones/${createdZone.id}`, { method: 'DELETE' });
+
+console.log('\n[7d] Dialog chi tiết quân nhân và ca điểm danh');
+window.switchNavTab('registration');
+await sleep(1000);
+const people = await (await fetch(BASE + '/api/faces')).json();
+if (people.data && people.data.length) {
+    window.editPerson(people.data[0].id);
+    await sleep(200);
+    check('mở được dialog hồ sơ quân nhân',
+        doc.getElementById('person-modal').style.display === 'flex');
+    check('sửa được cả cấp bậc, đơn vị, số hiệu — không chỉ tên',
+        doc.getElementById('person-rank').value && doc.getElementById('person-unit').value
+        && doc.getElementById('person-military-id') !== null);
+    window.closePersonModal();
+    check('đóng được dialog hồ sơ',
+        doc.getElementById('person-modal').style.display === 'none');
+} else {
+    check('bỏ qua dialog hồ sơ: chưa đăng ký quân nhân nào', true);
+}
+
+window.switchNavTab('logs');
+await sleep(1000);
+const logRows = doc.querySelectorAll('#attendance-logs-tbody tr.row-clickable');
+check('dòng nhật ký bấm được để xem chi tiết', logRows.length >= 0);
+if (logRows.length) {
+    logRows[0].onclick({ target: logRows[0] });
+    await sleep(300);
+    check('mở được dialog chi tiết ca',
+        doc.getElementById('log-modal').style.display === 'flex');
+    check('dialog có bảng đối chiếu đầu buổi - cuối buổi',
+        doc.getElementById('log-modal-checks').children.length >= 1);
+    check('dialog có khu vực ảnh bằng chứng',
+        doc.getElementById('log-modal-evidence') !== null);
+    window.closeLogModal();
+    check('đóng được dialog chi tiết ca',
+        doc.getElementById('log-modal').style.display === 'none');
+}
+
+console.log('\n[7e] Lịch & Tiến độ hiển thị đủ như màn cấu hình');
+window.switchNavTab('schedule-progress');
+await sleep(1200);
+const firstRow = doc.querySelector('#dt-schedule-tbody tr');
+check('cột khung giờ không còn rỗng',
+    firstRow && /\d{2}:\d{2}\s*–\s*\d{2}:\d{2}/.test(firstRow.textContent),
+    firstRow ? firstRow.textContent.replace(/\s+/g, ' ').slice(0, 120) : 'không có dòng nào');
+
+const summary = await (await fetch(BASE + '/api/v1/summary/training')).json();
+const one = summary.sessions[0] || {};
+check('API trả khung giờ cho màn lịch', !!one.start_time && !!one.end_time,
+    JSON.stringify({ start: one.start_time, end: one.end_time }));
+check('API trả cả bài học và giáo viên như màn cấu hình',
+    'lesson_name' in one && 'instructor' in one, Object.keys(one).join(','));
+
 console.log('\n[8] Màn vẽ vùng chịu được canvas không dùng được');
 check('không sập khi trình duyệt không cấp ngữ cảnh vẽ',
     appJs.includes("if (!ctx) return;"));

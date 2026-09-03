@@ -408,26 +408,31 @@
                             <p class="roi-helper-text">Nhấp chuột lên khung hình để thêm điểm. Polygon cần tối thiểu 3 điểm; tripwire gồm 2 điểm.</p>
                         </div>
 
-                        <!-- Right Column: Rules & Coordinates Form -->
+                        <!-- Cột phải: danh sách vùng và form cấu hình -->
                         <div class="glass-card roi-rules-card">
                             <div class="card-header">
-                                <h2>CẤU HÌNH LUẬT & TỌA ĐỘ</h2>
+                                <h2>VÙNG GIÁM SÁT TRÊN CAMERA</h2>
+                                <p class="card-subtitle">MỖI CAMERA CÓ MỘT VÙNG ĐẾM QUÂN SỐ, KÈM CÁC VÙNG CẤM VÀ VẠCH AN TOÀN</p>
                             </div>
 
+                            <div class="zone-list" id="zone-list"></div>
+
                             <form id="roi-config-form" onsubmit="saveZoneRules(event)">
+                                <input type="hidden" id="zone-edit-id">
+
                                 <div class="form-group">
                                     <label for="zone-name-input">Tên vùng</label>
                                     <input type="text" id="zone-name-input" value="Khu vực tập trung" required class="form-input">
                                 </div>
 
                                 <div class="form-group">
-                                    <label for="zone-rule-type">Loại luật</label>
-                                    <select id="zone-rule-type" class="form-input form-select">
-                                        <option value="Cảnh báo Xâm nhập 24/7">Cảnh báo Xâm nhập 24/7</option>
-                                        <option value="Giám sát quân số tập trung">Giám sát quân số tập trung</option>
-                                        <option value="Vượt vạch an toàn (Tripwire)">Vượt vạch an toàn (Tripwire)</option>
-                                        <option value="Khu vực hạn chế F-06">Khu vực hạn chế F-06</option>
+                                    <label for="zone-rule-type">Vùng này dùng để làm gì</label>
+                                    <select id="zone-rule-type" class="form-input form-select" onchange="onZoneRuleChange()">
+                                        <option value="attendance_area">Đếm quân số điểm danh — chỉ tính người trong vùng</option>
+                                        <option value="restricted_area">Vùng cấm bắn đạn thật — vào là vi phạm, cảnh báo đỏ</option>
+                                        <option value="crossing_line">Vạch an toàn — cảnh báo khi có người vượt qua</option>
                                     </select>
+                                    <p class="form-hint" id="zone-rule-hint"></p>
                                 </div>
 
                                 <div class="form-group">
@@ -436,10 +441,10 @@
                                         <label class="custom-checkbox">
                                             <input type="checkbox" id="detect-human-cb" checked>
                                             <span class="checkmark"></span>
-                                            <span>Người (Human)</span>
+                                            <span>Người</span>
                                         </label>
                                         <label class="custom-checkbox">
-                                            <input type="checkbox" id="detect-object-cb" checked>
+                                            <input type="checkbox" id="detect-object-cb">
                                             <span class="checkmark"></span>
                                             <span>Động vật / Vật thể</span>
                                         </label>
@@ -447,14 +452,23 @@
                                 </div>
 
                                 <div class="form-group">
-                                    <label for="zone-coords-json">Tọa độ chuẩn hóa (JSON)</label>
-                                    <textarea id="zone-coords-json" rows="11" class="form-input form-textarea font-mono" readonly></textarea>
+                                    <label class="custom-checkbox zone-enable-row">
+                                        <input type="checkbox" id="zone-enabled-cb" checked>
+                                        <span class="checkmark"></span>
+                                        <span>Bật vùng này (tắt thì vẫn lưu nhưng không sinh cảnh báo)</span>
+                                    </label>
                                 </div>
 
-                                <button type="submit" class="btn-primary-green" id="btn-save-zone">
-                                    💾 Lưu Cấu Hình Zone
-                                </button>
+                                <div class="form-group">
+                                    <label for="zone-coords-json">Toạ độ chuẩn hoá (JSON)</label>
+                                    <textarea id="zone-coords-json" rows="7" class="form-input form-textarea font-mono" readonly></textarea>
+                                </div>
+
                                 <p id="zone-save-status" class="status-message"></p>
+                                <div class="modal-actions">
+                                    <button type="button" class="btn-toolbar-neutral" onclick="resetZoneForm()">Vẽ vùng mới</button>
+                                    <button type="submit" class="btn-primary-green" id="btn-save-zone">💾 Lưu vùng</button>
+                                </div>
                             </form>
                         </div>
                     </div>
@@ -1058,6 +1072,139 @@
                     <button type="submit" class="btn-primary-green">Lưu ca huấn luyện</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- Cảnh báo xâm nhập vùng cấm: nổi trên mọi màn, kèm ảnh AI chụp -->
+    <div id="intrusion-overlay" class="intrusion-overlay" style="display: none;">
+        <div class="intrusion-card">
+            <div class="intrusion-head">
+                <span class="intrusion-icon">⚠</span>
+                <div>
+                    <strong id="intrusion-title">PHÁT HIỆN ĐỐI TƯỢNG TRONG VÙNG CẤM</strong>
+                    <p id="intrusion-desc"></p>
+                </div>
+                <button class="btn-close-modal" onclick="dismissIntrusion()" title="Ẩn cảnh báo">✕</button>
+            </div>
+
+            <div class="intrusion-body">
+                <img id="intrusion-photo" alt="Ảnh bằng chứng vi phạm an toàn">
+                <div class="intrusion-meta" id="intrusion-meta"></div>
+            </div>
+
+            <div class="intrusion-actions">
+                <button class="btn-mute" onclick="toggleSafetySiren()" id="btn-intrusion-siren">🔕 Tắt cảnh báo âm thanh</button>
+                <a class="btn-toolbar-neutral" id="intrusion-download" download>⬇ Tải ảnh bằng chứng</a>
+                <button class="btn-toolbar-neutral" onclick="openSafetyFromAlert()">Mở màn giám sát an toàn</button>
+                <button class="btn-primary-green" onclick="ackIntrusionFromAlert()">✓ Xác nhận xử lý</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Chi tiết và chỉnh sửa hồ sơ quân nhân -->
+    <div id="person-modal" class="modal-backdrop" style="display: none;">
+        <div class="modal-content glass-card">
+            <div class="modal-header">
+                <h3 id="person-modal-title">Hồ sơ quân nhân</h3>
+                <button class="btn-close-modal" onclick="closePersonModal()">✕</button>
+            </div>
+            <form id="person-form" onsubmit="submitPersonForm(event)">
+                <input type="hidden" id="person-id">
+
+                <div class="person-detail-head">
+                    <div class="person-avatar-lg" id="person-avatar-lg"></div>
+                    <div class="person-meta">
+                        <span class="detail-key">Ảnh sinh trắc học đã đăng ký</span>
+                        <span class="muted" id="person-registered-at"></span>
+                        <span class="muted" id="person-embedding-note">Ảnh và đặc trưng khuôn mặt không đổi khi sửa hồ sơ.</span>
+                    </div>
+                </div>
+
+                <div class="form-row-two">
+                    <div class="form-group">
+                        <label>Họ và tên</label>
+                        <input type="text" id="person-name" required class="form-input">
+                    </div>
+                    <div class="form-group">
+                        <label>Số hiệu quân nhân</label>
+                        <input type="text" id="person-military-id" required class="form-input font-mono">
+                    </div>
+                </div>
+
+                <div class="form-row-two">
+                    <div class="form-group">
+                        <label>Cấp bậc</label>
+                        <select id="person-rank" required class="form-input form-select">
+                            <option>Binh nhì</option>
+                            <option>Binh nhất</option>
+                            <option>Hạ sĩ</option>
+                            <option>Trung sĩ</option>
+                            <option>Thượng sĩ</option>
+                            <option>Thiếu uý</option>
+                            <option>Trung uý</option>
+                            <option>Thượng uý</option>
+                            <option>Đại uý</option>
+                            <option>Thiếu tá</option>
+                            <option>Trung tá</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Đơn vị</label>
+                        <select id="person-unit" required class="form-input form-select">
+                            <option>Đại đội 1</option>
+                            <option>Đại đội 2</option>
+                            <option>Đại đội 3</option>
+                            <option>Tiểu đoàn 3</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Trạng thái</label>
+                    <select id="person-status" class="form-input form-select">
+                        <option value="Active">Đang phục vụ</option>
+                        <option value="Inactive">Tạm dừng</option>
+                    </select>
+                </div>
+
+                <p id="person-form-status" class="status-message"></p>
+                <div class="modal-actions">
+                    <button type="button" class="btn-row-danger" onclick="deletePersonFromModal()">Xoá quân nhân</button>
+                    <button type="button" class="btn-toolbar-neutral" onclick="closePersonModal()">Hủy bỏ</button>
+                    <button type="submit" class="btn-primary-green">Lưu hồ sơ</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Chi tiết một ca trong nhật ký điểm danh -->
+    <div id="log-modal" class="modal-backdrop" style="display: none;">
+        <div class="modal-content glass-card modal-wide">
+            <div class="modal-header">
+                <div>
+                    <h3 id="log-modal-title">Chi tiết ca điểm danh</h3>
+                    <span class="modal-subtitle" id="log-modal-subtitle"></span>
+                </div>
+                <button class="btn-close-modal" onclick="closeLogModal()">✕</button>
+            </div>
+
+            <div class="detail-grid" id="log-modal-info"></div>
+
+            <h4 class="modal-section-title">ĐỐI CHIẾU ĐẦU BUỔI · CUỐI BUỔI</h4>
+            <div class="table-responsive">
+                <table class="personnel-table">
+                    <thead>
+                        <tr><th>MỐC</th><th>GIỜ CHỐT</th><th>CÓ MẶT</th><th>VẮNG</th><th>SỐ LƯỢT QUÉT</th></tr>
+                    </thead>
+                    <tbody id="log-modal-checks"></tbody>
+                </table>
+            </div>
+
+            <h4 class="modal-section-title">ẢNH BẰNG CHỨNG DO AI CHỤP</h4>
+            <div class="evidence-thumbs evidence-row" id="log-modal-evidence"></div>
+
+            <h4 class="modal-section-title">QUÂN NHÂN VI PHẠM GIỜ GIẤC</h4>
+            <div id="log-modal-violations"></div>
         </div>
     </div>
 

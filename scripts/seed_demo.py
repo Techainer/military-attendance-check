@@ -112,6 +112,117 @@ def build_schedules() -> list:
     return schedules
 
 
+def build_logs(schedules: list) -> list:
+    """Biên bản điểm danh cho các ca đã diễn ra, để thử màn nhật ký."""
+    now = clock.now()
+    today = now.date().isoformat()
+
+    roster = [
+        ("Binh nhất", "Nguyễn Văn An", "QN-10231"),
+        ("Binh nhì", "Trần Quốc Bảo", "QN-10232"),
+        ("Hạ sĩ", "Lê Minh Cường", "QN-10233"),
+        ("Binh nhất", "Phạm Văn Dũng", "QN-10234"),
+        ("Trung sĩ", "Hoàng Đức Em", "QN-10235"),
+    ]
+
+    def label(i):
+        rank, name, _ = roster[i]
+        return f"{rank} {name}"
+
+    def person(i):
+        rank, name, mid = roster[i]
+        return {"id": f"per_{mid}", "name": name, "rank": rank,
+                "military_id": mid, "unit": "Đại đội 1"}
+
+    # Ca đầu tiên đã kết thúc: có đủ hai mốc và các loại vi phạm
+    done = schedules[0]
+    start_dt = now.replace(hour=int(done["start_time"][:2]),
+                           minute=int(done["start_time"][3:]), second=0, microsecond=0)
+    end_dt = now.replace(hour=int(done["end_time"][:2]),
+                         minute=int(done["end_time"][3:]), second=0, microsecond=0)
+
+    # An: đủ giờ · Bảo: đi chậm · Cường: về sớm · Dũng: chậm và sớm · Em: vắng
+    marks = [
+        (0, start_dt + timedelta(minutes=1), end_dt - timedelta(minutes=1), []),
+        (1, start_dt + timedelta(minutes=18), end_dt - timedelta(minutes=2), ["late"]),
+        (2, start_dt + timedelta(minutes=2), end_dt - timedelta(minutes=40), ["early_leave"]),
+        (3, start_dt + timedelta(minutes=22), end_dt - timedelta(minutes=35), ["late", "early_leave"]),
+        (4, None, None, ["absent"]),
+    ]
+
+    items, summary = [], {"required": len(roster), "present": 0, "absent": 0,
+                          "late": 0, "early_leave": 0}
+    for idx, first, last, violations in marks:
+        status = "absent" if "absent" in violations else ("violation" if violations else "present")
+        if status == "present":
+            summary["present"] += 1
+        elif status == "absent":
+            summary["absent"] += 1
+        if "late" in violations:
+            summary["late"] += 1
+        if "early_leave" in violations:
+            summary["early_leave"] += 1
+
+        items.append({
+            "person": person(idx),
+            "status": status,
+            "violations": violations,
+            "first_seen": clock.iso(first) if first else None,
+            "last_seen": clock.iso(last) if last else None,
+            "total_seconds": int((last - first).total_seconds()) if first and last else 0,
+            "late_minutes": int((first - start_dt).total_seconds() // 60) if "late" in violations else None,
+            "early_leave_minutes": int((end_dt - last).total_seconds() // 60) if "early_leave" in violations else None,
+            "present_at_start": bool(first) and "late" not in violations,
+            "present_at_end": bool(last) and "early_leave" not in violations,
+        })
+
+    absent_names = [label(i) for i, _f, _l, v in marks if "absent" in v]
+    scheduled = int((end_dt - start_dt).total_seconds() // 60)
+    actual = int((marks[0][2] - marks[0][1]).total_seconds() // 60)
+
+    return [{
+        "id": "log_demo_1",
+        "schedule_id": done["id"],
+        "session_id": f"{done['id']}:{today}",
+        "date": start_dt.strftime("%d/%m/%Y"),
+        "date_iso": today,
+        "shift": done["shift"],
+        "schedule_name": done["name"],
+        "unit": done["unit"],
+        "required": len(roster),
+        "time": end_dt.strftime("%H:%M"),
+        "present": 4,
+        "absent": len(absent_names),
+        "absent_personnel": absent_names,
+        "status": f"Thiếu {len(absent_names)} quân nhân" if absent_names else "Đủ quân số",
+        "status_type": "warning" if absent_names else "success",
+        "commander": "Đại uý Nguyễn Văn Hùng",
+        "actual_minutes": actual,
+        "scheduled_minutes": scheduled,
+        "progress_pct": round(min(100.0, actual / scheduled * 100), 1) if scheduled else 0.0,
+        "attendance": items,
+        "attendance_summary": summary,
+        "checks": {
+            "start": {
+                "phase": "start", "phase_label": "Đầu giờ",
+                "time": (start_dt + timedelta(minutes=5)).strftime("%H:%M"),
+                "present": 3, "absent": 2,
+                "present_personnel": [label(0), label(2), label(4)][:3],
+                "absent_personnel": [label(1), label(3)],
+                "evidence": None, "window_mins": 5, "scans": 42,
+            },
+            "end": {
+                "phase": "end", "phase_label": "Cuối giờ",
+                "time": end_dt.strftime("%H:%M"),
+                "present": 2, "absent": 3,
+                "present_personnel": [label(0), label(1)],
+                "absent_personnel": [label(2), label(3), label(4)],
+                "evidence": None, "window_mins": 5, "scans": 39,
+            },
+        },
+    }]
+
+
 def main() -> None:
     reset = "--reset" in sys.argv
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -136,7 +247,21 @@ def main() -> None:
         print(f"  {loai} · {sch['start_time']}–{sch['end_time']} · "
               f"{state['state_label']:<24} {sch['name']}")
 
-    print("\nMở giao diện và vào 'Lịch & Tiến độ' để xem.")
+    logs_path = DATA_DIR / "attendance_logs.json"
+    existing_logs = [] if reset else read_json_list(logs_path)
+    demo_logs = build_logs(demo)
+    demo_log_ids = {l["id"] for l in demo_logs}
+    kept_logs = [l for l in existing_logs if l.get("id") not in demo_log_ids]
+    write_json_list(logs_path, demo_logs + kept_logs)
+
+    sm = demo_logs[0]["attendance_summary"]
+    print(f"\nĐã tạo 1 biên bản điểm danh mẫu cho ca đã kết thúc: "
+          f"{sm['present']} đủ giờ, {sm['late']} đi chậm, "
+          f"{sm['early_leave']} về sớm, {sm['absent']} không tham gia.")
+    print("Ảnh bằng chứng để trống — ảnh thật do camera AI chụp khi chạy luồng.")
+
+    print("\nMở giao diện: 'Lịch & Tiến độ' xem lịch, "
+          "'Nhật ký điểm danh' bấm vào một dòng để xem chi tiết.")
 
 
 if __name__ == "__main__":

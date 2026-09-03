@@ -893,6 +893,9 @@ function renderPersonnelTable(list) {
             ? `<div class="avatar-badge-col"><img src="${p.avatar_path}" alt="${p.name}"></div>`
             : `<div class="avatar-badge-col">${initial}</div>`;
 
+        row.className = 'row-clickable';
+        row.title = 'Bấm để xem và sửa hồ sơ';
+        row.onclick = (ev) => { if (!ev.target.closest('.action-btn-group')) editPerson(p.id); };
         row.innerHTML = `
             <td>${avatarHtml}</td>
             <td><strong>${p.name}</strong></td>
@@ -946,16 +949,76 @@ window.deletePerson = deletePerson;
 function editPerson(personId) {
     const p = registeredPersonnel.find(x => x.id === personId);
     if (!p) return;
-    const newName = prompt('Cập nhật Họ và tên:', p.name);
-    if (newName && newName.trim()) {
-        const formData = new FormData();
-        formData.append('name', newName.trim());
-        fetch(`/api/faces/${personId}`, { method: 'PUT', body: formData })
-            .then(() => loadRegisteredFaces())
-            .catch(e => console.error(e));
-    }
+
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+    document.getElementById('person-modal-title').textContent =
+        `${p.rank || ''} ${p.name || ''}`.trim() || 'Hồ sơ quân nhân';
+    set('person-id', p.id);
+    set('person-name', p.name || '');
+    set('person-military-id', p.military_id || '');
+    set('person-rank', p.rank || 'Binh nhất');
+    set('person-unit', p.unit || 'Đại đội 1');
+    set('person-status', p.status || 'Active');
+
+    const avatar = document.getElementById('person-avatar-lg');
+    avatar.innerHTML = p.avatar_path
+        ? `<img src="${p.avatar_path}" alt="${esc(p.name || '')}">`
+        : (p.name || 'Q').trim().charAt(0).toUpperCase();
+    document.getElementById('person-registered-at').textContent =
+        `Đăng ký: ${p.created_at || p.registered_at || '—'}`;
+    document.getElementById('person-form-status').textContent = '';
+
+    document.getElementById('person-modal').style.display = 'flex';
 }
 window.editPerson = editPerson;
+
+function closePersonModal() {
+    const modal = document.getElementById('person-modal');
+    if (modal) modal.style.display = 'none';
+}
+window.closePersonModal = closePersonModal;
+
+async function submitPersonForm(event) {
+    event.preventDefault();
+    const id = document.getElementById('person-id').value;
+    const status = document.getElementById('person-form-status');
+    const val = (elId) => (document.getElementById(elId) || {}).value;
+
+    // /api/faces nhận multipart; chỉ gửi thông tin hồ sơ, ảnh và đặc trưng
+    // khuôn mặt giữ nguyên.
+    const form = new FormData();
+    form.append('name', (val('person-name') || '').trim());
+    form.append('military_id', (val('person-military-id') || '').trim());
+    form.append('rank', val('person-rank'));
+    form.append('unit', val('person-unit'));
+    form.append('status', val('person-status'));
+
+    try {
+        const res = await fetch(`/api/faces/${id}`, { method: 'PUT', body: form });
+        if (!res.ok) throw new Error(describeApiError(await res.json()));
+        closePersonModal();
+        loadRegisteredFaces();
+    } catch (e) {
+        status.textContent = `✗ ${e.message}`;
+        status.style.color = '#dc2626';
+    }
+}
+window.submitPersonForm = submitPersonForm;
+
+async function deletePersonFromModal() {
+    const id = document.getElementById('person-id').value;
+    const name = document.getElementById('person-name').value;
+    if (!confirm(`Xoá quân nhân "${name}" khỏi cơ sở dữ liệu sinh trắc học?`)) return;
+    try {
+        const res = await fetch(`/api/faces/${id}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error(describeApiError(await res.json()));
+        closePersonModal();
+        loadRegisteredFaces();
+    } catch (e) {
+        alert(e.message);
+    }
+}
+window.deletePersonFromModal = deletePersonFromModal;
 
 function closeAlert() {
     if (alertBanner) alertBanner.style.display = 'none';
@@ -1182,69 +1245,186 @@ function updateCoordsJsonDisplay() {
     zoneCoordsJson.value = formatted;
 }
 
+// Mỗi camera có thể có nhiều vùng: một vùng đếm quân số, các vùng cấm của
+// trường bắn, và vạch an toàn. Loại vùng quyết định AI xử lý thế nào.
+
+let zonesOnCamera = [];
+
+const ZONE_RULE_META = {
+    attendance_area: {
+        label: 'Đếm quân số', cls: 'zone-att', kind: 'polygon',
+        hint: 'Chỉ những người đứng trong vùng này mới được tính vào sĩ số. Mỗi camera chỉ được một vùng loại này.'
+    },
+    restricted_area: {
+        label: 'Vùng cấm', cls: 'zone-res', kind: 'polygon',
+        hint: 'Dùng cho khối chắn trường bắn. Có người vào là sinh cảnh báo đỏ kèm ảnh chụp khoanh đối tượng.'
+    },
+    crossing_line: {
+        label: 'Vạch an toàn', cls: 'zone-line', kind: 'tripwire',
+        hint: 'Cảnh báo khi có người cắt qua vạch. Vẽ đúng 2 điểm.'
+    }
+};
+
+function onZoneRuleChange() {
+    const rule = document.getElementById('zone-rule-type').value;
+    const meta = ZONE_RULE_META[rule];
+    document.getElementById('zone-rule-hint').textContent = meta.hint;
+    // Vạch thì chuyển sang chế độ vẽ 2 điểm, vùng kín thì vẽ đa giác
+    setDrawingMode(meta.kind);
+}
+window.onZoneRuleChange = onZoneRuleChange;
+
 async function loadZoneRules() {
     try {
-        const res = await fetch('/api/zones');
-        if (res.ok) {
-            const data = await res.json();
-            if (zoneNameInput && data.zone_name) zoneNameInput.value = data.zone_name;
-            if (zoneRuleTypeSelect && data.rule_type) zoneRuleTypeSelect.value = data.rule_type;
-            if (detectHumanCb) detectHumanCb.checked = data.detect_human !== false;
-            if (detectObjectCb) detectObjectCb.checked = data.detect_object !== false;
-
-            if (data.polygon_points && data.polygon_points.length > 0) {
-                polygonPoints = data.polygon_points;
-            }
-            if (data.tripwire_points && data.tripwire_points.length > 0) {
-                tripwirePoints = data.tripwire_points;
-            }
-            redrawRoiCanvas();
-            updateCoordsJsonDisplay();
-        }
+        zonesOnCamera = await getJson(`/api/v1/cameras/${activeCameraId}/zones`);
     } catch (e) {
-        console.error('Error loading zone rules:', e);
+        zonesOnCamera = [];
+    }
+    renderZoneList();
+
+    // Vẽ sẵn vùng đếm quân số để thấy bối cảnh khi thêm vùng khác
+    const att = zonesOnCamera.find(z => z.rule === 'attendance_area');
+    if (att && !document.getElementById('zone-edit-id').value) {
+        polygonPoints = att.points.map(p => ({ ...p }));
+        redrawRoiCanvas();
+        updateCoordsJsonDisplay();
     }
 }
+window.loadZoneRules = loadZoneRules;
 
-async function saveZoneRules(e) {
-    e.preventDefault();
+function renderZoneList() {
+    const box = document.getElementById('zone-list');
+    if (!box) return;
 
-    const config = {
-        zone_name: zoneNameInput.value.trim() || 'Khu vực tập trung',
-        rule_type: zoneRuleTypeSelect.value,
-        detect_human: detectHumanCb.checked,
-        detect_object: detectObjectCb.checked,
-        polygon_points: polygonPoints,
-        tripwire_points: tripwirePoints,
-        updated_at: new Date().toISOString()
-    };
-
-    if (zoneSaveStatus) {
-        zoneSaveStatus.textContent = 'Đang lưu cấu hình zone...';
-        zoneSaveStatus.style.color = '#0284c7';
+    if (!zonesOnCamera.length) {
+        box.innerHTML = '<p class="empty-hint">Chưa có vùng nào. Vẽ trên khung hình rồi bấm Lưu vùng.</p>';
+        return;
     }
 
-    try {
-        const res = await fetch('/api/zones', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(config)
-        });
-        const data = await res.json();
+    box.innerHTML = zonesOnCamera.map(z => {
+        const meta = ZONE_RULE_META[z.rule] || { label: z.rule, cls: '' };
+        return `
+        <div class="zone-row ${z.enabled ? '' : 'zone-off'}">
+            <div class="zone-row-main">
+                <span class="zone-tag ${meta.cls}">${meta.label}</span>
+                <strong>${esc(z.name)}</strong>
+                <span class="muted">${z.points.length} điểm${z.enabled ? '' : ' · đang tắt'}</span>
+            </div>
+            <div class="zone-row-actions">
+                <button class="icon-btn" title="Sửa vùng" onclick="editZone('${z.id}')">✏️</button>
+                <button class="icon-btn" title="${z.enabled ? 'Tắt vùng' : 'Bật vùng'}"
+                        onclick="toggleZone('${z.id}', ${!z.enabled})">${z.enabled ? '🔕' : '🔔'}</button>
+                <button class="icon-btn icon-btn-delete" title="Xoá vùng"
+                        onclick="deleteZone('${z.id}','${esc(z.name)}')">🗑️</button>
+            </div>
+        </div>`;
+    }).join('');
+}
 
-        if (res.ok) {
-            if (zoneSaveStatus) {
-                zoneSaveStatus.textContent = `✓ ${data.message}`;
-                zoneSaveStatus.style.color = '#0a8f4c';
-            }
-        } else {
-            throw new Error(data.detail || 'Lỗi khi lưu cấu hình');
-        }
+function editZone(zoneId) {
+    const zone = zonesOnCamera.find(z => z.id === zoneId);
+    if (!zone) return;
+
+    document.getElementById('zone-edit-id').value = zone.id;
+    document.getElementById('zone-name-input').value = zone.name;
+    document.getElementById('zone-rule-type').value = zone.rule;
+    document.getElementById('detect-human-cb').checked = zone.detect_human !== false;
+    document.getElementById('detect-object-cb').checked = zone.detect_object === true;
+    document.getElementById('zone-enabled-cb').checked = zone.enabled !== false;
+    document.getElementById('zone-rule-hint').textContent = (ZONE_RULE_META[zone.rule] || {}).hint || '';
+
+    const pts = zone.points.map(p => ({ ...p }));
+    if (zone.kind === 'tripwire') {
+        tripwirePoints = pts;
+        polygonPoints = [];
+        setDrawingMode('tripwire');
+    } else {
+        polygonPoints = pts;
+        tripwirePoints = [];
+        setDrawingMode('polygon');
+    }
+    redrawRoiCanvas();
+    updateCoordsJsonDisplay();
+    document.getElementById('btn-save-zone').textContent = '💾 Cập nhật vùng';
+}
+window.editZone = editZone;
+
+function resetZoneForm() {
+    document.getElementById('zone-edit-id').value = '';
+    document.getElementById('zone-name-input').value = '';
+    document.getElementById('zone-save-status').textContent = '';
+    document.getElementById('btn-save-zone').textContent = '💾 Lưu vùng';
+    polygonPoints = [];
+    tripwirePoints = [];
+    redrawRoiCanvas();
+    updateCoordsJsonDisplay();
+    onZoneRuleChange();
+}
+window.resetZoneForm = resetZoneForm;
+
+async function toggleZone(zoneId, enabled) {
+    try {
+        const res = await fetch(`/api/v1/zones/${zoneId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled })
+        });
+        if (!res.ok) throw new Error(describeApiError(await res.json()));
+        loadZoneRules();
+    } catch (e) {
+        alert(e.message);
+    }
+}
+window.toggleZone = toggleZone;
+
+async function deleteZone(zoneId, name) {
+    if (!confirm(`Xoá vùng "${name}"?`)) return;
+    try {
+        const res = await fetch(`/api/v1/zones/${zoneId}`, { method: 'DELETE' });
+        if (!res.ok && res.status !== 204) throw new Error(describeApiError(await res.json()));
+        resetZoneForm();
+        loadZoneRules();
+    } catch (e) {
+        alert(e.message);
+    }
+}
+window.deleteZone = deleteZone;
+
+async function saveZoneRules(event) {
+    event.preventDefault();
+    const status = document.getElementById('zone-save-status');
+    const id = document.getElementById('zone-edit-id').value;
+    const rule = document.getElementById('zone-rule-type').value;
+    const kind = ZONE_RULE_META[rule].kind;
+    const points = kind === 'tripwire' ? tripwirePoints : polygonPoints;
+
+    const payload = {
+        name: document.getElementById('zone-name-input').value.trim(),
+        kind,
+        rule,
+        points,
+        detect_human: document.getElementById('detect-human-cb').checked,
+        detect_object: document.getElementById('detect-object-cb').checked,
+        enabled: document.getElementById('zone-enabled-cb').checked
+    };
+
+    try {
+        const res = await fetch(
+            id ? `/api/v1/zones/${id}` : `/api/v1/cameras/${activeCameraId}/zones`,
+            {
+                method: id ? 'PATCH' : 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+        if (!res.ok) throw new Error(describeApiError(await res.json()));
+
+        status.textContent = id ? '✓ Đã cập nhật vùng' : '✓ Đã thêm vùng, AI áp dụng ngay';
+        status.style.color = '#0a8f4c';
+        resetZoneForm();
+        loadZoneRules();
     } catch (err) {
-        if (zoneSaveStatus) {
-            zoneSaveStatus.textContent = `✗ ${err.message}`;
-            zoneSaveStatus.style.color = '#dc2626';
-        }
+        status.textContent = `✗ ${err.message}`;
+        status.style.color = '#dc2626';
     }
 }
 window.saveZoneRules = saveZoneRules;
@@ -1506,6 +1686,11 @@ function renderAttendanceLogsTable(logs) {
         const startCheck = getCheck(log, 'start');
         const endCheck = getCheck(log, 'end');
 
+        // Bấm vào dòng để xem chi tiết; trừ khi bấm đúng vào ảnh bằng chứng
+        row.className = 'row-clickable';
+        row.title = 'Bấm để xem chi tiết ca điểm danh';
+        row.onclick = (ev) => { if (!ev.target.closest('img')) openLogModal(log.id); };
+
         row.innerHTML = `
             <td class="font-mono"><strong>${log.date}</strong> ${log.time || ''}</td>
             <td>${log.shift}<div class="cell-subtext">${log.schedule_name || ''}</div></td>
@@ -1517,11 +1702,102 @@ function renderAttendanceLogsTable(logs) {
             <td>${renderEvidenceCell(endCheck, log, 'Cuối giờ')}</td>
             <td style="max-width: 260px;">${renderAbsentList(log)}</td>
             <td><span class="status-tag ${statusClass}">${log.status}</span></td>
-            <td>${log.commander || 'Đại úy Nguyễn Văn Hùng'}</td>
+            <td>${log.commander || '—'}</td>
         `;
         attendanceLogsTbody.appendChild(row);
     });
 }
+
+
+// ----------------- CHI TIẾT MỘT CA TRONG NHẬT KÝ -----------------
+
+function openLogModal(logId) {
+    const log = attendanceLogsData.find(l => l.id === logId);
+    if (!log) return;
+
+    document.getElementById('log-modal-title').textContent =
+        log.schedule_name || log.shift || 'Chi tiết ca điểm danh';
+    document.getElementById('log-modal-subtitle').textContent =
+        `${log.date || ''} · ${log.unit || ''} · sĩ số chuẩn ${log.required || 0}`;
+
+    const sm = log.attendance_summary || {};
+    const info = [
+        ['Ca', log.shift],
+        ['Đơn vị', log.unit],
+        ['Ngày', log.date],
+        ['Sĩ số yêu cầu', log.required],
+        ['Trạng thái', log.status],
+        ['Thời gian diễn ra thực tế', log.actual_minutes != null
+            ? `${log.actual_minutes}/${log.scheduled_minutes || '?'} phút` : null],
+        ['Tiến độ', log.progress_pct != null ? `${log.progress_pct}%` : null],
+        ['Đủ giờ', sm.present],
+        ['Đi chậm', sm.late],
+        ['Về sớm', sm.early_leave],
+        ['Không tham gia', sm.absent],
+        ['Chỉ huy duyệt', log.commander]
+    ];
+    document.getElementById('log-modal-info').innerHTML = info
+        .filter(([, v]) => v !== null && v !== undefined && v !== '')
+        .map(([k, v]) => `<div class="detail-item"><span class="detail-key">${k}</span>
+                          <span class="detail-val">${esc(v)}</span></div>`).join('');
+
+    const checks = log.checks || {};
+    const rows = ['start', 'end', 'manual'].filter(ph => checks[ph]);
+    document.getElementById('log-modal-checks').innerHTML = rows.length
+        ? rows.map(ph => {
+            const c = checks[ph];
+            return `<tr>
+                <td><strong>${esc(c.phase_label)}</strong></td>
+                <td class="font-mono">${esc(c.time || '—')}</td>
+                <td class="text-green"><strong>${c.present}</strong></td>
+                <td class="${c.absent > 0 ? 'text-amber' : ''}">${c.absent}</td>
+                <td>${c.scans != null ? c.scans : '—'}</td>
+            </tr>`;
+        }).join('')
+        : '<tr><td colspan="5" class="empty-row">Buổi chưa diễn ra — cả hai mốc đều bằng 0</td></tr>';
+
+    const photos = rows.filter(ph => checks[ph].evidence);
+    document.getElementById('log-modal-evidence').innerHTML = photos.length
+        ? photos.map(ph => {
+            const c = checks[ph];
+            return `<figure class="evidence-figure">
+                <img src="${c.evidence}" alt="Ảnh điểm danh ${esc(c.phase_label)}"
+                     onclick="openEvidence('${c.evidence}','${esc(c.phase_label)} — ${c.present} có mặt')">
+                <figcaption><strong>${esc(c.phase_label)}</strong> · ${esc(c.time || '')}
+                    <a class="btn-download" href="${c.evidence}" download>⬇ Tải ảnh</a></figcaption>
+            </figure>`;
+        }).join('')
+        : '<p class="empty-hint">Chưa có ảnh bằng chứng nào được chụp</p>';
+
+    // Bảng vi phạm chỉ có khi máy chủ quan sát được cả buổi
+    const violators = (log.attendance || []).filter(i => (i.violations || []).length);
+    document.getElementById('log-modal-violations').innerHTML = violators.length
+        ? `<div class="table-responsive"><table class="personnel-table">
+             <thead><tr><th>QUÂN NHÂN</th><th>SỐ HIỆU</th><th>THẤY LẦN ĐẦU</th>
+                        <th>THẤY LẦN CUỐI</th><th>VI PHẠM</th></tr></thead>
+             <tbody>${violators.map(i => {
+                 const p = i.person || {};
+                 return `<tr>
+                    <td><strong>${esc(p.rank || '')} ${esc(p.name || '')}</strong></td>
+                    <td class="font-mono">${esc(p.military_id || '—')}</td>
+                    <td class="font-mono">${fmtTime(i.first_seen)}</td>
+                    <td class="font-mono">${fmtTime(i.last_seen)}</td>
+                    <td>${(i.violations || []).map(v => VIOLATION_TAG[v] || v).join(' ')}</td>
+                 </tr>`;
+             }).join('')}</tbody></table></div>`
+        : (log.absent_personnel || []).length
+            ? `<p class="muted">Danh sách vắng: ${esc((log.absent_personnel || []).join(', '))}</p>`
+            : '<p class="empty-hint">Không có vi phạm giờ giấc trong ca này</p>';
+
+    document.getElementById('log-modal').style.display = 'flex';
+}
+window.openLogModal = openLogModal;
+
+function closeLogModal() {
+    const modal = document.getElementById('log-modal');
+    if (modal) modal.style.display = 'none';
+}
+window.closeLogModal = closeLogModal;
 
 // ----------------- EVIDENCE LIGHTBOX -----------------
 function openEvidenceModal(src, phaseLabel, caption) {
@@ -1710,9 +1986,11 @@ async function loadTrainingSchedule() {
             tr.innerHTML = `
                 <td>${TRAINING_TAG[s.training_type] || '<span class="tt-tag">—</span>'}
                     <br><span class="muted">${esc(s.shift || '')}</span></td>
-                <td><strong>${esc(s.name)}</strong></td>
-                <td>${esc(s.unit || '—')}</td>
-                <td class="font-mono">${esc(s.planned || '')}</td>
+                <td><strong>${esc(s.name)}</strong>
+                    ${s.lesson_name ? `<div class="cell-subtext">${esc(s.lesson_name)}</div>` : ''}</td>
+                <td>${esc(s.unit || '—')}
+                    ${s.instructor ? `<div class="cell-subtext">${esc(s.instructor)}</div>` : ''}</td>
+                <td class="font-mono">${esc(s.start_time || '--:--')} – ${esc(s.end_time || '--:--')}</td>
                 <td><span class="status-tag ${STATE_CLASS[s.state] || 'status-neutral'}">${esc(s.state_label)}</span></td>
                 <td>
                     <div class="progress-track"><div class="progress-fill" style="width:${prog}%"></div></div>
@@ -2056,12 +2334,80 @@ function setActiveIntrusion(event) {
 }
 
 function onIntrusionEvent(event) {
-    // Đang mở màn an toàn thì dựng lại banner và thư viện ngay
-    if (currentSafetyType) {
+    // Vi phạm an toàn phải thấy ngay dù đang ở màn nào, nên báo bằng lớp phủ
+    // toàn màn hình kèm ảnh AI chụp, không chỉ cập nhật dashboard.
+    showIntrusionAlert(event);
+
+    if (currentTabName === 'safety') {
         setActiveIntrusion(event);
         loadSafetyDashboard();
     }
 }
+
+let pendingIntrusion = null;
+
+function showIntrusionAlert(event) {
+    pendingIntrusion = event;
+    const overlay = document.getElementById('intrusion-overlay');
+    if (!overlay) return;
+
+    const detail = event.detail || {};
+    document.getElementById('intrusion-title').textContent = detail.zone_name
+        ? `PHÁT HIỆN ĐỐI TƯỢNG TRONG ${String(detail.zone_name).toUpperCase()}`
+        : 'PHÁT HIỆN ĐỐI TƯỢNG TRONG VÙNG CẤM';
+    document.getElementById('intrusion-desc').textContent = event.message;
+
+    const photo = document.getElementById('intrusion-photo');
+    const link = document.getElementById('intrusion-download');
+    if (event.snapshot_url) {
+        photo.src = event.snapshot_url;
+        photo.style.display = '';
+        link.href = event.snapshot_url;
+        link.style.display = '';
+    } else {
+        photo.removeAttribute('src');
+        photo.style.display = 'none';
+        link.style.display = 'none';
+    }
+
+    const identified = (detail.identified || []).map(p => p.person_name).filter(Boolean);
+    const meta = [
+        ['Thời điểm', new Date(event.occurred_at).toLocaleString('vi-VN')],
+        ['Camera', event.camera_name],
+        ['Khu vực', event.area_name],
+        ['Số đối tượng', detail.object_count],
+        ['Đã ở trong vùng', detail.dwell_seconds != null ? `${detail.dwell_seconds} giây` : null],
+        ['Nhận diện được', identified.length ? identified.join(', ') : 'Không xác định']
+    ];
+    document.getElementById('intrusion-meta').innerHTML = meta
+        .filter(([, v]) => v !== null && v !== undefined && v !== '')
+        .map(([k, v]) => `<div class="detail-item"><span class="detail-key">${k}</span>
+                          <span class="detail-val">${esc(v)}</span></div>`).join('');
+
+    overlay.style.display = 'flex';
+    overlay.classList.toggle('blinking', !isSafetySirenMuted);
+}
+
+function dismissIntrusion() {
+    const overlay = document.getElementById('intrusion-overlay');
+    if (overlay) { overlay.style.display = 'none'; overlay.classList.remove('blinking'); }
+    // Chỉ ẩn khỏi màn hình, sự kiện vẫn nằm trong danh sách chờ xử lý
+    pendingIntrusion = null;
+}
+window.dismissIntrusion = dismissIntrusion;
+
+async function ackIntrusionFromAlert() {
+    if (!pendingIntrusion) return dismissIntrusion();
+    await ackEvent(pendingIntrusion.id);
+    dismissIntrusion();
+}
+window.ackIntrusionFromAlert = ackIntrusionFromAlert;
+
+function openSafetyFromAlert() {
+    dismissIntrusion();
+    switchNavTab('safety');
+}
+window.openSafetyFromAlert = openSafetyFromAlert;
 
 async function ackActiveIntrusion() {
     if (!activeIntrusion) return;
@@ -2072,10 +2418,16 @@ window.ackActiveIntrusion = ackActiveIntrusion;
 
 function toggleSafetySiren() {
     isSafetySirenMuted = !isSafetySirenMuted;
-    const btn = document.getElementById('btn-safety-siren');
+    const label = isSafetySirenMuted ? '🔔 Bật cảnh báo âm thanh' : '🔕 Tắt cảnh báo âm thanh';
+    ['btn-safety-siren', 'btn-intrusion-siren'].forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) btn.textContent = label;
+    });
+
     const banner = document.getElementById('safety-alert-banner');
-    if (btn) btn.textContent = isSafetySirenMuted ? '🔔 Bật cảnh báo âm thanh' : '🔕 Tắt cảnh báo âm thanh';
     if (banner) banner.classList.toggle('blinking', !isSafetySirenMuted && !!activeIntrusion);
+    const overlay = document.getElementById('intrusion-overlay');
+    if (overlay) overlay.classList.toggle('blinking', !isSafetySirenMuted && !!pendingIntrusion);
 }
 window.toggleSafetySiren = toggleSafetySiren;
 
