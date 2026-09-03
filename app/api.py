@@ -8,6 +8,8 @@ import shutil
 import time
 import os
 import json
+import hashlib
+import re
 import cv2
 import numpy as np
 import base64
@@ -46,6 +48,22 @@ data_path.mkdir(exist_ok=True)
 avatars_path.mkdir(parents=True, exist_ok=True)
 evidence_path.mkdir(parents=True, exist_ok=True)
 event_snapshots_path.mkdir(parents=True, exist_ok=True)
+
+@app.middleware("http")
+async def no_cache_for_ui(request, call_next):
+    """Bắt trình duyệt hỏi lại máy chủ mỗi lần tải giao diện.
+
+    Trước đây chỉ có ETag và Last-Modified, không có Cache-Control. Thiếu
+    Cache-Control thì trình duyệt tự suy đoán thời gian còn "tươi" và giữ bản cũ
+    hàng phút mà không hỏi lại — sửa giao diện xong mở lên vẫn thấy bản cũ, tệ
+    hơn là index.html cũ ghép với app.js mới nên trang hỏng nửa vời.
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return response
+
 
 # Mount static files
 app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
@@ -105,11 +123,27 @@ async def _background_process_video(video_path: str):
 
 # ----------------- Navigation & Static Routes -----------------
 
-@app.get("/")
+def _asset_version() -> str:
+    """Dấu phiên bản của app.js và style.css, đổi khi file đổi."""
+    stamp = "".join(
+        str((static_path / name).stat().st_mtime_ns)
+        for name in ("app.js", "style.css")
+        if (static_path / name).exists()
+    )
+    return hashlib.md5(stamp.encode()).hexdigest()[:8]
+
+
+@app.get("/", response_class=HTMLResponse)
 async def root():
-    """Serve the main Horus AI web page."""
-    index_file = static_path / "index.html"
-    return FileResponse(index_file)
+    """Trang giao diện, gắn dấu phiên bản vào CSS và JS lúc phục vụ.
+
+    Tính tại đây chứ không ghi cứng vào file: sửa app.js xong là URL đổi theo,
+    không phải nhớ cập nhật thủ công rồi lại gặp cảnh trang chạy bản cũ.
+    """
+    html = (static_path / "index.html").read_text(encoding="utf-8")
+    html = re.sub(r"(/static/(?:app\.js|style\.css))\?v=[a-zA-Z0-9]+",
+                  rf"\1?v={_asset_version()}", html)
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
 # ----------------- Face Registration Endpoints -----------------

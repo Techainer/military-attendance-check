@@ -242,6 +242,37 @@ r = client.get("/api/v1/cameras")
 check("API vẫn gọi được khi chưa đăng nhập (POC không có phiên)",
       r.status_code == 200, str(r.status_code))
 
+print("\n[4c] Giao diện không bị trình duyệt giữ bản cũ")
+
+r = client.get("/")
+check("trang chính trả HTML", r.headers["content-type"].startswith("text/html"),
+      r.headers.get("content-type", ""))
+check("trang chính cấm đệm, buộc hỏi lại máy chủ",
+      "no-cache" in r.headers.get("cache-control", ""),
+      r.headers.get("cache-control", "(không có)"))
+
+r_js = client.get("/static/app.js")
+check("app.js cũng cấm đệm",
+      "no-cache" in r_js.headers.get("cache-control", ""),
+      r_js.headers.get("cache-control", "(không có)"))
+
+import re as _re
+version = _re.search(r"app\.js\?v=([a-z0-9]+)", r.text)
+check("CSS và JS có dấu phiên bản trong đường dẫn", version is not None,
+      r.text[:200] if version is None else "")
+
+# Sửa file thì dấu phiên bản phải đổi, nếu không trình duyệt vẫn dùng bản cũ
+(api.static_path / "app.js").touch()
+version2 = _re.search(r"app\.js\?v=([a-z0-9]+)", client.get("/").text)
+check("sửa app.js thì dấu phiên bản đổi theo",
+      version and version2 and version.group(1) != version2.group(1),
+      f"{version and version.group(1)} -> {version2 and version2.group(1)}")
+
+check("trang chính có màn đăng nhập", "login-screen" in r.text)
+check("đã bỏ hẳn tab chọn vai trò", "role-switcher" not in r.text and "role-btn" not in r.text)
+check("chưa đăng nhập thì khung ứng dụng ẩn sẵn từ máy chủ",
+      'id="app-layout" style="display: none;"' in r.text)
+
 print("\n[5] Hợp đồng khớp code")
 
 spec = yaml.safe_load(open(Path(__file__).resolve().parent.parent / "docs/api/openapi.yaml"))
