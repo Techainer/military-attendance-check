@@ -105,6 +105,10 @@ class CameraRuntime:
 runtimes: Dict[str, CameraRuntime] = {}
 active_connections: List[WebSocket] = []
 
+# Chỉ phục vụ các route cũ (/api/upload, /api/start, /api/snapshot). Luồng mới
+# lưu nguồn vào từng camera qua source_uri, không dùng biến chung này.
+current_video_path: Optional[str] = None
+
 
 # Bản chỉ để ĐỌC thời khoá biểu và kết quả điểm danh của mọi camera. Không gắn
 # với luồng nào nên không mở phiên điểm danh; các route tổng hợp dùng bản này.
@@ -357,20 +361,19 @@ async def get_current_snapshot():
 
 @app.get("/api/events/clip")
 async def get_event_clip(clip_id: Optional[str] = None):
-    """Retrieve 10-second replay frame buffer for tactical event playback."""
-    from app.video_processor import global_clip_buffer, latest_event_clips
-    
+    """Đoạn phát lại của một sự kiện. Bộ đệm nay theo từng camera."""
+    from app.video_processor import latest_event_clips
+
     frames = []
     if clip_id and clip_id in latest_event_clips:
         frames = latest_event_clips[clip_id]
-    elif len(global_clip_buffer) > 0:
-        frames = list(global_clip_buffer)
     else:
+        # Không nêu clip_id thì lấy tạm khung hình mới nhất của camera đang chạy
         runtime = _first_runtime()
         latest = runtime.last_frame_data if runtime else None
         if latest and "frame" in latest:
             frames = [latest["frame"]]
-        
+
     return {
         "status": "success",
         "clip_id": clip_id or "latest",
