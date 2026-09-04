@@ -131,11 +131,10 @@ function switchNavTab(tabName) {
     if (targetView) targetView.classList.add('active');
 
     // Rời màn nào thì ngắt luồng hình của màn đó, không để chạy ngầm
-    ['ad-stream', 'sf-stream'].forEach(id => {
-        const el = document.getElementById(id);
-        if (el && !el.closest('.page-view').classList.contains('active')) detachStream(el);
-    });
+    const adStream = document.getElementById('ad-stream');
+    if (adStream && !adStream.closest('.page-view').classList.contains('active')) detachStream(adStream);
     if (tabName !== 'monitoring') detachAllCameraStreams();
+    if (tabName !== 'safety') detachSafetyStreams();
 
     const titles = {
         'schedule-progress': 'Lịch & Tiến độ huấn luyện',
@@ -2426,12 +2425,7 @@ async function loadSafetyDashboard() {
         if (badge) badge.textContent = `${data.pending_count} chờ xử lý`;
         pendingEventsCount = data.pending_count;
 
-        const cam = (data.cameras || [])[0];
-        if (cam) {
-            attachStream(document.getElementById('sf-stream'), cam.id, true);
-            document.getElementById('sf-camera-caption').textContent =
-                `${cam.name} · ${cam.area_name || ''} · ${cam.status === 'online' ? 'đang giám sát' : 'chưa chạy'}`;
-        }
+        renderSafetyCameras(data.cameras || []);
 
         const list = document.getElementById('sf-events-list');
         list.innerHTML = '';
@@ -2448,6 +2442,74 @@ async function loadSafetyDashboard() {
     }
 }
 window.loadSafetyDashboard = loadSafetyDashboard;
+
+// Trường bắn có thể có nhiều camera nên màn này phải thấy hết, không chỉ cái
+// đầu danh sách. Dùng lại kiểu ô của lưới giám sát, bỏ nút chạy/dừng vì bật tắt
+// thiết bị là việc của phân hệ III.
+function renderSafetyCameras(cameras) {
+    const wall = document.getElementById('sf-camera-wall');
+    if (!wall) return;
+
+    if (!cameras.length) {
+        wall.innerHTML = '<p class="empty-hint">Chưa có camera nào giám sát trường bắn</p>';
+        return;
+    }
+    const hint = wall.querySelector('.empty-hint');
+    if (hint) hint.remove();
+
+    const seen = new Set();
+    cameras.forEach(cam => {
+        seen.add(cam.id);
+        let tile = document.getElementById(`sf-cam-tile-${cam.id}`);
+        if (!tile) {
+            tile = document.createElement('div');
+            tile.className = 'camera-tile';
+            tile.id = `sf-cam-tile-${cam.id}`;
+            tile.innerHTML = `
+                <div class="camera-tile-head">
+                    <span class="camera-tile-name"></span>
+                    <span class="camera-tile-status"></span>
+                </div>
+                <div class="camera-tile-video">
+                    <img id="sf-cam-img-${cam.id}" alt="Luồng ${esc(cam.name)}">
+                    <div class="camera-tile-idle">Chưa chạy</div>
+                </div>
+                <div class="camera-tile-foot">
+                    <span class="camera-tile-area"></span>
+                </div>`;
+            wall.appendChild(tile);
+        }
+
+        const running = cam.status === 'online';
+        tile.classList.toggle('is-running', running);
+        tile.querySelector('.camera-tile-name').textContent = cam.name;
+        tile.querySelector('.camera-tile-status').innerHTML =
+            CAMERA_STATUS_TAG[cam.status] || cam.status;
+        tile.querySelector('.camera-tile-area').textContent = cam.area_name || '';
+
+        // Màn tự làm mới mỗi 15s. Gán lại src là mở lại kết nối MJPEG nên hình
+        // sẽ giật; chỉ gắn khi ô chưa có luồng.
+        const img = document.getElementById(`sf-cam-img-${cam.id}`);
+        if (running) {
+            if (!img.getAttribute('src')) attachStream(img, cam.id, true);
+        } else {
+            detachStream(img);
+        }
+    });
+
+    // Camera bị xoá thì gỡ ô của nó
+    [...wall.querySelectorAll('.camera-tile')].forEach(tile => {
+        const id = tile.id.replace('sf-cam-tile-', '');
+        if (!seen.has(id)) {
+            detachStream(document.getElementById(`sf-cam-img-${id}`));
+            tile.remove();
+        }
+    });
+}
+
+function detachSafetyStreams() {
+    document.querySelectorAll('#sf-camera-wall img').forEach(detachStream);
+}
 
 function renderViolationGallery(events) {
     const gallery = document.getElementById('sf-gallery');

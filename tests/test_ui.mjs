@@ -271,9 +271,20 @@ check('trạng thái an toàn khớp dữ liệu máy chủ',
 check('thư viện ảnh vi phạm được dựng',
     doc.getElementById('sf-gallery').children.length >= 1,
     String(doc.getElementById('sf-gallery').innerHTML.slice(0, 80)));
-check('luồng camera trường bắn được gắn',
-    (doc.getElementById('sf-stream').getAttribute('src') || '').includes('stream.mjpg'),
-    doc.getElementById('sf-stream').getAttribute('src'));
+const sfTiles = [...doc.querySelectorAll('#sf-camera-wall .camera-tile')];
+check('màn an toàn dựng đủ ô cho MỌI camera, không chỉ camera đầu tiên',
+    sfTiles.length === safety.cameras.length,
+    `${sfTiles.length} ô / ${safety.cameras.length} camera`);
+// Ô nào gắn luồng thì phải là luồng của đúng camera nó đại diện
+const sfWrong = sfTiles.find(t => {
+    const id = t.id.replace('sf-cam-tile-', '');
+    const src = t.querySelector('img').getAttribute('src');
+    return src && !src.includes(`/cameras/${id}/`);
+});
+check('ô nào trỏ đúng luồng camera đó', sfWrong === undefined, sfWrong ? sfWrong.id : '');
+check('camera chưa chạy thì không gắn luồng chết',
+    safety.cameras.filter(c => c.status !== 'online')
+        .every(c => !doc.getElementById(`sf-cam-img-${c.id}`).getAttribute('src')));
 
 console.log('\n[4b] Lịch huấn luyện và form tạo ca');
 window.switchNavTab('schedule-progress');
@@ -439,6 +450,16 @@ check('quay lại camera khác thì KHÔNG còn thấy vùng của camera kia',
     !doc.getElementById('zone-list').textContent.includes('Vùng riêng của camera phụ'),
     doc.getElementById('zone-list').textContent.slice(0, 120));
 
+console.log('\n[4h] Màn an toàn với nhiều camera');
+window.switchNavTab('safety');
+await sleep(1200);
+const sfAll = await (await fetch(BASE + '/api/v1/summary/safety')).json();
+const sfTiles2 = [...doc.querySelectorAll('#sf-camera-wall .camera-tile')];
+check('có 2 camera thì màn an toàn hiện cả 2', sfAll.cameras.length >= 2 && sfTiles2.length === sfAll.cameras.length,
+    `${sfTiles2.length} ô / ${sfAll.cameras.length} camera`);
+check('camera phụ có ô riêng trên màn an toàn',
+    doc.getElementById(`sf-cam-tile-${extra.id}`) !== null);
+
 await fetch(BASE + `/api/v1/cameras/${extra.id}`, { method: 'DELETE' });
 
 console.log('\n[5] Quản lý camera');
@@ -456,13 +477,16 @@ check('đóng được form', doc.getElementById('camera-modal').style.display =
 console.log('\n[6] Rời màn thì ngắt luồng hình, không chạy ngầm');
 window.switchNavTab('safety');
 await sleep(600);
-const sfBefore = doc.getElementById('sf-stream').getAttribute('src');
+// Máy chạy test không có camera nào online nên tự gắn luồng vào từng ô, rồi
+// mới kiểm việc rời màn có ngắt hết hay không.
+const sfImgs = [...doc.querySelectorAll('#sf-camera-wall img')];
+check('màn an toàn có ô camera để gắn luồng', sfImgs.length >= 1, `${sfImgs.length} ô`);
+sfImgs.forEach(img => img.setAttribute('src', '/api/v1/cameras/cam_01/stream.mjpg?overlay=1'));
 window.switchNavTab('logs');
 await sleep(400);
-check('luồng trường bắn được gắn khi đang xem', !!sfBefore);
-check('rời màn thì luồng bị ngắt',
-    !doc.getElementById('sf-stream').getAttribute('src'),
-    doc.getElementById('sf-stream').getAttribute('src'));
+check('rời màn thì mọi luồng trường bắn đều bị ngắt',
+    sfImgs.length >= 1 && sfImgs.every(img => !img.getAttribute('src')),
+    sfImgs.map(img => img.getAttribute('src')).join(' | '));
 
 console.log('\n[7] Không còn dấu vết của nút giả cũ');
 const src = appJs;
