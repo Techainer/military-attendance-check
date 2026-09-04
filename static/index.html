@@ -398,13 +398,15 @@
                                     </button>
                                 </div>
                                 <div class="roi-cam-tag">
-                                    CAM-01 · SÂN TẬP TRUNG
+                                    <label for="zone-camera-select">Vẽ vùng cho camera</label>
+                                    <select id="zone-camera-select" class="filter-select"
+                                            onchange="switchZoneCamera(this.value)"></select>
                                 </div>
                             </div>
 
                             <div class="roi-canvas-card">
                                 <div class="roi-canvas-header">
-                                    <span>KHUNG HÌNH TĨNH · CAM-01 · SÂN TẬP TRUNG</span>
+                                    <span id="roi-canvas-label">KHUNG HÌNH TĨNH</span>
                                     <span id="roi-mode-label">CHẾ ĐỘ: POLYGON</span>
                                 </div>
                                 <div class="roi-canvas-wrapper" id="roi-canvas-wrapper">
@@ -1214,16 +1216,23 @@
         </div>
     </div>
 
-    <!-- Camera Source Modal -->
+    <!-- Gán nguồn tín hiệu cho một camera cụ thể -->
     <div id="source-modal" class="modal-backdrop" style="display: none;">
         <div class="modal-content glass-card">
             <div class="modal-header">
-                <h3>Cấu hình Nguồn Camera Giám sát</h3>
+                <h3>Gán nguồn tín hiệu cho camera</h3>
                 <button class="btn-close-modal" onclick="toggleSourceModal()">✕</button>
             </div>
             <div class="modal-body">
+                <div class="form-group">
+                    <label for="source-camera-select">Gán cho camera nào</label>
+                    <select id="source-camera-select" class="form-input form-select"
+                            onchange="onSourceCameraChange()"></select>
+                    <p class="form-hint" id="source-camera-hint"></p>
+                </div>
+
                 <div class="input-mode-selector">
-                    <button type="button" class="mode-tab active" id="mode-video-btn" onclick="switchMode('video')">Tệp Video</button>
+                    <button type="button" class="mode-tab active" id="mode-video-btn" onclick="switchMode('video')">Tệp video</button>
                     <button type="button" class="mode-tab" id="mode-rtsp-btn" onclick="switchMode('rtsp')">RTSP Stream</button>
                 </div>
 
@@ -1231,20 +1240,31 @@
                     <form id="upload-form">
                         <label class="form-label">Tải tệp video (.mp4, .avi, .mov):</label>
                         <input type="file" id="video-file" accept="video/*" class="form-input">
-                        <button type="submit" class="btn-primary-green" style="margin-top: 10px;">Tải lên & Khởi chạy</button>
+                        <button type="submit" class="btn-primary-green" style="margin-top: 10px;">
+                            Tải lên &amp; gán cho camera này
+                        </button>
                     </form>
                     <p id="upload-status" class="status-message"></p>
                 </div>
 
                 <div id="rtsp-source-panel" class="source-subpanel" style="display: none;">
                     <label class="form-label">Địa chỉ RTSP Stream:</label>
-                    <input type="text" id="rtsp-url" placeholder="rtsp://user:pass@ip:port/stream" class="form-input">
+                    <input type="text" id="rtsp-url" placeholder="rtsp://user:pass@ip:port/stream" class="form-input font-mono">
                     <div class="preset-container">
                         <span class="help-text">Demo test:</span>
                         <a href="#" onclick="setRtspDemo(event)" class="preset-link">Wowza Test Stream</a>
                     </div>
-                    <button type="button" class="btn-primary-green" onclick="startRtspStream()" style="margin-top: 10px;">Kết nối Camera</button>
+                    <button type="button" class="btn-primary-green" onclick="startRtspStream()" style="margin-top: 10px;">
+                        Gán &amp; kết nối camera này
+                    </button>
+                    <p id="rtsp-status" class="status-message"></p>
                 </div>
+
+                <label class="custom-checkbox" style="margin-top: 14px;">
+                    <input type="checkbox" id="source-autostart-cb" checked>
+                    <span class="checkmark"></span>
+                    <span>Chạy camera này ngay sau khi gán nguồn</span>
+                </label>
             </div>
         </div>
     </div>

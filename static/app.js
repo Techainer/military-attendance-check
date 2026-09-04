@@ -22,9 +22,6 @@ const topbarAlertStat = document.getElementById('topbar-alert-stat');
 const pendingEventsBadge = document.getElementById('pending-events-badge');
 
 // Surveillance DOM Elements
-const loadingOverlay = document.getElementById('loading-overlay');
-const overlayStatusText = document.getElementById('overlay-status-text');
-const overlayStartBtn = document.getElementById('overlay-start-btn');
 const btnLockBaseline = document.getElementById('btn-lock-baseline');
 const aiOverlayBtnText = document.getElementById('ai-overlay-btn-text');
 const eventsListContainer = document.getElementById('events-list-container');
@@ -163,9 +160,10 @@ function switchNavTab(tabName) {
     }
 
     if (tabName === 'zones') {
-        setTimeout(() => {
+        setTimeout(async () => {
             initRoiCanvas();
-            loadZoneRules();
+            await fillZoneCameraSelect();
+            await loadZoneRules();
             captureFrameForRoi();
         }, 50);
     }
@@ -332,6 +330,8 @@ window.closeClipModal = closeClipModal;
 
 // ----------------- SURVEILLANCE & STREAM CONTROLS -----------------
 function toggleSourceModal() {
+    // Nạp danh sách camera mỗi lần mở, để chọn được nguồn gán cho camera nào
+    if (sourceModal && sourceModal.style.display === 'none') fillSourceCameraSelect();
     if (!sourceModal) return;
     sourceModal.style.display = sourceModal.style.display === 'none' ? 'flex' : 'none';
 }
@@ -387,106 +387,103 @@ async function startAttendanceNow() {
 }
 window.startAttendanceNow = startAttendanceNow;
 
-function takeQuickSnapshot() {
-    // Tải ảnh gốc từ máy chủ, không chụp lại từ thẻ ảnh đang hiển thị
-    window.open(`/api/v1/cameras/${activeCameraId}/snapshot?overlay=1&download=1`, '_blank');
-}
-window.takeQuickSnapshot = takeQuickSnapshot;
 
-async function quickStartStream() {
-    if (overlayStatusText) overlayStatusText.textContent = 'Đang khởi chạy luồng giám sát CAM-01...';
-    try {
-        const res = await fetch('/api/start?mode=video', { method: 'POST' });
-        const data = await res.json();
-        if (data.status === 'success') {
-            loadCameraWall();
-        } else {
-            // If no video uploaded, show source modal
-            toggleSourceModal();
-        }
-    } catch (e) {
-        toggleSourceModal();
+// ---------- gán nguồn tín hiệu cho một camera ----------
+// Nguồn thuộc về từng camera (trường source_uri), không phải một biến dùng
+// chung. Trước đây tải video lên là gán cứng vào camera mặc định, nên có hai
+// camera thì không biết nguồn vừa thêm rơi vào đâu.
+
+function sourceTargetCamera() {
+    const select = document.getElementById('source-camera-select');
+    return select ? select.value : activeCameraId;
+}
+
+function onSourceCameraChange() {
+    const cam = (cameraWallData || []).find(c => c.id === sourceTargetCamera());
+    const hint = document.getElementById('source-camera-hint');
+    if (!hint) return;
+
+    if (!cam) {
+        hint.textContent = '';
+        return;
+    }
+    hint.textContent = cam.source_uri
+        ? `Nguồn hiện tại: ${cam.source_type} · ${cam.source_uri}`
+        : 'Camera này chưa khai nguồn.';
+    if (cam.status === 'online') {
+        hint.textContent += ' — camera đang chạy, gán nguồn mới sẽ dừng rồi chạy lại.';
     }
 }
-window.quickStartStream = quickStartStream;
+window.onSourceCameraChange = onSourceCameraChange;
+
+async function fillSourceCameraSelect() {
+    const select = document.getElementById('source-camera-select');
+    if (!select) return;
+    try {
+        cameraWallData = (await getJson('/api/v1/cameras')).items;
+    } catch (e) {
+        return;
+    }
+    const keep = select.value;
+    select.innerHTML = cameraWallData
+        .map(c => `<option value="${c.id}">${esc(c.name)}${c.status === 'online' ? ' (đang chạy)' : ''}</option>`)
+        .join('');
+    select.value = cameraWallData.some(c => c.id === keep) ? keep : (cameraWallData[0] || {}).id || '';
+    onSourceCameraChange();
+}
+
+async function assignSourceAndStart(cameraId, sourceType, sourceUri, statusEl) {
+    const autostart = (document.getElementById('source-autostart-cb') || {}).checked;
+
+    // Camera đang chạy thì phải dừng trước, nếu không nguồn mới chỉ nằm trong
+    // hồ sơ mà luồng vẫn phát nguồn cũ.
+    const cam = (cameraWallData || []).find(c => c.id === cameraId);
+    if (cam && cam.status === 'online') {
+        await fetch(`/api/v1/cameras/${cameraId}/stop`, { method: 'POST' });
+        await new Promise(r => setTimeout(r, 900));
+    }
+
+    const res = await fetch(`/api/v1/cameras/${cameraId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_type: sourceType, source_uri: sourceUri })
+    });
+    if (!res.ok) throw new Error(describeApiError(await res.json()));
+
+    if (autostart) {
+        const started = await fetch(`/api/v1/cameras/${cameraId}/start`, { method: 'POST' });
+        if (!started.ok) throw new Error(describeApiError(await started.json()));
+    }
+
+    if (statusEl) {
+        statusEl.textContent = autostart
+            ? '✓ Đã gán nguồn và khởi chạy camera'
+            : '✓ Đã gán nguồn. Bấm Chạy trên ô camera khi cần.';
+        statusEl.style.color = '#0a8f4c';
+    }
+    await loadCameraWall();
+    await fillSourceCameraSelect();
+}
 
 async function startRtspStream() {
-    const rtspUrlInput = document.getElementById('rtsp-url');
-    const rtspUrl = rtspUrlInput ? rtspUrlInput.value.trim() : '';
-    if (!rtspUrl) {
-        alert('Vui lòng nhập địa chỉ RTSP Stream');
+    const input = document.getElementById('rtsp-url');
+    const status = document.getElementById('rtsp-status');
+    const url = input ? input.value.trim() : '';
+    if (!url) {
+        status.textContent = '✗ Vui lòng nhập địa chỉ RTSP';
+        status.style.color = '#dc2626';
         return;
     }
 
     try {
-        const res = await fetch(`/api/start?mode=rtsp&rtsp_url=${encodeURIComponent(rtspUrl)}`, { method: 'POST' });
-        const data = await res.json();
-        if (data.status === 'success') {
-            toggleSourceModal();
-            loadCameraWall();
-        } else {
-            alert('Lỗi: ' + data.message);
-        }
+        await assignSourceAndStart(sourceTargetCamera(), 'rtsp', url, status);
+        setTimeout(toggleSourceModal, 900);
     } catch (e) {
-        alert('Lỗi: ' + e.message);
+        status.textContent = `✗ ${e.message}`;
+        status.style.color = '#dc2626';
     }
 }
 window.startRtspStream = startRtspStream;
-
-const uploadForm = document.getElementById('upload-form');
-if (uploadForm) {
-    uploadForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const videoFileInput = document.getElementById('video-file');
-        const uploadStatus = document.getElementById('upload-status');
-        const file = videoFileInput.files[0];
-        if (!file) {
-            uploadStatus.textContent = 'Vui lòng chọn tệp video';
-            uploadStatus.style.color = '#ef4444';
-            return;
-        }
-
-        const CHUNK_SIZE = 1 * 1024 * 1024;
-        const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-        const uploadId = Date.now().toString() + '-' + Math.random().toString(36).substr(2, 9);
-
-        uploadStatus.textContent = 'Đang tải tệp video lên...';
-        uploadStatus.style.color = '#0284c7';
-
-        try {
-            for (let i = 0; i < totalChunks; i++) {
-                const start = i * CHUNK_SIZE;
-                const end = Math.min(start + CHUNK_SIZE, file.size);
-                const chunk = file.slice(start, end);
-
-                const formData = new FormData();
-                formData.append('file', chunk);
-                formData.append('chunk_index', i);
-                formData.append('total_chunks', totalChunks);
-                formData.append('upload_id', uploadId);
-                formData.append('filename', file.name);
-
-                const percent = Math.round(((i) / totalChunks) * 100);
-                uploadStatus.textContent = `Tải lên ${i + 1}/${totalChunks} (${percent}%)`;
-
-                const response = await fetch('/api/upload_chunk', { method: 'POST', body: formData });
-                if (!response.ok) throw new Error(`Lỗi tải lên chunk ${i}`);
-
-                const data = await response.json();
-                if (i === totalChunks - 1 && data.status === 'success') {
-                    uploadStatus.textContent = `✓ Đã tải xong video`;
-                    uploadStatus.style.color = '#0a8f4c';
-                    toggleSourceModal();
-                    loadCameraWall();
-                }
-            }
-        } catch (err) {
-            console.error(err);
-            uploadStatus.textContent = `✗ ${err.message}`;
-            uploadStatus.style.color = '#ef4444';
-        }
-    });
-}
 
 // ----------------- LUỒNG HÌNH (MJPEG) VÀ SỰ KIỆN (SSE) -----------------
 // Hình và dữ liệu đi hai đường khác nhau: thẻ <img> nhận MJPEG, EventSource nhận
@@ -1196,9 +1193,11 @@ async function captureFrameForRoi() {
     // overlay=0: lấy khung hình GỐC. Dùng ảnh đã vẽ lớp phủ thì sẽ vẽ vùng mới
     // đè lên chính hình các vùng cũ, càng chỉnh càng lệch.
     try {
-        const res = await fetch(`/api/v1/cameras/${activeCameraId}/snapshot?overlay=0&_=${Date.now()}`);
+        const res = await fetch(`/api/v1/cameras/${zoneTargetCamera()}/snapshot?overlay=0&_=${Date.now()}`);
         if (!res.ok) {
-            alert('Chưa có luồng video đang chạy. Hãy bắt đầu giám sát hoặc tải video trước.');
+            const cam = (cameraWallData || []).find(c => c.id === zoneTargetCamera());
+            alert(`Camera "${(cam && cam.name) || zoneTargetCamera()}" chưa chạy nên chưa có khung hình. `
+                  + 'Bấm Chạy trên ô camera đó rồi lấy lại khung hình.');
             return;
         }
         const blob = await res.blob();
@@ -1321,6 +1320,45 @@ function updateCoordsJsonDisplay() {
 // trường bắn, và vạch an toàn. Loại vùng quyết định AI xử lý thế nào.
 
 let zonesOnCamera = [];
+// Camera đang được vẽ vùng. Tách riêng khỏi activeCameraId để chọn camera ở
+// màn vùng không làm đổi camera đang xem ở màn khác.
+let zoneCameraId = null;
+
+function zoneTargetCamera() {
+    return zoneCameraId || activeCameraId;
+}
+
+async function fillZoneCameraSelect() {
+    const select = document.getElementById('zone-camera-select');
+    if (!select) return;
+    try {
+        cameraWallData = (await getJson('/api/v1/cameras')).items;
+    } catch (e) {
+        return;
+    }
+    if (!zoneCameraId && cameraWallData.length) zoneCameraId = cameraWallData[0].id;
+
+    select.innerHTML = cameraWallData
+        .map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    select.value = zoneTargetCamera();
+
+    const cam = cameraWallData.find(c => c.id === zoneTargetCamera());
+    const label = document.getElementById('roi-canvas-label');
+    if (label && cam) {
+        label.textContent = `KHUNG HÌNH TĨNH · ${cam.name.toUpperCase()}`
+            + (cam.status === 'online' ? '' : ' · CHƯA CHẠY');
+    }
+}
+
+async function switchZoneCamera(cameraId) {
+    zoneCameraId = cameraId;
+    resetZoneForm();
+    await fillZoneCameraSelect();
+    await loadZoneRules();
+    // Ảnh nền phải là khung hình của chính camera đang vẽ
+    captureFrameForRoi();
+}
+window.switchZoneCamera = switchZoneCamera;
 
 const ZONE_RULE_META = {
     attendance_area: {
@@ -1348,7 +1386,7 @@ window.onZoneRuleChange = onZoneRuleChange;
 
 async function loadZoneRules() {
     try {
-        zonesOnCamera = await getJson(`/api/v1/cameras/${activeCameraId}/zones`);
+        zonesOnCamera = await getJson(`/api/v1/cameras/${zoneTargetCamera()}/zones`);
     } catch (e) {
         zonesOnCamera = [];
     }
@@ -1482,7 +1520,7 @@ async function saveZoneRules(event) {
 
     try {
         const res = await fetch(
-            id ? `/api/v1/zones/${id}` : `/api/v1/cameras/${activeCameraId}/zones`,
+            id ? `/api/v1/zones/${id}` : `/api/v1/cameras/${zoneTargetCamera()}/zones`,
             {
                 method: id ? 'PATCH' : 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -2541,14 +2579,6 @@ async function loadCameras() {
                 </td>`;
             tbody.appendChild(tr);
         });
-
-        // Ô chọn camera ở màn giám sát trực tiếp
-        const select = document.getElementById('monitor-camera-select');
-        if (select) {
-            select.innerHTML = data.items
-                .map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
-            select.value = activeCameraId;
-        }
     } catch (e) {
         tbody.innerHTML = `<tr><td colspan="7" class="empty-row">Lỗi tải danh sách: ${esc(e.message)}</td></tr>`;
     }

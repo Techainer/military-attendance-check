@@ -307,6 +307,85 @@ const wrongTile = tiles.find(t => {
 check('ô nào trỏ đúng luồng camera đó', wrongTile === undefined,
     wrongTile ? wrongTile.id : '');
 
+console.log('\n[4f] Gán nguồn: phải chọn được camera');
+window.switchNavTab('monitoring');
+await sleep(900);
+
+// Dựng sẵn camera thứ hai để có cái mà chọn
+const extra = await (await fetch(BASE + '/api/v1/cameras', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Camera phụ (test nguồn)', source_type: 'file',
+                           source_uri: '/tmp/khong-co.mp4' })
+})).json();
+
+window.toggleSourceModal();
+await sleep(900);
+const srcSelect = doc.getElementById('source-camera-select');
+check('modal nguồn có ô chọn camera', srcSelect !== null);
+check('ô chọn liệt kê đủ camera',
+    srcSelect && srcSelect.options.length >= 2,
+    srcSelect ? String(srcSelect.options.length) : 'không có');
+check('có nút bật/tắt tự chạy sau khi gán',
+    doc.getElementById('source-autostart-cb') !== null);
+
+srcSelect.value = extra.id;
+window.onSourceCameraChange();
+check('đổi camera thì hiện nguồn hiện tại của chính nó',
+    doc.getElementById('source-camera-hint').textContent.includes('khong-co.mp4'),
+    doc.getElementById('source-camera-hint').textContent);
+
+// Gán RTSP cho camera phụ, KHÔNG được đụng camera mặc định
+const before = await (await fetch(BASE + '/api/v1/cameras/cam_01')).json();
+doc.getElementById('source-autostart-cb').checked = false;
+doc.getElementById('rtsp-url').value = 'rtsp://10.9.9.9:554/test';
+await window.startRtspStream();
+await sleep(1200);
+
+const afterExtra = await (await fetch(BASE + `/api/v1/cameras/${extra.id}`)).json();
+const afterMain = await (await fetch(BASE + '/api/v1/cameras/cam_01')).json();
+check('nguồn được gán đúng camera đã chọn',
+    afterExtra.source_uri === 'rtsp://10.9.9.9:554/test', afterExtra.source_uri);
+check('camera kia KHÔNG bị đổi nguồn theo',
+    afterMain.source_uri === before.source_uri,
+    `${before.source_uri} -> ${afterMain.source_uri}`);
+
+window.toggleSourceModal();
+
+console.log('\n[4g] Vẽ vùng: phải chọn được camera');
+window.switchNavTab('zones');
+await sleep(1400);
+
+const zoneSelect = doc.getElementById('zone-camera-select');
+check('màn vẽ vùng có ô chọn camera', zoneSelect !== null);
+check('ô chọn liệt kê đủ camera',
+    zoneSelect && zoneSelect.options.length >= 2,
+    zoneSelect ? String(zoneSelect.options.length) : 'không có');
+
+// Mỗi camera có danh sách vùng riêng
+await fetch(BASE + `/api/v1/cameras/${extra.id}/zones`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Vùng riêng của camera phụ', kind: 'polygon',
+        rule: 'restricted_area',
+        points: [{x:0.6,y:0.1},{x:0.9,y:0.1},{x:0.9,y:0.5},{x:0.6,y:0.5}] })
+});
+
+await window.switchZoneCamera(extra.id);
+await sleep(900);
+check('chọn camera nào thì hiện vùng của camera đó',
+    doc.getElementById('zone-list').textContent.includes('Vùng riêng của camera phụ'),
+    doc.getElementById('zone-list').textContent.slice(0, 120));
+check('nhãn khung hình đổi theo camera đang chọn',
+    doc.getElementById('roi-canvas-label').textContent.includes('CAMERA PHỤ'),
+    doc.getElementById('roi-canvas-label').textContent);
+
+await window.switchZoneCamera('cam_01');
+await sleep(900);
+check('quay lại camera khác thì KHÔNG còn thấy vùng của camera kia',
+    !doc.getElementById('zone-list').textContent.includes('Vùng riêng của camera phụ'),
+    doc.getElementById('zone-list').textContent.slice(0, 120));
+
+await fetch(BASE + `/api/v1/cameras/${extra.id}`, { method: 'DELETE' });
+
 console.log('\n[5] Quản lý camera');
 window.switchNavTab('cameras');
 await sleep(1000);

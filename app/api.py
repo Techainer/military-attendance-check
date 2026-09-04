@@ -587,13 +587,9 @@ async def upload_chunk(
         current_video_path = str(final_path)
         print(f"Video fully uploaded: {final_path}")
         
-        if not is_camera_running(CAMERA_ID):
-            cameras = _load_cameras()
-            camera = next((c for c in cameras if c["id"] == CAMERA_ID), None) or {
-                "id": CAMERA_ID, "name": CAMERA_NAME, "target_fps": 5}
-            runtime = CameraRuntime({**camera, "source_uri": current_video_path})
-            runtimes[CAMERA_ID] = runtime
-            background_tasks.add_task(_run_camera, runtime)
+        # Chỉ lưu file và trả đường dẫn. Gán vào camera nào là việc của người
+        # dùng — trước đây tự chạy cam_01 nên tải video lên là camera khác cũng
+        # bị đổi theo.
         
         return {
             "status": "success",
