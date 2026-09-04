@@ -12,9 +12,9 @@ from pathlib import Path
 from typing import List, Optional
 
 import base64
+import subprocess
 
 import cv2
-import numpy as np
 
 from app import clock
 from app.storage import read_json_list, write_json_list
@@ -110,6 +110,11 @@ class EventStore:
         Bộ đệm khung hình chỉ nằm trong RAM và bị dọn dần, nên khởi động lại máy
         chủ là mọi nút "Xem clip" trong nhật ký cũ đều chết. Ghi ra file ngay lúc
         sự kiện xảy ra thì đoạn ghi sống cùng ảnh bằng chứng.
+
+        Mã hoá bằng ffmpeg chứ không bằng cv2.VideoWriter: bản opencv-python trên
+        PyPI không kèm encoder x264 nên chỉ ghi được mp4v (MPEG-4 Part 2), mà thẻ
+        <video> của trình duyệt từ chối codec đó — file hợp lệ nhưng không phát
+        được. Khung hình sẵn là JPEG nên đẩy thẳng vào ffmpeg, khỏi giải mã.
         """
         if not frames:
             return None
@@ -118,28 +123,28 @@ class EventStore:
         if clip_file.exists() and clip_file.stat().st_size > 0:
             return f"/api/v1/events/{event_id}/clip"
 
+        cmd = [
+            "ffmpeg", "-y", "-loglevel", "error",
+            # Nói thẳng đầu vào là MJPEG: để ffmpeg tự dò thì khung hình nhỏ
+            # (ảnh nén nhẹ) không đủ dữ liệu, nó bỏ luôn luồng video
+            "-f", "image2pipe", "-vcodec", "mjpeg",
+            "-framerate", str(CLIP_FPS), "-i", "-",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            # yuv420p đòi cạnh chẵn; khung lẻ pixel sẽ làm libx264 bỏ cuộc
+            "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+            # Đưa moov atom lên đầu file để trình duyệt phát được ngay, không
+            # phải tải hết mới bắt đầu
+            "-movflags", "+faststart",
+            str(clip_file),
+        ]
         try:
-            decoded = []
-            for frame_b64 in frames:
-                img = cv2.imdecode(np.frombuffer(base64.b64decode(frame_b64), np.uint8),
-                                   cv2.IMREAD_COLOR)
-                if img is not None:
-                    decoded.append(img)
-            if not decoded:
-                return None
-
-            h, w = decoded[0].shape[:2]
-            writer = cv2.VideoWriter(str(clip_file), cv2.VideoWriter_fourcc(*"mp4v"),
-                                     CLIP_FPS, (w, h))
-            for img in decoded:
-                # Khung lệch kích thước bị VideoWriter bỏ qua âm thầm
-                if img.shape[:2] == (h, w):
-                    writer.write(img)
-            writer.release()
+            payload = b"".join(base64.b64decode(f) for f in frames)
+            proc = subprocess.run(cmd, input=payload, capture_output=True, timeout=120)
+            if proc.returncode != 0:
+                print(f"[Events] ffmpeg lỗi khi dựng đoạn ghi: "
+                      f"{proc.stderr.decode('utf-8', 'replace')[:300]}")
         except Exception as e:
             print(f"[Events] Lỗi dựng đoạn ghi: {e}")
-            clip_file.unlink(missing_ok=True)
-            return None
 
         if not clip_file.exists() or clip_file.stat().st_size == 0:
             clip_file.unlink(missing_ok=True)

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -177,6 +178,15 @@ check("save_clip dựng được đoạn mp4",
       clip_url == "/api/v1/events/evt_kiem_thu_clip/clip", str(clip_url))
 check("file nằm cạnh ảnh bằng chứng và không rỗng",
       clip_file.exists() and clip_file.stat().st_size > 0)
+
+# Đoạn ghi phải là H.264. cv2.VideoWriter bản PyPI chỉ ghi được mp4v (MPEG-4
+# Part 2): file hợp lệ, tải về được, nhưng thẻ <video> của trình duyệt từ chối
+# phát — giao diện báo "không tải được đoạn ghi" mà API vẫn trả 200.
+raw = clip_file.read_bytes()
+tags = sorted(t.decode() for t in set(re.findall(rb"(mp4v|avc1|hev1|av01)", raw)))
+check("đoạn ghi mã hoá H.264 để trình duyệt phát được", tags == ["avc1"], str(tags))
+check("moov atom nằm trước mdat để phát được ngay khi chưa tải xong",
+      raw.index(b"moov") < raw.index(b"mdat"))
 check("không có khung nào thì không dựng file rỗng",
       api.events.save_clip("evt_kiem_thu_rong", []) is None)
 check("không đẻ file cho đoạn ghi rỗng",
