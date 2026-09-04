@@ -465,6 +465,61 @@ async function assignSourceAndStart(cameraId, sourceType, sourceUri, statusEl) {
     await fillSourceCameraSelect();
 }
 
+// Tải video lên rồi gán cho ĐÚNG camera đang chọn. Chia nhỏ file để tránh
+// giới hạn kích thước một request.
+const uploadForm = document.getElementById('upload-form');
+if (uploadForm) {
+    uploadForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fileInput = document.getElementById('video-file');
+        const status = document.getElementById('upload-status');
+        const file = fileInput && fileInput.files[0];
+
+        if (!file) {
+            status.textContent = '✗ Vui lòng chọn tệp video';
+            status.style.color = '#dc2626';
+            return;
+        }
+
+        // Camera đích phải chốt TRƯỚC khi tải: quá trình tải mất thời gian, đọc
+        // lại ô chọn ở cuối thì người dùng có thể đã đổi sang camera khác.
+        const targetCamera = sourceTargetCamera();
+        const CHUNK_SIZE = 1024 * 1024;
+        const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+        const uploadId = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+
+        status.style.color = '#0284c7';
+        try {
+            let videoPath = null;
+            for (let i = 0; i < totalChunks; i++) {
+                const form = new FormData();
+                form.append('file', file.slice(i * CHUNK_SIZE, Math.min((i + 1) * CHUNK_SIZE, file.size)));
+                form.append('chunk_index', i);
+                form.append('total_chunks', totalChunks);
+                form.append('upload_id', uploadId);
+                form.append('filename', file.name);
+
+                status.textContent = `Đang tải ${i + 1}/${totalChunks} (${Math.round(i / totalChunks * 100)}%)`;
+                const res = await fetch('/api/upload_chunk', { method: 'POST', body: form });
+                if (!res.ok) throw new Error(`Lỗi tải phần ${i + 1}/${totalChunks}`);
+
+                const data = await res.json();
+                if (data.status === 'error') throw new Error(data.message || 'Lỗi tải lên');
+                if (data.video_path) videoPath = data.video_path;
+            }
+
+            if (!videoPath) throw new Error('Máy chủ không trả về đường dẫn tệp đã tải');
+
+            status.textContent = 'Đã tải xong, đang gán cho camera...';
+            await assignSourceAndStart(targetCamera, 'file', videoPath, status);
+            setTimeout(toggleSourceModal, 900);
+        } catch (err) {
+            status.textContent = `✗ ${err.message}`;
+            status.style.color = '#dc2626';
+        }
+    });
+}
+
 async function startRtspStream() {
     const input = document.getElementById('rtsp-url');
     const status = document.getElementById('rtsp-status');

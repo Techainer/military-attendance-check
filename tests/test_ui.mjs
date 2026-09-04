@@ -46,7 +46,26 @@ window.EventSource = class {
 const EventSourceCalls = [];
 window.EventSource.prototype.close = function () { this.closed = true; };
 
-window.fetch = (url, opts) => fetch(String(url).startsWith('http') ? url : BASE + url, opts);
+// FormData của jsdom không phải FormData của Node, fetch sẽ gửi thành chuỗi
+// "[object FormData]". Chuyển sang FormData thật để test chạm được luồng
+// tải file lên chứ không dừng ở mức giả lập.
+async function toNodeBody(body) {
+    if (!body || typeof body.entries !== 'function' || body instanceof FormData) return body;
+    const out = new FormData();
+    for (const [key, value] of body.entries()) {
+        if (value && typeof value.arrayBuffer === 'function') {
+            out.append(key, new Blob([await value.arrayBuffer()]), value.name || 'blob');
+        } else {
+            out.append(key, value);
+        }
+    }
+    return out;
+}
+
+window.fetch = async (url, opts) => {
+    const options = opts ? { ...opts, body: await toNodeBody(opts.body) } : opts;
+    return fetch(String(url).startsWith('http') ? url : BASE + url, options);
+};
 window.alert = (m) => { alerts.push(m); };
 window.confirm = () => true;
 const alerts = [];
@@ -348,6 +367,42 @@ check('nguồn được gán đúng camera đã chọn',
 check('camera kia KHÔNG bị đổi nguồn theo',
     afterMain.source_uri === before.source_uri,
     `${before.source_uri} -> ${afterMain.source_uri}`);
+
+// Tải file lên cho camera phụ: KHÔNG được đụng nguồn của camera mặc định.
+// Đây là kịch bản đã hỏng thật — handler của form tải video từng bị xoá nhầm
+// nên bấm nút là trình duyệt submit kiểu cũ, file không hề được tải lên.
+check('form tải video có handler, không submit kiểu cũ làm tải lại trang',
+    appJs.includes("uploadForm.addEventListener"));
+
+const mainBeforeUpload = await (await fetch(BASE + '/api/v1/cameras/cam_01')).json();
+
+srcSelect.value = extra.id;
+window.onSourceCameraChange();
+window.switchMode('video');
+
+// File thật, đủ nhỏ để đi trong một chunk
+const fakeVideo = new window.File([new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7])],
+                                  'test-clip.mp4', { type: 'video/mp4' });
+const fileInput = doc.getElementById('video-file');
+Object.defineProperty(fileInput, 'files', { value: [fakeVideo], configurable: true });
+
+doc.getElementById('upload-form').dispatchEvent(
+    new window.Event('submit', { bubbles: true, cancelable: true }));
+await sleep(2500);
+
+const extraAfterUpload = await (await fetch(BASE + `/api/v1/cameras/${extra.id}`)).json();
+const mainAfterUpload = await (await fetch(BASE + '/api/v1/cameras/cam_01')).json();
+
+check('tải file lên thì camera phụ đổi sang nguồn tệp',
+    extraAfterUpload.source_type === 'file'
+    && String(extraAfterUpload.source_uri).includes('test-clip'),
+    `${extraAfterUpload.source_type} · ${extraAfterUpload.source_uri}`);
+check('tải file cho camera phụ KHÔNG làm đổi nguồn camera mặc định',
+    mainAfterUpload.source_uri === mainBeforeUpload.source_uri,
+    `${mainBeforeUpload.source_uri} -> ${mainAfterUpload.source_uri}`);
+check('hai camera KHÔNG dùng chung một nguồn',
+    extraAfterUpload.source_uri !== mainAfterUpload.source_uri,
+    `${extraAfterUpload.source_uri} vs ${mainAfterUpload.source_uri}`);
 
 window.toggleSourceModal();
 
