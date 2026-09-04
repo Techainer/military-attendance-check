@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from jsonschema import Draft202012Validator
 
 import app.api as api
+from app.events import CAMERA_ID
 
 failures = []
 
@@ -135,7 +136,9 @@ import app.video_processor as vp
 
 frame = np.zeros((120, 160, 3), np.uint8)
 encoded = base64.b64encode(cv2.imencode(".jpg", frame)[1]).decode()
-vp.keep_clip("clip_test", [encoded] * 10)
+for _ in range(10):
+    vp.push_clip_frame(CAMERA_ID, encoded)
+vp.keep_clip(CAMERA_ID, "clip_test")
 
 with_clip = api.events.emit("INTRUSION", "Có đoạn ghi kèm.", severity="critical",
                             zone_id="z1", clip_id="clip_test",
@@ -155,7 +158,11 @@ no_clip = api.events.emit("ABSENT", "Không kèm đoạn ghi.",
 r = client.get(f"/api/v1/events/{no_clip['id']}/clip")
 check("sự kiện không có đoạn ghi -> 404", r.status_code == 404, str(r.status_code))
 
-vp.keep_clip("clip_hong", ["khong-phai-anh"] * 3)
+# Camera riêng cho ca này: bộ đệm clip tích luỹ theo từng camera, dùng lại
+# camera ở trên thì đoạn "hỏng" vẫn còn lẫn các khung hợp lệ đẩy vào trước đó.
+for _ in range(3):
+    vp.push_clip_frame("cam_clip_hong", "khong-phai-anh")
+vp.keep_clip("cam_clip_hong", "clip_hong")
 broken = api.events.emit("INTRUSION", "Đoạn ghi hỏng.", severity="critical",
                          zone_id="z1", clip_id="clip_hong",
                          detail={"zone_name": "z", "object_count": 1})

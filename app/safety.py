@@ -51,8 +51,14 @@ def _line_side(p1, p2, pt) -> int:
 class ZoneStore:
     """Đọc cấu hình vùng từ ``data/zone_rules.json``, chỉ đọc lại khi file đổi."""
 
-    def __init__(self, data_dir: str):
+    # Vùng cũ chưa khai camera_id thì coi như thuộc camera mặc định
+    DEFAULT_CAMERA_ID = "cam_01"
+
+    def __init__(self, data_dir: str, camera_id: Optional[str] = None):
         self.zone_file = Path(data_dir) / "zone_rules.json"
+        # ``None`` = xem hết, dùng cho màn quản trị. Vòng xử lý video luôn truyền
+        # camera_id để không lấy nhầm vùng của camera khác.
+        self.camera_id = camera_id
         self._cache: List[dict] = []
         self._mtime = None
 
@@ -67,8 +73,14 @@ class ZoneStore:
         return self._cache
 
     def zones(self) -> List[dict]:
-        """Các vùng đang bật — phần vòng xử lý video thực sự dùng."""
-        return [z for z in self.all_zones() if z.get("enabled", True)]
+        """Các vùng đang bật CỦA CAMERA NÀY — phần vòng xử lý video thực sự dùng."""
+        return [z for z in self.all_zones()
+                if z.get("enabled", True) and self._belongs(z)]
+
+    def _belongs(self, zone: dict) -> bool:
+        if self.camera_id is None:
+            return True
+        return zone.get("camera_id", self.DEFAULT_CAMERA_ID) == self.camera_id
 
     def save(self, zones: List[dict]) -> None:
         """Ghi lại toàn bộ danh sách vùng. Vòng xử lý tự nhận cấu hình mới."""

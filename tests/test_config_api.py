@@ -273,6 +273,90 @@ check("đã bỏ hẳn tab chọn vai trò", "role-switcher" not in r.text and "
 check("chưa đăng nhập thì khung ứng dụng ẩn sẵn từ máy chủ",
       'id="app-layout" style="display: none;"' in r.text)
 
+print("\n[4d] Đa camera chạy song song")
+
+reset()
+import app.video_processor as vp
+from app.attendance import AttendanceManager
+from app.safety import IntrusionDetector, ZoneStore
+
+# Khung hình tách theo camera, không dùng chung một biến
+vp.publish_frame("cam_A", b"anh-cua-A", b"goc-cua-A")
+vp.publish_frame("cam_B", b"anh-cua-B", b"goc-cua-B")
+check("mỗi camera giữ khung hình riêng",
+      vp.get_frame("cam_A", True) == b"anh-cua-A"
+      and vp.get_frame("cam_B", True) == b"anh-cua-B")
+check("số hiệu khung hình đếm riêng từng camera",
+      vp.get_revision("cam_A") == 1 and vp.get_revision("cam_B") == 1)
+vp.publish_frame("cam_A", b"anh-A-2", b"goc-A-2")
+check("camera này có hình mới không làm đổi camera kia",
+      vp.get_revision("cam_A") == 2 and vp.get_revision("cam_B") == 1
+      and vp.get_frame("cam_B", True) == b"anh-cua-B")
+vp.clear_frames("cam_A")
+check("dừng camera này không xoá hình camera kia",
+      vp.get_frame("cam_A", True) is None and vp.get_frame("cam_B", True) == b"anh-cua-B")
+
+# Bộ đệm clip cũng tách theo camera
+vp.push_clip_frame("cam_A", "khung-A")
+vp.push_clip_frame("cam_B", "khung-B")
+vp.keep_clip("cam_A", "clip_A")
+check("đoạn clip chỉ chứa khung của đúng camera",
+      vp.latest_event_clips["clip_A"] == ["khung-A"],
+      str(vp.latest_event_clips.get("clip_A")))
+
+# Vùng giám sát không lẫn giữa các camera
+api.zone_store.save([
+    {"id": "zA", "camera_id": "cam_A", "name": "Vùng đếm A", "kind": "polygon",
+     "rule": "attendance_area", "enabled": True,
+     "points": [{"x": 0, "y": 0}, {"x": 0.4, "y": 0}, {"x": 0.4, "y": 1}]},
+    {"id": "zB", "camera_id": "cam_B", "name": "Vùng cấm B", "kind": "polygon",
+     "rule": "restricted_area", "enabled": True,
+     "points": [{"x": 0.6, "y": 0}, {"x": 1, "y": 0}, {"x": 1, "y": 1}, {"x": 0.6, "y": 1}]},
+])
+zones_a = [z["name"] for z in ZoneStore(str(api.data_path), camera_id="cam_A").zones()]
+zones_b = [z["name"] for z in ZoneStore(str(api.data_path), camera_id="cam_B").zones()]
+check("camera A chỉ thấy vùng của A", zones_a == ["Vùng đếm A"], str(zones_a))
+check("camera B chỉ thấy vùng của B", zones_b == ["Vùng cấm B"], str(zones_b))
+check("màn quản trị vẫn xem được vùng của mọi camera",
+      len(ZoneStore(str(api.data_path)).zones()) == 2)
+
+# Người đứng trong vùng cấm của B không được làm A báo động
+inside_b = [700, 100, 800, 400]
+det_a = IntrusionDetector(ZoneStore(str(api.data_path), camera_id="cam_A"))
+from datetime import datetime as _dt
+check("camera A KHÔNG báo vi phạm theo vùng cấm của camera B",
+      det_a.check([inside_b], [1], 1000, 1000, _dt(2026, 9, 3, 10, 0)) == [])
+det_b = IntrusionDetector(ZoneStore(str(api.data_path), camera_id="cam_B"))
+check("camera B vẫn báo đúng vùng cấm của mình",
+      len(det_b.check([inside_b], [1], 1000, 1000, _dt(2026, 9, 3, 10, 0))) == 1)
+
+# Thời khoá biểu chia theo camera, hai camera không cùng điểm danh một lớp
+write_json_list(api.schedules_file, [
+    {"id": "s_a", "name": "Ca của A", "start_time": "07:00", "end_time": "11:30",
+     "camera_id": "cam_A"},
+    {"id": "s_b", "name": "Ca của B", "start_time": "07:00", "end_time": "11:30",
+     "camera_id": "cam_B"},
+    {"id": "s_old", "name": "Ca chưa gán camera", "start_time": "07:00", "end_time": "11:30"},
+])
+mgr_a = AttendanceManager(str(api.data_path), api.face_engine, api.events, camera_id="cam_A")
+mgr_default = AttendanceManager(str(api.data_path), api.face_engine, api.events,
+                                camera_id=CAMERA_ID)
+ids_a = {s["id"] for s in mgr_a._load_schedules()}
+ids_default = {s["id"] for s in mgr_default._load_schedules()}
+check("camera A chỉ nhận ca của mình", ids_a == {"s_a"}, str(ids_a))
+check("ca chưa gán camera thuộc về camera mặc định",
+      "s_old" in ids_default and "s_a" not in ids_default, str(ids_default))
+check("bản đọc chung vẫn thấy hết ca cho màn tổng hợp",
+      len(api.schedules_view._load_schedules()) == 3)
+
+# Trạng thái camera bám theo camera nào đang chạy, không phải một cờ chung
+check("chưa chạy thì không camera nào online", not api.any_camera_running())
+r = client.get("/api/v1/cameras")
+check("mọi camera đều offline khi chưa chạy",
+      all(c["status"] != "online" for c in r.json()["items"]))
+
+reset()
+
 print("\n[5] Hợp đồng khớp code")
 
 spec = yaml.safe_load(open(Path(__file__).resolve().parent.parent / "docs/api/openapi.yaml"))

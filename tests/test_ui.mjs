@@ -278,6 +278,35 @@ window.closeScheduleModal();
 check('đóng được form tạo ca',
     doc.getElementById('schedule-modal').style.display === 'none');
 
+console.log('\n[4e] Lưới camera: nhiều camera cùng lúc');
+window.switchNavTab('monitoring');
+await sleep(1200);
+
+const wall = doc.getElementById('camera-wall');
+check('màn giám sát dựng lưới camera', wall !== null);
+const camList = await (await fetch(BASE + '/api/v1/cameras')).json();
+check('mỗi camera có một ô riêng trên lưới',
+    wall.querySelectorAll('.camera-tile').length === camList.total,
+    `${wall.querySelectorAll('.camera-tile').length} ô / ${camList.total} camera`);
+check('không còn thẻ hình đơn lẻ dùng chung',
+    doc.getElementById('video-stream') === null);
+check('mỗi ô có nút chạy hoặc dừng riêng',
+    [...wall.querySelectorAll('.camera-tile')].every(t =>
+        /Chạy|Dừng/.test(t.querySelector('.camera-tile-foot button').textContent)));
+check('tóm tắt cho biết mấy camera đang chạy',
+    /camera|thiết bị/i.test(doc.getElementById('monitor-summary').textContent),
+    doc.getElementById('monitor-summary').textContent);
+
+// Mỗi ô trỏ vào luồng của ĐÚNG camera nó đại diện
+const tiles = [...wall.querySelectorAll('.camera-tile')];
+const wrongTile = tiles.find(t => {
+    const id = t.id.replace('cam-tile-', '');
+    const src = t.querySelector('img').getAttribute('src');
+    return src && !src.includes(`/cameras/${id}/`);
+});
+check('ô nào trỏ đúng luồng camera đó', wrongTile === undefined,
+    wrongTile ? wrongTile.id : '');
+
 console.log('\n[5] Quản lý camera');
 window.switchNavTab('cameras');
 await sleep(1000);

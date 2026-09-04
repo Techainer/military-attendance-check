@@ -171,46 +171,27 @@
             <!-- Page Views Container -->
             <div class="content-container">
                 <!-- VIEW 1: MAIN VIEW - GIÁM SÁT TRỰC TIẾP -->
-                <section id="view-monitoring" class="page-view active">
+                <section id="view-monitoring" class="page-view">
                     <div class="main-monitoring-grid">
-                        <!-- Left Main Column: Surveillance Video & Controls -->
                         <div class="surveillance-column">
-                            <!-- Top Surveillance Bar -->
                             <div class="surveillance-top-bar">
                                 <div class="cam-current-badge">
-                                    <strong>ĐANG XEM: CAM-01 · SÂN TẬP TRUNG</strong>
+                                    <strong id="monitor-summary">Đang xem: —</strong>
                                 </div>
                                 <div class="top-bar-actions">
-                                    <div class="source-control-btn-group">
-                                        <button class="btn-source-config" onclick="toggleSourceModal()" title="Cấu hình nguồn Camera / Video">
-                                            ⚙️ Nguồn Camera
-                                        </button>
-                                    </div>
-                                    <div class="mute-siren-toggle">
-                                        <span class="toggle-label">🔊 Tắt tiếng còi</span>
-                                        <label class="switch">
-                                            <input type="checkbox" id="mute-siren-cb" onchange="toggleMuteSiren(this.checked)">
-                                            <span class="slider round"></span>
-                                        </label>
-                                    </div>
+                                    <button class="btn-source-config" onclick="toggleSourceModal()" title="Tải video hoặc nhập RTSP">
+                                        ⚙️ Nguồn video
+                                    </button>
+                                    <button class="btn-toolbar-neutral" id="btn-toggle-ai-overlay" onclick="toggleAiOverlay()">
+                                        <span class="btn-icon">🥞</span> <span id="ai-overlay-btn-text">Tắt lớp phủ AI</span>
+                                    </button>
+                                    <button class="btn-toolbar-neutral" onclick="loadCameraWall()">↻ Làm mới</button>
                                 </div>
                             </div>
 
-                            <!-- Surveillance Screen Viewport -->
-                            <div class="surveillance-screen-card">
-                                <div class="video-container" id="main-video-container">
-                                    <img id="video-stream" alt="Luồng camera trực tiếp">
-                                    <div id="loading-overlay" class="loading-overlay">
-                                        <div class="overlay-msg-box">
-                                            <div class="radar-spinner"></div>
-                                            <p id="overlay-status-text">Đang nhận luồng dữ liệu tác chiến CAM-01...</p>
-                                            <button class="btn-primary-green btn-overlay-start" id="overlay-start-btn" onclick="quickStartStream()">Bắt đầu Giám sát</button>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
+                            <!-- Lưới camera: mỗi camera một ô, các camera chạy song song -->
+                            <div class="camera-wall" id="camera-wall"></div>
 
-                            <!-- Bottom Control Toolbar -->
                             <div class="surveillance-bottom-toolbar">
                                 <div class="toolbar-left-actions">
                                     <button class="btn-toolbar-primary" id="btn-start-attendance" onclick="startAttendanceNow()">
@@ -219,28 +200,16 @@
                                     <button class="btn-toolbar-primary" id="btn-lock-baseline" onclick="lockBaselineManual()">
                                         <span class="btn-icon">🔒</span> Chốt sĩ số (Thủ công)
                                     </button>
-                                    <button class="btn-toolbar-neutral" id="btn-toggle-ai-overlay" onclick="toggleAiOverlay()">
-                                        <span class="btn-icon">🥞</span> <span id="ai-overlay-btn-text">Tắt lớp phủ AI</span>
-                                    </button>
-                                    <button class="btn-toolbar-neutral" id="btn-quick-snapshot" onclick="takeQuickSnapshot()">
-                                        <span class="btn-icon">📷</span> Chụp nhanh
-                                    </button>
-                                </div>
-
-                                <div class="toolbar-right-toggles">
-                                    <select id="monitor-camera-select" class="filter-select" onchange="switchMonitorCamera(this.value)"></select>
                                 </div>
                             </div>
                         </div>
 
-                        <!-- Right Column: Live Event Stream (DÒNG SỰ KIỆN TRỰC TIẾP) -->
                         <div class="events-feed-column">
                             <div class="glass-card events-feed-card">
                                 <div class="events-feed-header">
                                     <h2>DÒNG SỰ KIỆN TRỰC TIẾP</h2>
-                                    <span class="pending-badge" id="pending-events-badge">2 chờ xử lý</span>
+                                    <span class="pending-badge" id="pending-events-badge">0 chờ xử lý</span>
                                 </div>
-
                                 <div class="events-list" id="events-list-container">
                                     <p class="empty-hint">Chưa có sự kiện nào. Bắt đầu giám sát để nhận cảnh báo tự động.</p>
                                 </div>

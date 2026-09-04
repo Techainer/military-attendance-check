@@ -21,39 +21,59 @@ from app.events import CAMERA_ID, EventStore, TYPE_ABSENT, TYPE_INTRUSION, norma
 from app.safety import RULE_ATTENDANCE, RULE_CROSSING, RULE_RESTRICTED, IntrusionDetector, ZoneStore
 
 
-# Global rolling buffer for 10-second clip replay (stores last 60 frames ~ 12 seconds at 5fps)
-global_clip_buffer = deque(maxlen=60)
-latest_event_clips: Dict[str, List[str]] = {}
-# Mỗi đoạn giữ ~60 khung base64 (vài MB), nên chỉ giữ lại bấy nhiêu đoạn gần
-# nhất; luồng chạy cả ngày mà không dọn thì bộ nhớ phình theo số sự kiện.
+# Mỗi camera có kho riêng: khung hình mới nhất và bộ đệm clip phát lại. Trước
+# đây tất cả dùng chung một biến toàn cục nên chỉ chạy được một camera; hai
+# camera cùng chạy thì camera sau ghi đè khung hình của camera trước.
+_camera_state: Dict[str, dict] = {}
+
+# Mỗi đoạn clip giữ ~60 khung base64 (vài MB), nên chỉ giữ lại bấy nhiêu đoạn
+# gần nhất; luồng chạy cả ngày mà không dọn thì bộ nhớ phình theo số sự kiện.
 MAX_STORED_CLIPS = 20
+latest_event_clips: Dict[str, List[str]] = {}
 
 
-# Khung hình JPEG mới nhất, phục vụ luồng MJPEG và ảnh chụp nhanh. Giữ cả bản
-# có lớp phủ AI lẫn bản gốc để tham số ``overlay`` là thật, không phải chỉ đổi
-# nhãn nút bấm trên giao diện.
-latest_jpeg: Dict[str, Optional[bytes]] = {"overlay": None, "clean": None}
-# Tăng mỗi khung hình mới; luồng MJPEG dựa vào đây để biết đã có hình mới chưa
-# thay vì gửi lại đúng một khung nhiều lần.
-frame_revision = 0
+def _state(camera_id: str) -> dict:
+    return _camera_state.setdefault(camera_id, {
+        "overlay": None,
+        "clean": None,
+        # Tăng mỗi khung hình mới; luồng MJPEG dựa vào đây để biết đã có hình
+        # mới chưa thay vì gửi lại đúng một khung nhiều lần.
+        "revision": 0,
+        "clips": deque(maxlen=60),
+    })
 
 
-def publish_frame(overlay_jpeg: bytes, clean_jpeg: Optional[bytes]) -> None:
-    global frame_revision
-    latest_jpeg["overlay"] = overlay_jpeg
-    latest_jpeg["clean"] = clean_jpeg
-    frame_revision += 1
+def publish_frame(camera_id: str, overlay_jpeg: bytes, clean_jpeg: Optional[bytes]) -> None:
+    st = _state(camera_id)
+    st["overlay"] = overlay_jpeg
+    st["clean"] = clean_jpeg
+    st["revision"] += 1
 
 
-def clear_frames() -> None:
+def clear_frames(camera_id: str) -> None:
     """Luồng dừng thì bỏ khung hình cũ, tránh phát lại hình đã chết."""
-    latest_jpeg["overlay"] = None
-    latest_jpeg["clean"] = None
+    st = _state(camera_id)
+    st["overlay"] = None
+    st["clean"] = None
 
 
-def keep_clip(clip_id: str, frames: List[str]) -> str:
-    """Lưu một đoạn phát lại và bỏ bớt các đoạn cũ nhất."""
-    latest_event_clips[clip_id] = frames
+def get_frame(camera_id: str, overlay: bool) -> Optional[bytes]:
+    """Khung hình mới nhất của camera. Không có bản gốc thì trả bản có lớp phủ."""
+    st = _state(camera_id)
+    return (st["overlay"] if overlay else st["clean"]) or st["overlay"]
+
+
+def get_revision(camera_id: str) -> int:
+    return _state(camera_id)["revision"]
+
+
+def push_clip_frame(camera_id: str, frame_b64: str) -> None:
+    _state(camera_id)["clips"].append(frame_b64)
+
+
+def keep_clip(camera_id: str, clip_id: str) -> str:
+    """Chốt lại đoạn đệm hiện tại của camera và dọn bớt các đoạn cũ."""
+    latest_event_clips[clip_id] = list(_state(camera_id)["clips"])
     for stale in list(latest_event_clips)[:-MAX_STORED_CLIPS]:
         del latest_event_clips[stale]
     return clip_id
@@ -144,13 +164,21 @@ class VideoProcessor:
         face_engine: Optional[FaceEngine] = None,
         attendance: Optional[AttendanceManager] = None,
         events: Optional[EventStore] = None,
-        data_dir: str = "data"
+        data_dir: str = "data",
+        camera_id: str = CAMERA_ID,
+        camera_name: str = "",
     ):
+        self.camera_id = camera_id
+        self.camera_name = camera_name or camera_id
         self.detector = PersonDetector(model_name=os.environ.get("YOLO_MODEL", "yolo11s.pt"))
+        # Model nhận diện khuôn mặt dùng chung được: nó không giữ trạng thái của
+        # riêng luồng nào. Bộ phát hiện người thì mỗi camera một bản vì có tracker.
         self.face_engine = face_engine or FaceEngine()
         self.attendance = attendance
         self.events = events
-        self.zones = ZoneStore(data_dir)
+        # Chỉ lấy vùng của chính camera này; trước đây lấy hết nên camera này
+        # réo còi theo vùng cấm vẽ cho camera khác.
+        self.zones = ZoneStore(data_dir, camera_id=camera_id)
         self.intrusion = IntrusionDetector(self.zones)
         self.fps = fps
         self._stop_requested = False
@@ -270,7 +298,6 @@ class VideoProcessor:
         """
         Process video file or RTSP stream and stream results via callback.
         """
-        global global_clip_buffer, latest_event_clips
         is_rtsp = "://" in video_path
         reader = None
         cap = None
@@ -531,8 +558,8 @@ class VideoProcessor:
                         boxes.append(normalize_box(person_boxes[idx], w_img, h_img,
                                                    confidences[idx], name))
                     # Giữ lại đoạn đệm dẫn tới lúc vi phạm để chỉ huy xem lại
-                    clip_id = keep_clip(f"clip_{int(time.time())}_{zone.get('id', 'zone')}",
-                                        list(global_clip_buffer))
+                    clip_id = keep_clip(self.camera_id,
+                                        f"clip_{int(time.time())}_{zone.get('id', 'zone')}")
 
                     event = self.events.emit(
                         TYPE_INTRUSION,
@@ -542,6 +569,8 @@ class VideoProcessor:
                         severity="critical",
                         frame=display_frame,
                         boxes=boxes,
+                        camera_id=self.camera_id,
+                        camera_name=self.camera_name,
                         zone_id=zone.get("id"),
                         clip_id=clip_id,
                         detail={
@@ -561,7 +590,7 @@ class VideoProcessor:
 
                 # 5. Top & Bottom HUD Overlays
                 cv2.circle(display_frame, (25, 28), 6, (0, 0, 240), -1)
-                draw_label(display_frame, "CAM-01 · SÂN TẬP TRUNG", (38, 18), font_size=16,
+                draw_label(display_frame, self.camera_name.upper(), (38, 18), font_size=16,
                               text_color=(230, 230, 230), bg_color=(18, 22, 28))
 
                 # Dấu thời gian của máy chủ (giờ Việt Nam) để đối chiếu với đồng hồ camera
@@ -617,15 +646,15 @@ class VideoProcessor:
 
                 # Khung hình cho luồng MJPEG: bản có lớp phủ và bản gốc
                 _, clean_buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                publish_frame(buffer.tobytes(), clean_buffer.tobytes())
+                publish_frame(self.camera_id, buffer.tobytes(), clean_buffer.tobytes())
 
                 # Store into global 10-second rolling clip buffer
-                global_clip_buffer.append(frame_b64)
+                push_clip_frame(self.camera_id, frame_b64)
 
                 # Send frame update over WebSocket
                 await on_update({
                     'type': 'frame_update',
-                    'camera_id': CAMERA_ID,
+                    'camera_id': self.camera_id,
                     'frame': frame_b64,
                     'count': person_count,
                     'baseline': baseline_val,
@@ -642,8 +671,7 @@ class VideoProcessor:
                 # Check for baseline drop alerts
                 alert_result = monitor.update_count(person_count, frame)
                 if alert_result['alert_triggered']:
-                    event_clip_id = keep_clip(f"clip_{int(time.time())}",
-                                              list(global_clip_buffer))
+                    event_clip_id = keep_clip(self.camera_id, f"clip_{int(time.time())}")
                     alert_data = alert_result['alert_data']
 
                     if self.events is not None:
@@ -654,6 +682,8 @@ class VideoProcessor:
                             f"sĩ số chuẩn ({person_count}/{baseline}).",
                             severity="warning",
                             frame=display_frame,
+                            camera_id=self.camera_id,
+                            camera_name=self.camera_name,
                             clip_id=event_clip_id,
                             detail={
                                 "current_count": person_count,
@@ -692,7 +722,7 @@ class VideoProcessor:
             elif cap:
                 cap.release()
 
-            clear_frames()
+            clear_frames(self.camera_id)
 
             if self.attendance is not None and self.attendance.session is not None:
                 if self._stop_requested:

@@ -197,7 +197,7 @@ check("lưu lại kiểu cũ KHÔNG xoá mất vùng cấm của API v1",
 # ================================================================ MJPEG
 print("\n[6] Luồng hình MJPEG")
 
-vp.clear_frames()
+vp.clear_frames(CAMERA_ID)
 r = client.get(f"/api/v1/cameras/{CAMERA_ID}/stream.mjpg")
 check("chưa chạy xử lý -> 409", r.status_code == 409, str(r.status_code))
 r = client.get(f"/api/v1/cameras/{CAMERA_ID}/snapshot")
@@ -207,7 +207,7 @@ overlay_img = np.full((60, 80, 3), 200, np.uint8)
 clean_img = np.zeros((60, 80, 3), np.uint8)
 overlay_jpeg = cv2.imencode(".jpg", overlay_img)[1].tobytes()
 clean_jpeg = cv2.imencode(".jpg", clean_img)[1].tobytes()
-vp.publish_frame(overlay_jpeg, clean_jpeg)
+vp.publish_frame(CAMERA_ID, overlay_jpeg, clean_jpeg)
 
 r = client.get(f"/api/v1/cameras/{CAMERA_ID}/snapshot?overlay=1")
 check("snapshot có lớp phủ -> 200 ảnh jpeg",
@@ -252,7 +252,7 @@ async def pull_mjpeg(overlay: int, want_frames: int):
         if len(bodies) >= want_frames:
             break
         # Khung hình mới để luồng có cái mà gửi tiếp
-        vp.publish_frame(overlay_jpeg, clean_jpeg)
+        vp.publish_frame(CAMERA_ID, overlay_jpeg, clean_jpeg)
 
     task.cancel()
     try:

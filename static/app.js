@@ -22,7 +22,6 @@ const topbarAlertStat = document.getElementById('topbar-alert-stat');
 const pendingEventsBadge = document.getElementById('pending-events-badge');
 
 // Surveillance DOM Elements
-const videoStreamImg = document.getElementById('video-stream');
 const loadingOverlay = document.getElementById('loading-overlay');
 const overlayStatusText = document.getElementById('overlay-status-text');
 const overlayStartBtn = document.getElementById('overlay-start-btn');
@@ -139,8 +138,7 @@ function switchNavTab(tabName) {
         const el = document.getElementById(id);
         if (el && !el.closest('.page-view').classList.contains('active')) detachStream(el);
     });
-    const mainImg = document.getElementById('video-stream');
-    if (mainImg && tabName !== 'monitoring') detachStream(mainImg);
+    if (tabName !== 'monitoring') detachAllCameraStreams();
 
     const titles = {
         'schedule-progress': 'Lịch & Tiến độ huấn luyện',
@@ -209,8 +207,7 @@ function switchNavTab(tabName) {
             loadCameras();
             break;
         case 'monitoring':
-            loadCameras();
-            startStream();
+            loadCameraWall();
             break;
     }
 }
@@ -351,6 +348,10 @@ function toggleAiOverlay() {
     if (aiOverlayBtnText) {
         aiOverlayBtnText.textContent = isAiOverlayEnabled ? 'Tắt lớp phủ AI' : 'Bật lớp phủ AI';
     }
+    // Gắn lại luồng của mọi camera đang chạy theo chế độ mới
+    (cameraWallData || []).filter(c => c.status === 'online').forEach(cam => {
+        attachStream(document.getElementById(`cam-img-${cam.id}`), cam.id, isAiOverlayEnabled);
+    });
 }
 window.toggleAiOverlay = toggleAiOverlay;
 
@@ -398,7 +399,7 @@ async function quickStartStream() {
         const res = await fetch('/api/start?mode=video', { method: 'POST' });
         const data = await res.json();
         if (data.status === 'success') {
-            startStream();
+            loadCameraWall();
         } else {
             // If no video uploaded, show source modal
             toggleSourceModal();
@@ -422,7 +423,7 @@ async function startRtspStream() {
         const data = await res.json();
         if (data.status === 'success') {
             toggleSourceModal();
-            startStream();
+            loadCameraWall();
         } else {
             alert('Lỗi: ' + data.message);
         }
@@ -476,7 +477,7 @@ if (uploadForm) {
                     uploadStatus.textContent = `✓ Đã tải xong video`;
                     uploadStatus.style.color = '#0a8f4c';
                     toggleSourceModal();
-                    startStream();
+                    loadCameraWall();
                 }
             }
         } catch (err) {
@@ -511,26 +512,97 @@ function detachStream(imgEl) {
     if (imgEl) imgEl.removeAttribute('src');
 }
 
-function startStream() {
-    const img = document.getElementById('video-stream');
-    if (!img) return;
-    if (loadingOverlay) loadingOverlay.style.display = 'none';
-    isProcessing = true;
-    attachStream(img, activeCameraId, isAiOverlayEnabled);
-    img.onerror = () => {
-        isProcessing = false;
-        if (loadingOverlay) loadingOverlay.style.display = 'flex';
-        if (overlayStatusText) overlayStatusText.textContent = 'Luồng giám sát chưa chạy';
-        if (overlayStartBtn) overlayStartBtn.style.display = 'block';
-    };
-}
-window.startStream = startStream;
+// ---------- lưới camera ----------
+// Mỗi camera một ô, các camera chạy song song và độc lập nhau: bật hay tắt ô
+// này không ảnh hưởng ô kia.
 
-function switchMonitorCamera(cameraId) {
-    activeCameraId = cameraId || activeCameraId;
-    startStream();
+let cameraWallData = [];
+
+async function loadCameraWall() {
+    const wall = document.getElementById('camera-wall');
+    if (!wall) return;
+
+    try {
+        const data = await getJson('/api/v1/cameras');
+        cameraWallData = data.items;
+    } catch (e) {
+        wall.innerHTML = `<p class="empty-hint">Không tải được danh sách camera: ${esc(e.message)}</p>`;
+        return;
+    }
+
+    const running = cameraWallData.filter(c => c.status === 'online');
+    const summary = document.getElementById('monitor-summary');
+    if (summary) {
+        summary.textContent = running.length
+            ? `Đang chạy ${running.length}/${cameraWallData.length} camera`
+            : `Chưa camera nào chạy · ${cameraWallData.length} thiết bị`;
+    }
+
+    if (!cameraWallData.length) {
+        wall.innerHTML = '<p class="empty-hint">Chưa có thiết bị camera nào. Thêm ở màn Thiết bị camera.</p>';
+        return;
+    }
+
+    // Dựng lại toàn bộ lưới thì mọi thẻ ảnh bị gán src mới, tức là mở lại từng
+    // kết nối MJPEG. Nên chỉ thêm ô mới và cập nhật ô đã có.
+    const seen = new Set();
+    cameraWallData.forEach(cam => {
+        seen.add(cam.id);
+        let tile = document.getElementById(`cam-tile-${cam.id}`);
+        if (!tile) {
+            tile = document.createElement('div');
+            tile.className = 'camera-tile';
+            tile.id = `cam-tile-${cam.id}`;
+            tile.innerHTML = `
+                <div class="camera-tile-head">
+                    <span class="camera-tile-name"></span>
+                    <span class="camera-tile-status"></span>
+                </div>
+                <div class="camera-tile-video">
+                    <img id="cam-img-${cam.id}" alt="Luồng ${esc(cam.name)}">
+                    <div class="camera-tile-idle">Chưa chạy</div>
+                </div>
+                <div class="camera-tile-foot">
+                    <span class="camera-tile-area"></span>
+                    <button class="btn-event-clip"></button>
+                </div>`;
+            wall.appendChild(tile);
+        }
+
+        const running = cam.status === 'online';
+        tile.classList.toggle('is-running', running);
+        tile.querySelector('.camera-tile-name').textContent = cam.name;
+        tile.querySelector('.camera-tile-status').innerHTML =
+            CAMERA_STATUS_TAG[cam.status] || cam.status;
+        tile.querySelector('.camera-tile-area').textContent = cam.area_name || '';
+
+        const btn = tile.querySelector('.camera-tile-foot button');
+        btn.textContent = running ? '⏹ Dừng' : '▶ Chạy';
+        btn.onclick = () => toggleCameraRun(cam.id, running);
+
+        const img = document.getElementById(`cam-img-${cam.id}`);
+        if (running) {
+            // Chỉ gắn lại khi chưa có luồng, tránh giật hình mỗi lần làm mới
+            if (!img.getAttribute('src')) attachStream(img, cam.id, isAiOverlayEnabled);
+        } else {
+            detachStream(img);
+        }
+    });
+
+    // Camera bị xoá thì gỡ ô của nó
+    [...wall.querySelectorAll('.camera-tile')].forEach(tile => {
+        const id = tile.id.replace('cam-tile-', '');
+        if (!seen.has(id)) {
+            detachStream(document.getElementById(`cam-img-${id}`));
+            tile.remove();
+        }
+    });
 }
-window.switchMonitorCamera = switchMonitorCamera;
+window.loadCameraWall = loadCameraWall;
+
+function detachAllCameraStreams() {
+    document.querySelectorAll('.camera-tile img').forEach(detachStream);
+}
 
 // ---------- kênh sự kiện ----------
 

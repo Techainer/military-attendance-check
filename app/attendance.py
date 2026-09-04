@@ -13,6 +13,8 @@ from app.storage import read_json_list, write_json_list
 
 
 DEFAULT_WINDOW_MINS = 5
+# Ca chưa gán camera thì thuộc về camera mặc định
+DEFAULT_CAMERA_ID = "cam_01"
 # Số lượt quét tối thiểu để coi là có mặt (chống nhận nhầm 1 frame)
 MIN_SIGHTINGS = 3
 # Cửa sổ còn lại ít hơn ngần này thì không mở phiên nữa (mở ra cũng không kịp đếm)
@@ -243,7 +245,7 @@ class AttendanceSession:
 class AttendanceManager:
     """Mở/đóng phiên điểm danh theo thời khoá biểu và ghi nhật ký."""
 
-    def __init__(self, data_dir: str, face_engine, events=None):
+    def __init__(self, data_dir: str, face_engine, events=None, camera_id: Optional[str] = None):
         self.data_dir = Path(data_dir)
         self.schedules_file = self.data_dir / "schedules.json"
         self.logs_file = self.data_dir / "attendance_logs.json"
@@ -251,6 +253,9 @@ class AttendanceManager:
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
         self.face_engine = face_engine
         self.events = events
+        # ``None`` = nhận mọi ca. Mỗi camera chạy một bản riêng và chỉ nhận ca
+        # được giao cho nó, nếu không hai camera sẽ cùng điểm danh một lớp.
+        self.camera_id = camera_id
         self.presence = PresenceTracker()
         self.session: Optional[AttendanceSession] = None
         self.completed_keys = self._load_completed_keys()
@@ -268,7 +273,13 @@ class AttendanceManager:
 
         mtime = self.schedules_file.stat().st_mtime
         if mtime != self._schedules_mtime:
-            self._schedules_cache = read_json_list(self.schedules_file)
+            rows = read_json_list(self.schedules_file)
+            if self.camera_id is not None:
+                # Ca chưa khai camera thì giao cho camera mặc định, giữ nguyên
+                # hành vi của cấu hình cũ khi mới có một camera.
+                rows = [s for s in rows
+                        if (s.get("camera_id") or DEFAULT_CAMERA_ID) == self.camera_id]
+            self._schedules_cache = rows
             self._schedules_mtime = mtime
         return self._schedules_cache
 

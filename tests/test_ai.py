@@ -219,15 +219,24 @@ check("chuẩn hoá toạ độ box về [0,1]",
 # ---------------------------------------------------------------- clip buffer
 print("\n[4] Bộ đệm đoạn phát lại không phình vô hạn")
 
-from app.video_processor import MAX_STORED_CLIPS, keep_clip, latest_event_clips
+from app.video_processor import (MAX_STORED_CLIPS, keep_clip, latest_event_clips,
+                                 push_clip_frame)
 
 for i in range(MAX_STORED_CLIPS + 5):
-    keep_clip(f"clip_{i:03d}", ["khung"] * 60)
+    push_clip_frame("cam_test", "khung")
+    keep_clip("cam_test", f"clip_{i:03d}")
 
 check("số đoạn giữ lại bị chặn", len(latest_event_clips) == MAX_STORED_CLIPS,
       str(len(latest_event_clips)))
 check("đoạn mới nhất được giữ", f"clip_{MAX_STORED_CLIPS + 4:03d}" in latest_event_clips)
 check("đoạn cũ nhất bị dọn", "clip_000" not in latest_event_clips)
+
+# Bộ đệm tách theo camera: đoạn của camera này không lẫn khung của camera kia
+push_clip_frame("cam_x", "khung-cua-X")
+keep_clip("cam_x", "clip_x")
+check("đoạn clip chỉ chứa khung của đúng camera",
+      latest_event_clips["clip_x"] == ["khung-cua-X"],
+      str(latest_event_clips.get("clip_x")))
 
 # ---------------------------------------------------------------- kết luận
 print()
