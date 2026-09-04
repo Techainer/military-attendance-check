@@ -11,7 +11,10 @@ import asyncio
 from pathlib import Path
 from typing import List, Optional
 
+import base64
+
 import cv2
+import numpy as np
 
 from app import clock
 from app.storage import read_json_list, write_json_list
@@ -31,6 +34,9 @@ TYPE_SYSTEM = "SYSTEM"
 
 # Giữ lại bấy nhiêu sự kiện gần nhất trong file JSON
 MAX_STORED_EVENTS = 500
+
+# Vòng xử lý chạy 5 khung/giây nên đoạn ghi phát lại cũng ở nhịp đó
+CLIP_FPS = 5
 
 
 def normalize_box(box, width: int, height: int, confidence=None, label=None) -> dict:
@@ -97,6 +103,48 @@ class EventStore:
             print(f"[Events] Lỗi lưu ảnh sự kiện: {e}")
             return None
         return f"/data/events/{event_id}.jpg"
+
+    def save_clip(self, event_id: str, frames: List[str]) -> Optional[str]:
+        """Dựng đoạn mp4 từ các khung base64 và lưu cạnh ảnh bằng chứng.
+
+        Bộ đệm khung hình chỉ nằm trong RAM và bị dọn dần, nên khởi động lại máy
+        chủ là mọi nút "Xem clip" trong nhật ký cũ đều chết. Ghi ra file ngay lúc
+        sự kiện xảy ra thì đoạn ghi sống cùng ảnh bằng chứng.
+        """
+        if not frames:
+            return None
+
+        clip_file = self.snapshot_dir / f"{event_id}.mp4"
+        if clip_file.exists() and clip_file.stat().st_size > 0:
+            return f"/api/v1/events/{event_id}/clip"
+
+        try:
+            decoded = []
+            for frame_b64 in frames:
+                img = cv2.imdecode(np.frombuffer(base64.b64decode(frame_b64), np.uint8),
+                                   cv2.IMREAD_COLOR)
+                if img is not None:
+                    decoded.append(img)
+            if not decoded:
+                return None
+
+            h, w = decoded[0].shape[:2]
+            writer = cv2.VideoWriter(str(clip_file), cv2.VideoWriter_fourcc(*"mp4v"),
+                                     CLIP_FPS, (w, h))
+            for img in decoded:
+                # Khung lệch kích thước bị VideoWriter bỏ qua âm thầm
+                if img.shape[:2] == (h, w):
+                    writer.write(img)
+            writer.release()
+        except Exception as e:
+            print(f"[Events] Lỗi dựng đoạn ghi: {e}")
+            clip_file.unlink(missing_ok=True)
+            return None
+
+        if not clip_file.exists() or clip_file.stat().st_size == 0:
+            clip_file.unlink(missing_ok=True)
+            return None
+        return f"/api/v1/events/{event_id}/clip"
 
     def emit(
         self,

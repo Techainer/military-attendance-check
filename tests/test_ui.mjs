@@ -46,6 +46,13 @@ window.EventSource = class {
 const EventSourceCalls = [];
 window.EventSource.prototype.close = function () { this.closed = true; };
 
+// jsdom chưa cài đặt play/pause/load của <video>, gọi thẳng sẽ ném "Not
+// implemented" ra virtual console. Giả lập tối thiểu để test chạm được trình
+// phát đoạn ghi.
+window.HTMLMediaElement.prototype.play = function () { return Promise.resolve(); };
+window.HTMLMediaElement.prototype.pause = function () {};
+window.HTMLMediaElement.prototype.load = function () {};
+
 // FormData của jsdom không phải FormData của Node, fetch sẽ gửi thành chuỗi
 // "[object FormData]". Chuyển sang FormData thật để test chạm được luồng
 // tải file lên chứ không dừng ở mức giả lập.
@@ -488,16 +495,58 @@ check('rời màn thì mọi luồng trường bắn đều bị ngắt',
     sfImgs.length >= 1 && sfImgs.every(img => !img.getAttribute('src')),
     sfImgs.map(img => img.getAttribute('src')).join(' | '));
 
+console.log('\n[6b] Trình phát đoạn ghi 10 giây');
+// Đây là luồng đã hỏng thật: nút trỏ vào bộ đệm chỉ nằm trong RAM máy chủ nên
+// modal mở ra là khung đen, không một dòng báo.
+const evPage = await (await fetch(BASE + '/api/v1/events?limit=200')).json();
+const evWithClip = (evPage.items || []).find(e => e.clip_url);
+const clipVideo = doc.getElementById('clip-player-video');
+const clipHint = doc.getElementById('clip-empty-hint');
+
+check('modal đoạn ghi dùng thẻ video, không còn canvas',
+    clipVideo !== null && doc.getElementById('clip-player-canvas') === null);
+check('sự kiện có đoạn ghi thì clip_url trỏ vào endpoint v1',
+    !!evWithClip && evWithClip.clip_url === `/api/v1/events/${evWithClip.id}/clip`,
+    evWithClip ? evWithClip.clip_url : 'không có sự kiện nào kèm đoạn ghi');
+
+window.viewEventClip(evWithClip.id);
+await sleep(300);
+check('thẻ video trỏ đúng endpoint của sự kiện đó',
+    clipVideo.getAttribute('src') === `/api/v1/events/${evWithClip.id}/clip`,
+    clipVideo.getAttribute('src'));
+check('nút tải đoạn ghi trỏ đúng chỗ',
+    (doc.getElementById('btn-clip-download').getAttribute('href') || '').includes('download=1'),
+    doc.getElementById('btn-clip-download').getAttribute('href'));
+check('đang tải thì có báo cho người xem',
+    clipHint.style.display !== 'none' && clipHint.textContent.length > 0,
+    clipHint.textContent);
+
+// Endpoint phải nhận GET thật: bản đầu tôi dò bằng HEAD, máy chủ trả 405 nên
+// đoạn ghi nào cũng bị báo là hỏng.
+const clipRes = await fetch(BASE + evWithClip.clip_url);
+check('GET đoạn ghi không trả 405', clipRes.status !== 405, String(clipRes.status));
+
+// jsdom không tải video nên tự bắn sự kiện lỗi để kiểm nhánh báo lý do
+clipVideo.dispatchEvent(new window.Event('error'));
+await sleep(700);
+check('phát hỏng thì nói rõ lý do, không để khung đen',
+    clipHint.style.display !== 'none' && /đoạn ghi/i.test(clipHint.textContent),
+    clipHint.textContent);
+
+window.closeClipModal();
+check('đóng modal thì ngừng tải, không chạy ngầm',
+    !clipVideo.getAttribute('src'), clipVideo.getAttribute('src'));
+
 console.log('\n[7] Không còn dấu vết của nút giả cũ');
 const src = appJs;
 for (const gone of ['addEventFeedCard', 'triggerMockAlarm', 'confirmEventResolution',
                     'switchStreamType', 'connectWebSocket', 'videoCanvas']) {
     check(`đã bỏ ${gone}`, !src.includes(gone));
 }
-// Trình phát clip 10s vẫn dùng canvas + base64, đó là đúng chỗ. Chỉ luồng
-// trực tiếp mới phải bỏ hẳn cách đó.
 check('luồng trực tiếp không còn vẽ base64 lên canvas',
     !src.includes("data:image/jpeg;base64,' + data.frame"));
+check('trình phát đoạn ghi không còn tự dựng khung từ base64',
+    !src.includes('renderClipFrame') && !src.includes('clipFrames'));
 check('ảnh nền vẽ vùng lấy khung hình GỐC, không lấy bản đã vẽ lớp phủ',
     src.includes('snapshot?overlay=0'));
 

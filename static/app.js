@@ -222,106 +222,59 @@ function incrementAlertCount() {
 }
 
 
-// ----------------- 10S CLIP REPLAY PLAYER -----------------
-let clipFrames = [];
-let clipCurrentIdx = 0;
-let isClipPlaying = false;
-let clipPlayTimer = null;
+// ----------------- TRÌNH PHÁT ĐOẠN GHI 10 GIÂY -----------------
+// Đoạn ghi được máy chủ dựng sẵn thành mp4 lúc sự kiện xảy ra, nên chỉ cần trỏ
+// thẻ <video> vào đó. Trước đây phía này tự tải về vài chục ảnh base64 rồi vẽ
+// từng khung lên canvas, mà bộ đệm ảnh chỉ nằm trong RAM máy chủ: khởi động lại
+// là mất sạch và người xem chỉ thấy khung đen không một dòng báo.
 
 const clipModal = document.getElementById('clip-modal');
-const clipPlayerCanvas = document.getElementById('clip-player-canvas');
-const clipTimelineSlider = document.getElementById('clip-timeline-slider');
-const clipTimerLabel = document.getElementById('clip-timer-label');
-const btnClipPlayToggle = document.getElementById('btn-clip-play-toggle');
+const clipPlayerVideo = document.getElementById('clip-player-video');
+const clipEmptyHint = document.getElementById('clip-empty-hint');
+const clipDownloadLink = document.getElementById('btn-clip-download');
 
-async function viewEventClip(clipId) {
-    if (!clipModal) return;
+function showClipMessage(text) {
+    if (clipEmptyHint) {
+        clipEmptyHint.textContent = text || '';
+        clipEmptyHint.style.display = text ? 'flex' : 'none';
+    }
+    if (clipDownloadLink) clipDownloadLink.style.display = text ? 'none' : 'inline-flex';
+}
+
+function viewEventClip(eventId) {
+    if (!clipModal || !clipPlayerVideo) return;
     clipModal.style.display = 'flex';
-    
-    try {
-        const res = await fetch(`/api/events/clip?clip_id=${encodeURIComponent(clipId || '')}`);
-        const data = await res.json();
-        
-        if (data.status === 'success' && data.frames && data.frames.length > 0) {
-            clipFrames = data.frames;
-        } else {
-            // Fallback: try snapshot
-            const snapRes = await fetch('/api/snapshot');
-            const snapData = await snapRes.json();
-            if (snapData.status === 'success' && snapData.frame) {
-                clipFrames = [snapData.frame];
-            } else {
-                clipFrames = [];
-            }
+    showClipMessage('Đang tải đoạn ghi…');
+
+    const url = `/api/v1/events/${encodeURIComponent(eventId)}/clip`;
+    if (clipDownloadLink) clipDownloadLink.href = `${url}?download=1`;
+
+    clipPlayerVideo.onloadeddata = () => showClipMessage('');
+    clipPlayerVideo.onerror = async () => {
+        // Thẻ <video> chỉ báo "hỏng", không nói vì sao. Hỏi lại máy chủ để nói
+        // đúng lý do thay vì để người xem nhìn khung đen như trước.
+        let reason = 'Không tải được đoạn ghi.';
+        try {
+            const res = await fetch(url);
+            if (res.status === 404) reason = 'Sự kiện này không còn đoạn ghi kèm.';
+            else if (!res.ok) reason = `Không tải được đoạn ghi (mã ${res.status}).`;
+        } catch (e) {
+            reason = `Không tải được đoạn ghi: ${e.message}`;
         }
-    } catch (e) {
-        console.error('Error loading clip replay:', e);
-        clipFrames = [];
-    }
-
-    clipCurrentIdx = 0;
-    if (clipTimelineSlider) {
-        clipTimelineSlider.max = Math.max(1, clipFrames.length - 1);
-        clipTimelineSlider.value = 0;
-    }
-    isClipPlaying = true;
-    if (btnClipPlayToggle) btnClipPlayToggle.textContent = '⏸ Tạm dừng';
-
-    if (clipFrames.length > 0) {
-        renderClipFrame(0);
-    }
-    startClipPlaybackLoop();
+        showClipMessage(reason);
+    };
+    clipPlayerVideo.src = url;
+    clipPlayerVideo.load();
 }
 window.viewEventClip = viewEventClip;
 
-function startClipPlaybackLoop() {
-    if (clipPlayTimer) clearInterval(clipPlayTimer);
-
-    clipPlayTimer = setInterval(() => {
-        if (!isClipPlaying || clipFrames.length === 0) return;
-
-        renderClipFrame(clipCurrentIdx);
-        clipCurrentIdx = (clipCurrentIdx + 1) % clipFrames.length;
-        if (clipTimelineSlider) clipTimelineSlider.value = clipCurrentIdx;
-    }, 200); // 5 FPS
-}
-
-function renderClipFrame(idx) {
-    if (!clipPlayerCanvas || idx >= clipFrames.length) return;
-
-    const frameB64 = clipFrames[idx];
-    const img = new Image();
-    img.onload = () => {
-        clipPlayerCanvas.width = img.width;
-        clipPlayerCanvas.height = img.height;
-        const ctx = clipPlayerCanvas.getContext('2d');
-        if (!ctx) return;
-        ctx.drawImage(img, 0, 0);
-    };
-    img.src = 'data:image/jpeg;base64,' + frameB64;
-
-    const currentSec = (idx / 5).toFixed(1);
-    const totalSec = (clipFrames.length / 5).toFixed(1);
-    if (clipTimerLabel) clipTimerLabel.textContent = `00:${String(Math.floor(currentSec)).padStart(2, '0')} / 00:${String(Math.floor(totalSec)).padStart(2, '0')}`;
-}
-
-function toggleClipPlayback() {
-    isClipPlaying = !isClipPlaying;
-    if (btnClipPlayToggle) {
-        btnClipPlayToggle.textContent = isClipPlaying ? '⏸ Tạm dừng' : '▶ Tiếp tục';
-    }
-}
-window.toggleClipPlayback = toggleClipPlayback;
-
-function seekClipFrame(val) {
-    clipCurrentIdx = parseInt(val);
-    renderClipFrame(clipCurrentIdx);
-}
-window.seekClipFrame = seekClipFrame;
-
 function closeClipModal() {
-    if (clipPlayTimer) clearInterval(clipPlayTimer);
-    isClipPlaying = false;
+    // Bỏ src để trình duyệt ngừng tải, không thì clip vẫn chạy ngầm sau khi đóng
+    if (clipPlayerVideo) {
+        clipPlayerVideo.pause();
+        clipPlayerVideo.removeAttribute('src');
+        clipPlayerVideo.load();
+    }
     if (clipModal) clipModal.style.display = 'none';
 }
 window.closeClipModal = closeClipModal;
@@ -725,7 +678,7 @@ function renderEventCard(container, event, prepend) {
     const time = new Date(event.occurred_at).toLocaleTimeString('vi-VN');
     const place = [event.camera_name, event.area_name].filter(Boolean).join(' · ');
     const clipBtn = event.clip_url
-        ? `<button class="btn-event-clip" onclick="viewEventClip('${event.clip_id}')">▶️ Xem clip 10s</button>` : '';
+        ? `<button class="btn-event-clip" onclick="viewEventClip('${event.id}')">▶️ Xem clip 10s</button>` : '';
     const ackBtn = event.acked
         ? `<button class="btn-event-processed" disabled>✓ ${event.acked_by || 'Đã xử lý'}</button>`
         : `<button class="btn-event-confirm" onclick="ackEvent('${event.id}')">Xác nhận xử lý</button>`;

@@ -359,6 +359,11 @@ async def get_current_snapshot():
         except Exception as e:
             print(f"Error capturing frame: {e}")
 
+    # Không có nhánh nào khớp thì phải nói rõ, không được rơi ra ngoài: hàm
+    # không trả gì thì FastAPI gửi null kèm mã 200, client tưởng thành công.
+    raise HTTPException(status_code=409, detail="Chưa có khung hình nào, hãy chạy một camera trước")
+
+
 @app.get("/api/events/clip")
 async def get_event_clip(clip_id: Optional[str] = None):
     """Đoạn phát lại của một sự kiện. Bộ đệm nay theo từng camera."""
@@ -789,34 +794,21 @@ async def v1_ack_event(event_id: str, body: AckInput):
 
 @app.get("/api/v1/events/{event_id}/clip")
 async def v1_event_clip(event_id: str, download: int = 0):
-    """Đoạn video ~10 giây quanh thời điểm sự kiện, dựng từ bộ đệm khung hình."""
-    from app.video_processor import latest_event_clips
+    """Đoạn video ~10 giây quanh thời điểm sự kiện.
 
-    event = events.get(event_id)
-    clip_id = (event or {}).get("clip_id")
-    frames = latest_event_clips.get(clip_id) if clip_id else None
-    if not frames:
-        raise HTTPException(status_code=404, detail="Sự kiện không có đoạn ghi kèm")
+    File được ghi ngay lúc sự kiện xảy ra nên phải xét đĩa TRƯỚC bộ đệm: bộ đệm
+    chỉ nằm trong RAM, hỏi nó trước thì file đã có sẵn cũng không dùng được.
+    """
+    from app.video_processor import latest_event_clips
 
     clip_file = event_snapshots_path / f"{event_id}.mp4"
     if not clip_file.exists():
-        decoded = [cv2.imdecode(np.frombuffer(base64.b64decode(f), np.uint8), cv2.IMREAD_COLOR)
-                   for f in frames]
-        decoded = [img for img in decoded if img is not None]
-        if not decoded:
-            raise HTTPException(status_code=404, detail="Không giải mã được đoạn ghi")
-
-        h, w = decoded[0].shape[:2]
-        writer = cv2.VideoWriter(str(clip_file), cv2.VideoWriter_fourcc(*"mp4v"), 5, (w, h))
-        for img in decoded:
-            # Khung hình lệch kích thước sẽ bị VideoWriter bỏ qua âm thầm
-            if img.shape[:2] == (h, w):
-                writer.write(img)
-        writer.release()
-
-        if not clip_file.exists() or clip_file.stat().st_size == 0:
-            clip_file.unlink(missing_ok=True)
-            raise HTTPException(status_code=500, detail="Không dựng được đoạn video")
+        # Sự kiện cũ chưa kịp ghi ra file: còn trong bộ đệm thì dựng nốt
+        event = events.get(event_id)
+        clip_id = (event or {}).get("clip_id")
+        frames = latest_event_clips.get(clip_id) if clip_id else None
+        if not frames or not events.save_clip(event_id, list(frames)):
+            raise HTTPException(status_code=404, detail="Sự kiện không có đoạn ghi kèm")
 
     return FileResponse(clip_file, media_type="video/mp4",
                         filename=f"{event_id}.mp4" if download else None)

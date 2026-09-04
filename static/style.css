@@ -1486,25 +1486,26 @@ input:checked + .slider:before {
     justify-content: center;
 }
 
-#clip-player-canvas {
+#clip-player-video {
     width: 100%;
     height: 100%;
     object-fit: contain;
 }
 
-.clip-hud-watermark {
+/* Đè lên khung phát, không thay chỗ nó: <video> bị display:none thì trình duyệt
+   ngừng tải luôn, mà đang tải mới là lúc cần hiện chữ "Đang tải" */
+.clip-empty-hint {
     position: absolute;
-    bottom: 10px;
-    left: 14px;
-    right: 14px;
+    inset: 0;
     display: flex;
-    justify-content: space-between;
-    font-family: var(--font-mono);
-    font-size: 11px;
-    font-weight: 600;
-    color: #00ff88;
-    text-shadow: 0 0 4px rgba(0,0,0,0.8);
-    pointer-events: none;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    padding: 0 20px;
+    text-align: center;
+    color: #94a3b8;
+    font-size: 13px;
+    background: rgba(0, 0, 0, 0.75);
 }
 
 .clip-controls-bar {
@@ -1529,19 +1530,11 @@ input:checked + .slider:before {
     background: var(--primary-green-hover);
 }
 
-.clip-slider {
-    flex: 1;
-    accent-color: var(--primary-green);
-    cursor: pointer;
-}
-
-.clip-fps-tag {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    background: #1e293b;
-    padding: 3px 8px;
-    border-radius: 4px;
-    color: #94a3b8;
+/* Nút tải là thẻ <a>, phải tự căn cho giống nút */
+a.btn-clip-ctrl {
+    display: inline-flex;
+    align-items: center;
+    text-decoration: none;
 }
 
 /* ----------------- SCHEDULE & LOGS STYLES ----------------- */

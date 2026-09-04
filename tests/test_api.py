@@ -1,8 +1,10 @@
 """Kiểm chứng endpoint v1 và đối chiếu sự kiện thật với hợp đồng events.schema.json."""
 
+import asyncio
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -157,6 +159,47 @@ no_clip = api.events.emit("ABSENT", "Không kèm đoạn ghi.",
                                   "duration_seconds": 30})
 r = client.get(f"/api/v1/events/{no_clip['id']}/clip")
 check("sự kiện không có đoạn ghi -> 404", r.status_code == 404, str(r.status_code))
+
+# Bộ đệm khung hình chỉ nằm trong RAM và bị dọn dần. Đoạn ghi đã ra file thì
+# phải xem lại được kể cả khi bộ đệm trống — lỗi thật: hàm hỏi bộ đệm trước rồi
+# mới ngó tới file, nên khởi động lại máy chủ là mọi nút "Xem clip" đều chết.
+vp.latest_event_clips.clear()
+r = client.get(f"/api/v1/events/{with_clip['id']}/clip")
+check("bộ đệm RAM trống vẫn xem lại được đoạn ghi đã ra file",
+      r.status_code == 200, f"{r.status_code} {r.text[:120]}")
+check("đoạn ghi lấy từ file vẫn là mp4 có nội dung",
+      r.headers.get("content-type") == "video/mp4" and len(r.content) > 0,
+      f"{r.headers.get('content-type')} {len(r.content)} byte")
+
+clip_url = api.events.save_clip("evt_kiem_thu_clip", [encoded] * 5)
+clip_file = api.event_snapshots_path / "evt_kiem_thu_clip.mp4"
+check("save_clip dựng được đoạn mp4",
+      clip_url == "/api/v1/events/evt_kiem_thu_clip/clip", str(clip_url))
+check("file nằm cạnh ảnh bằng chứng và không rỗng",
+      clip_file.exists() and clip_file.stat().st_size > 0)
+check("không có khung nào thì không dựng file rỗng",
+      api.events.save_clip("evt_kiem_thu_rong", []) is None)
+check("không đẻ file cho đoạn ghi rỗng",
+      not (api.event_snapshots_path / "evt_kiem_thu_rong.mp4").exists())
+clip_file.unlink(missing_ok=True)
+
+# Sự kiện phải tự ghi đoạn ghi ra file ngay lúc phát sinh, không đợi ai bấm xem:
+# bộ đệm trong RAM bị dọn dần nên đợi là mất.
+for _ in range(6):
+    vp.push_clip_frame(CAMERA_ID, encoded)
+vp.keep_clip(CAMERA_ID, "clip_luc_phat_sinh")
+stub = SimpleNamespace(events=api.events)
+asyncio.run(vp.VideoProcessor._archive_clip(stub, {"id": "evt_kiem_thu_ghi"}, "clip_luc_phat_sinh"))
+ghi_file = api.event_snapshots_path / "evt_kiem_thu_ghi.mp4"
+check("sự kiện phát sinh là ghi đoạn ghi ra file luôn",
+      ghi_file.exists() and ghi_file.stat().st_size > 0)
+ghi_file.unlink(missing_ok=True)
+
+# Hàm không trả gì thì FastAPI gửi null kèm mã 200, client tưởng thành công rồi
+# nổ khi đọc thuộc tính. Trình phát clip cũ chết đúng vì chỗ này.
+r = client.get("/api/snapshot")
+check("/api/snapshot không trả null kèm mã 200",
+      not (r.status_code == 200 and r.json() is None), f"{r.status_code} {r.text[:80]}")
 
 # Camera riêng cho ca này: bộ đệm clip tích luỹ theo từng camera, dùng lại
 # camera ở trên thì đoạn "hỏng" vẫn còn lẫn các khung hợp lệ đẩy vào trước đó.

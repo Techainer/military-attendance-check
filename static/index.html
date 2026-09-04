@@ -889,16 +889,11 @@
                 <button class="btn-close-modal" onclick="closeClipModal()">✕</button>
             </div>
             <div class="clip-viewport-container">
-                <canvas id="clip-player-canvas"></canvas>
-                <div class="clip-hud-watermark">
-                    <span>RECORDING REPLAY · 10.0s BUFFER</span>
-                    <span id="clip-timer-label">00:00 / 00:10</span>
-                </div>
+                <video id="clip-player-video" controls autoplay muted playsinline></video>
+                <p class="clip-empty-hint" id="clip-empty-hint" style="display: none;"></p>
             </div>
             <div class="clip-controls-bar">
-                <button class="btn-clip-ctrl" id="btn-clip-play-toggle" onclick="toggleClipPlayback()">⏸ Tạm dừng</button>
-                <input type="range" id="clip-timeline-slider" min="0" max="100" value="0" class="clip-slider" oninput="seekClipFrame(this.value)">
-                <span id="clip-fps-label" class="clip-fps-tag">5 FPS</span>
+                <a class="btn-clip-ctrl" id="btn-clip-download" href="#" download>⬇ Tải đoạn ghi</a>
             </div>
         </div>
     </div>

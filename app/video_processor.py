@@ -227,6 +227,20 @@ class VideoProcessor:
 
         return matched_boxes
 
+    async def _archive_clip(self, event: dict, clip_id: Optional[str]) -> None:
+        """Ghi đoạn phát lại của sự kiện ra file mp4.
+
+        Bộ đệm khung hình nằm trong RAM nên khởi động lại là mất. Dựng mp4 tốn
+        CPU (giải mã vài chục ảnh JPEG) nên đẩy sang luồng khác, không chặn vòng
+        xử lý khung hình.
+        """
+        if self.events is None or not clip_id:
+            return
+        frames = latest_event_clips.get(clip_id)
+        if not frames:
+            return
+        await asyncio.to_thread(self.events.save_clip, event["id"], list(frames))
+
     def _rescan_regions(self, person_boxes, in_zone_indices, claimed, frame_shape) -> list:
         """Chọn vùng ảnh quanh những người trong vùng chưa định danh để quét lại."""
         h_img, w_img = frame_shape[:2]
@@ -582,7 +596,10 @@ class VideoProcessor:
                             "dwell_seconds": violation["dwell_seconds"],
                         },
                     )
+                    # Đẩy cảnh báo đi trước rồi mới ghi file: cảnh báo đỏ phải
+                    # hiện ngay, đừng đợi dựng xong mp4
                     await on_update({"type": "event", "event": event})
+                    await self._archive_clip(event, clip_id)
 
                 # Phiên điểm danh: mở theo thời khoá biểu (đầu giờ / cuối giờ)
                 if self.attendance is not None and self.attendance.session is None:
@@ -693,6 +710,7 @@ class VideoProcessor:
                             },
                         )
                         await on_update({"type": "event", "event": event})
+                        await self._archive_clip(event, event_clip_id)
 
                     await on_update({
                         'type': 'alert',
