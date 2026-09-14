@@ -503,6 +503,7 @@
                                         <th>TÊN NHIỆM VỤ / NỘI DUNG</th>
                                         <th>ĐƠN VỊ ÁP DỤNG</th>
                                         <th>KHUNG GIỜ CA</th>
+                                        <th>CAMERA</th>
                                         <th>CỬA SỔ ĐẦU GIỜ</th>
                                         <th>CỬA SỔ CUỐI GIỜ</th>
                                         <th>SĨ SỐ CHUẨN</th>
@@ -756,15 +757,57 @@
                         </div>
 
 
+                        <!-- Bảng danh sách thay cho tường camera: không mở luồng
+                             nào ở màn này, xem chi tiết mới dựng stream -->
+                        <div class="table-responsive" style="margin-top: 16px;">
+                            <table class="personnel-table">
+                                <thead>
+                                    <tr>
+                                        <th>STT</th>
+                                        <th>VỊ TRÍ CAMERA</th>
+                                        <th>TÊN BÀI HỌC</th>
+                                        <th>LOẠI</th>
+                                        <th>TRẠNG THÁI</th>
+                                        <th>THAO TÁC</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="sf-camera-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- MÀN 3.1 — CHI TIẾT MỘT CAMERA GIÁM SÁT AN TOÀN -->
+                <section id="view-safety-detail" class="page-view">
+                    <div class="glass-card section-card">
+                        <div class="card-header flex-between">
+                            <div>
+                                <button class="btn-toolbar-neutral" onclick="switchNavTab('safety')">← Quay lại danh sách</button>
+                                <h2 id="sfd-title" style="margin-top: 12px;">CHI TIẾT CAMERA GIÁM SÁT</h2>
+                                <p class="card-subtitle" id="sfd-subtitle"></p>
+                            </div>
+                            <div class="safety-state-pill" id="sfd-state">
+                                <span class="pill-dot"></span><span id="sfd-state-label">Bình thường</span>
+                            </div>
+                        </div>
+
                         <div class="safety-grid">
-                            <div class="camera-wall" id="sf-camera-wall"></div>
+                            <div class="camera-tile is-running">
+                                <div class="camera-tile-video">
+                                    <img id="sfd-stream" alt="Luồng camera giám sát an toàn">
+                                    <div class="camera-tile-idle" id="sfd-idle">Camera chưa chạy</div>
+                                </div>
+                                <div class="camera-tile-foot">
+                                    <span class="camera-tile-area" id="sfd-camera-caption"></span>
+                                </div>
+                            </div>
 
                             <div class="glass-card events-feed-card">
                                 <div class="events-feed-header">
                                     <h2>PHÁT HIỆN XÂM NHẬP</h2>
-                                    <span class="pending-badge" id="sf-pending-badge">0 chờ xử lý</span>
+                                    <span class="pending-badge" id="sfd-pending-badge">0 chờ xử lý</span>
                                 </div>
-                                <div class="events-list" id="sf-events-list"></div>
+                                <div class="events-list" id="sfd-events-list"></div>
                             </div>
                         </div>
 
@@ -774,7 +817,7 @@
                                 <p class="card-subtitle">ẢNH DO AI TỰ ĐỘNG GHI NHẬN, KHOANH ĐỎ ĐỐI TƯỢNG VI PHẠM</p>
                             </div>
                         </div>
-                        <div class="violation-gallery" id="sf-gallery"></div>
+                        <div class="violation-gallery" id="sfd-gallery"></div>
                     </div>
                 </section>
 
@@ -915,6 +958,23 @@
         </div>
     </div>
 
+    <!-- Xem thử luồng của một camera trong phần quản lý thiết bị -->
+    <div id="camera-stream-modal" class="modal-backdrop" style="display: none;">
+        <div class="modal-content clip-player-modal">
+            <div class="modal-header">
+                <div>
+                    <h3 id="cam-stream-title">📺 Luồng camera</h3>
+                    <span class="modal-subtitle" id="cam-stream-subtitle"></span>
+                </div>
+                <button class="btn-close-modal" onclick="closeCameraStreamModal()">✕</button>
+            </div>
+            <div class="clip-viewport-container">
+                <img id="cam-stream-img" alt="Luồng camera">
+                <p class="clip-empty-hint" id="cam-stream-hint" style="display: none;"></p>
+            </div>
+        </div>
+    </div>
+
     <!-- Schedule Add Modal -->
     <!-- Modal thêm / sửa thiết bị camera -->
     <div id="camera-modal" class="modal-backdrop" style="display: none;">
@@ -1037,9 +1097,17 @@
                     </div>
                 </div>
 
-                <div class="form-group">
-                    <label>Thao trường thực hiện</label>
-                    <input type="text" id="sch-field" placeholder="Trường bắn số 1" class="form-input">
+                <div class="form-row-two">
+                    <div class="form-group">
+                        <label>Thao trường thực hiện</label>
+                        <input type="text" id="sch-field" placeholder="Trường bắn số 1" class="form-input">
+                    </div>
+                    <div class="form-group">
+                        <label>Camera giám sát</label>
+                        <select id="sch-camera-select" class="form-input form-select">
+                            <option value="">— Chưa gán camera —</option>
+                        </select>
+                    </div>
                 </div>
 
                 <div class="form-row-two">

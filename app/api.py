@@ -853,6 +853,24 @@ async def v1_session_attendance(session_id: str, violation: Optional[str] = None
     }
 
 
+ACTIVE_STATES = ("check_start", "running", "check_end")
+
+
+def _schedule_of_camera(camera_id: str, rows: List[dict]) -> dict:
+    """Ca huấn luyện đang gắn với camera: ưu tiên ca đang diễn ra.
+
+    Một camera có thể được nhiều ca dùng trong ngày; ca đang chạy là cái người
+    trực cần thấy, không có thì lấy ca đầu tiên theo giờ bắt đầu.
+    """
+    mine = [r for r in rows if r.get("camera_id") == camera_id]
+    if not mine:
+        return {}
+    running = [r for r in mine if r.get("state") in ACTIVE_STATES]
+    if running:
+        return running[0]
+    return sorted(mine, key=lambda r: r.get("start_time") or "")[0]
+
+
 @app.get("/api/v1/summary/safety")
 async def v1_safety_summary(date: Optional[str] = None):
     """Dashboard an toàn: trạng thái chung, cảnh báo đang chờ, thư viện ảnh vi phạm.
@@ -869,13 +887,31 @@ async def v1_safety_summary(date: Optional[str] = None):
     state = "danger" if pending else ("warning" if recent else "normal")
     labels = {"danger": "Cảnh báo nguy hiểm", "warning": "Có vi phạm đã xử lý", "normal": "Bình thường"}
 
+    # Giao diện hiện bảng danh sách thay vì tường camera, nên mỗi camera phải
+    # mang sẵn bài học, loại huấn luyện và trạng thái báo động của riêng nó.
+    schedule_rows = schedules_view.schedules_with_state(clock.now())
+    cameras = []
+    for camera in _load_cameras():
+        out = _camera_out(camera)
+        schedule = _schedule_of_camera(camera["id"], schedule_rows)
+        alarms = [e for e in pending if e.get("camera_id") == camera["id"]]
+        out.update({
+            "schedule_id": schedule.get("id"),
+            "lesson_name": schedule.get("lesson_name") or schedule.get("name") or "",
+            "training_type": schedule.get("training_type"),
+            "alarm_count": len(alarms),
+            "safety_state": "danger" if alarms else "normal",
+            "safety_state_label": "Báo động" if alarms else "Bình thường",
+        })
+        cameras.append(out)
+
     return {
         "date": date or clock.now().date().isoformat(),
         "state": state,
         "state_label": labels[state],
         "active_intrusion": pending[0] if pending else None,
         "pending_count": len(pending),
-        "cameras": [_camera_out(c) for c in _load_cameras()],
+        "cameras": cameras,
         "events": recent,
         "total": total,
     }

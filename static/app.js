@@ -134,12 +134,13 @@ function switchNavTab(tabName) {
     const adStream = document.getElementById('ad-stream');
     if (adStream && !adStream.closest('.page-view').classList.contains('active')) detachStream(adStream);
     if (tabName !== 'monitoring') detachAllCameraStreams();
-    if (tabName !== 'safety') detachSafetyStreams();
+    if (tabName !== 'safety-detail') detachSafetyStreams();
 
     const titles = {
         'schedule-progress': 'Lịch & Tiến độ huấn luyện',
         'attendance': 'Giám sát quân số',
         'safety': 'An toàn bắn đạn thật',
+        'safety-detail': 'Chi tiết camera an toàn',
         'session-detail': 'Chi tiết lịch huấn luyện',
         'attendance-detail': 'Chi tiết giám sát quân số',
         'monitoring': 'Giám sát trực tiếp',
@@ -199,6 +200,10 @@ function switchNavTab(tabName) {
             loadSafetyDashboard();
             // Màn hoạt động thời gian thực, giữ nguyên trang và tự làm mới
             safetyPollTimer = setInterval(loadSafetyDashboard, 15000);
+            break;
+        case 'safety-detail':
+            loadSafetyDetail();
+            safetyPollTimer = setInterval(loadSafetyDetail, 15000);
             break;
         case 'cameras':
             loadCameras();
@@ -714,7 +719,8 @@ async function ackEvent(eventId) {
         });
         pendingEventsCount = Math.max(0, pendingEventsCount - 1);
         if (pendingEventsBadge) pendingEventsBadge.textContent = `${pendingEventsCount} chờ xử lý`;
-        if (currentSafetyType) loadSafetyDashboard();
+        if (currentTabName === 'safety') loadSafetyDashboard();
+        else if (currentTabName === 'safety-detail') loadSafetyDetail();
     } catch (e) {
         alert('Không xác nhận được: ' + e.message);
     }
@@ -1551,11 +1557,29 @@ window.saveZoneRules = saveZoneRules;
 const schedulesTbody = document.getElementById('schedules-tbody');
 const scheduleModal = document.getElementById('schedule-modal');
 
+async function fillScheduleCameraSelect(selected) {
+    const select = document.getElementById('sch-camera-select');
+    if (!select) return;
+    try {
+        scheduleCameras = (await getJson('/api/v1/cameras')).items || [];
+    } catch (e) {
+        scheduleCameras = [];
+    }
+    select.innerHTML = '<option value="">— Chưa gán camera —</option>' +
+        scheduleCameras.map(c =>
+            `<option value="${esc(c.id)}">${esc(c.name)}${c.area_name ? ' · ' + esc(c.area_name) : ''}</option>`
+        ).join('');
+    select.value = scheduleCameras.some(c => c.id === selected) ? selected : '';
+}
+
 function openScheduleModal(schedule) {
     const modal = document.getElementById('schedule-modal');
     if (!modal) return;
     const sch = schedule || {};
     const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+
+    // Danh sách camera nạp bất đồng bộ; modal mở ngay, select điền sau
+    fillScheduleCameraSelect(sch.camera_id || '');
 
     document.getElementById('schedule-modal-title').textContent =
         sch.id ? 'Cập nhật ca huấn luyện' : 'Thêm ca huấn luyện';
@@ -1588,6 +1612,12 @@ window.closeScheduleModal = closeScheduleModal;
 
 async function loadSchedules() {
     if (!schedulesTbody) return;
+    try {
+        // Nạp camera trước để bảng hiện được tên thay vì mã
+        scheduleCameras = (await getJson('/api/v1/cameras')).items || [];
+    } catch (e) {
+        scheduleCameras = [];
+    }
     try {
         const res = await fetch('/api/schedules');
         const result = await res.json();
@@ -1622,12 +1652,22 @@ function checkedBadge(done, label) {
         : `<span class="check-badge check-pending">○ ${label}</span>`;
 }
 
+// Tên camera để hiện trong bảng ca; danh sách đã nạp sẵn khi mở modal, chưa có
+// thì hiện mã cho đỡ trống.
+let scheduleCameras = [];
+
+function scheduleCameraName(cameraId) {
+    if (!cameraId) return '—';
+    const cam = scheduleCameras.find(c => c.id === cameraId);
+    return cam ? cam.name : cameraId;
+}
+
 function renderSchedulesTable(schedules) {
     if (!schedulesTbody) return;
     schedulesTbody.innerHTML = '';
 
     if (schedules.length === 0) {
-        schedulesTbody.innerHTML = `<tr><td colspan="10" style="text-align: center; color: #94a3b8; padding: 24px;">Chưa có ca thời khóa biểu nào được thiết lập</td></tr>`;
+        schedulesTbody.innerHTML = `<tr><td colspan="11" style="text-align: center; color: #94a3b8; padding: 24px;">Chưa có ca thời khóa biểu nào được thiết lập</td></tr>`;
         return;
     }
 
@@ -1641,6 +1681,7 @@ function renderSchedulesTable(schedules) {
             <td><strong>${sch.name}</strong></td>
             <td>${sch.unit}</td>
             <td class="font-mono">${sch.start_time} - ${sch.end_time}</td>
+            <td>${esc(scheduleCameraName(sch.camera_id))}</td>
             <td class="font-mono" style="color: #059669; font-weight: 700;">${sch.start_time} → ${addMinutesToClock(sch.start_time, win)}</td>
             <td class="font-mono" style="color: #0369a1; font-weight: 700;">${addMinutesToClock(sch.end_time, -win)} → ${sch.end_time}</td>
             <td><strong>${sch.required_count || 45}</strong> quân nhân</td>
@@ -1677,6 +1718,7 @@ async function handleCreateSchedule(e) {
         lesson_name: (val('sch-lesson-name') || '').trim(),
         instructor: (val('sch-instructor') || '').trim(),
         field: (val('sch-field') || '').trim(),
+        camera_id: val('sch-camera-select') || null,
         check_window_mins: num('sch-window-input', 5),
         required_count: num('sch-count-input', 45),
         late_tolerance_mins: num('sch-late-tol', 5),
@@ -2374,21 +2416,9 @@ async function loadSafetyDashboard() {
         stateEl.className = `safety-state-pill state-${data.state}`;
         document.getElementById('sf-state-label').textContent = data.state_label;
 
-        const badge = document.getElementById('sf-pending-badge');
-        if (badge) badge.textContent = `${data.pending_count} chờ xử lý`;
         pendingEventsCount = data.pending_count;
 
-        renderSafetyCameras(data.cameras || []);
-
-        const list = document.getElementById('sf-events-list');
-        list.innerHTML = '';
-        if (!data.events.length) {
-            list.innerHTML = '<p class="empty-hint">Chưa ghi nhận vi phạm an toàn nào</p>';
-        } else {
-            data.events.forEach(ev => renderEventCard(list, ev, false));
-        }
-
-        renderViolationGallery(data.events);
+        renderSafetyCameraTable(data.cameras || []);
         setActiveIntrusion(data.active_intrusion);
     } catch (e) {
         console.error('Lỗi tải dashboard an toàn:', e);
@@ -2396,76 +2426,106 @@ async function loadSafetyDashboard() {
 }
 window.loadSafetyDashboard = loadSafetyDashboard;
 
-// Trường bắn có thể có nhiều camera nên màn này phải thấy hết, không chỉ cái
-// đầu danh sách. Dùng lại kiểu ô của lưới giám sát, bỏ nút chạy/dừng vì bật tắt
-// thiết bị là việc của phân hệ III.
-function renderSafetyCameras(cameras) {
-    const wall = document.getElementById('sf-camera-wall');
-    if (!wall) return;
+// Trường bắn có thể có nhiều camera nên màn này phải thấy hết. Dựng luồng cho
+// tất cả cùng lúc thì lag, nên ở đây chỉ là bảng danh sách; ấn vào một dòng mới
+// mở luồng của đúng camera đó.
+function renderSafetyCameraTable(cameras) {
+    const tbody = document.getElementById('sf-camera-tbody');
+    if (!tbody) return;
 
-    if (!cameras.length) {
-        wall.innerHTML = '<p class="empty-hint">Chưa có camera nào giám sát trường bắn</p>';
+    const rows = currentTrainingType
+        ? cameras.filter(c => c.training_type === currentTrainingType)
+        : cameras;
+
+    if (!rows.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="empty-row">Chưa có camera nào giám sát trường bắn</td></tr>';
         return;
     }
-    const hint = wall.querySelector('.empty-hint');
-    if (hint) hint.remove();
 
-    const seen = new Set();
-    cameras.forEach(cam => {
-        seen.add(cam.id);
-        let tile = document.getElementById(`sf-cam-tile-${cam.id}`);
-        if (!tile) {
-            tile = document.createElement('div');
-            tile.className = 'camera-tile';
-            tile.id = `sf-cam-tile-${cam.id}`;
-            tile.innerHTML = `
-                <div class="camera-tile-head">
-                    <span class="camera-tile-name"></span>
-                    <span class="camera-tile-status"></span>
-                </div>
-                <div class="camera-tile-video">
-                    <img id="sf-cam-img-${cam.id}" alt="Luồng ${esc(cam.name)}">
-                    <div class="camera-tile-idle">Chưa chạy</div>
-                </div>
-                <div class="camera-tile-foot">
-                    <span class="camera-tile-area"></span>
-                </div>`;
-            wall.appendChild(tile);
+    tbody.innerHTML = '';
+    rows.forEach((cam, index) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td>${index + 1}</td>
+            <td><strong>${esc(cam.name)}</strong>${cam.area_name ? `<br><span class="muted">${esc(cam.area_name)}</span>` : ''}</td>
+            <td>${esc(cam.lesson_name || '—')}</td>
+            <td>${TRAINING_TAG[cam.training_type] || '—'}</td>
+            <td>${cam.safety_state === 'danger'
+                    ? `<span class="status-tag status-danger">Báo động${cam.alarm_count > 1 ? ` (${cam.alarm_count})` : ''}</span>`
+                    : '<span class="status-tag status-ok">Bình thường</span>'}</td>
+            <td><button class="btn-event-clip" onclick="openSafetyDetail('${cam.id}')">Xem chi tiết</button></td>`;
+        tbody.appendChild(tr);
+    });
+}
+
+// ---------- màn chi tiết một camera ----------
+
+let safetyDetailCameraId = null;
+
+function openSafetyDetail(cameraId) {
+    safetyDetailCameraId = cameraId;
+    switchNavTab('safety-detail');
+}
+window.openSafetyDetail = openSafetyDetail;
+
+async function loadSafetyDetail() {
+    if (!safetyDetailCameraId) return;
+    try {
+        const data = await getJson('/api/v1/summary/safety');
+        const cam = (data.cameras || []).find(c => c.id === safetyDetailCameraId);
+        if (!cam) {
+            document.getElementById('sfd-subtitle').textContent = 'Camera không còn trong hệ thống';
+            return;
         }
 
-        const running = cam.status === 'online';
-        tile.classList.toggle('is-running', running);
-        tile.querySelector('.camera-tile-name').textContent = cam.name;
-        tile.querySelector('.camera-tile-status').innerHTML =
-            CAMERA_STATUS_TAG[cam.status] || cam.status;
-        tile.querySelector('.camera-tile-area').textContent = cam.area_name || '';
+        document.getElementById('sfd-title').textContent =
+            `GIÁM SÁT AN TOÀN · ${cam.name.toUpperCase()}`;
+        document.getElementById('sfd-subtitle').textContent =
+            [cam.area_name, cam.lesson_name, TRAINING_LABEL[cam.training_type]]
+                .filter(Boolean).join(' · ') || 'Chưa gán ca huấn luyện';
+        document.getElementById('sfd-camera-caption').textContent = cam.area_name || cam.name;
 
-        // Màn tự làm mới mỗi 15s. Gán lại src là mở lại kết nối MJPEG nên hình
-        // sẽ giật; chỉ gắn khi ô chưa có luồng.
-        const img = document.getElementById(`sf-cam-img-${cam.id}`);
-        if (running) {
+        const stateEl = document.getElementById('sfd-state');
+        stateEl.className = `safety-state-pill state-${cam.safety_state}`;
+        document.getElementById('sfd-state-label').textContent = cam.safety_state_label;
+
+        // Chỉ gắn khi ô chưa có luồng: gán lại src là mở lại kết nối MJPEG
+        const img = document.getElementById('sfd-stream');
+        const idle = document.getElementById('sfd-idle');
+        if (cam.status === 'online') {
             if (!img.getAttribute('src')) attachStream(img, cam.id, true);
+            idle.style.display = 'none';
         } else {
             detachStream(img);
+            idle.style.display = '';
         }
-    });
 
-    // Camera bị xoá thì gỡ ô của nó
-    [...wall.querySelectorAll('.camera-tile')].forEach(tile => {
-        const id = tile.id.replace('sf-cam-tile-', '');
-        if (!seen.has(id)) {
-            detachStream(document.getElementById(`sf-cam-img-${id}`));
-            tile.remove();
+        const mine = (data.events || []).filter(e => e.camera_id === cam.id);
+        const pending = mine.filter(e => !e.acked);
+        document.getElementById('sfd-pending-badge').textContent = `${pending.length} chờ xử lý`;
+
+        const list = document.getElementById('sfd-events-list');
+        list.innerHTML = '';
+        if (!mine.length) {
+            list.innerHTML = '<p class="empty-hint">Chưa ghi nhận vi phạm an toàn nào trên camera này</p>';
+        } else {
+            mine.forEach(ev => renderEventCard(list, ev, false));
         }
-    });
+
+        renderViolationGallery(mine, 'sfd-gallery');
+        setActiveIntrusion(data.active_intrusion);
+    } catch (e) {
+        console.error('Lỗi tải chi tiết camera an toàn:', e);
+    }
 }
+window.loadSafetyDetail = loadSafetyDetail;
 
 function detachSafetyStreams() {
-    document.querySelectorAll('#sf-camera-wall img').forEach(detachStream);
+    detachStream(document.getElementById('sfd-stream'));
 }
 
-function renderViolationGallery(events) {
-    const gallery = document.getElementById('sf-gallery');
+function renderViolationGallery(events, galleryId) {
+    const gallery = document.getElementById(galleryId);
     if (!gallery) return;
     const withPhoto = events.filter(e => e.snapshot_url);
     gallery.innerHTML = withPhoto.length ? '' :
@@ -2521,6 +2581,9 @@ function onIntrusionEvent(event) {
     if (currentTabName === 'safety') {
         setActiveIntrusion(event);
         loadSafetyDashboard();
+    } else if (currentTabName === 'safety-detail') {
+        setActiveIntrusion(event);
+        loadSafetyDetail();
     }
 }
 
@@ -2644,6 +2707,7 @@ async function loadCameras() {
                 <td class="row-actions">
                     <button class="btn-event-clip" onclick="toggleCameraRun('${c.id}', ${running})">
                         ${running ? '⏹ Dừng' : '▶ Chạy'}</button>
+                    <button class="btn-event-clip" onclick='openCameraStreamModal(${JSON.stringify(c)})'>📺 Xem luồng</button>
                     <button class="btn-event-clip" onclick='openCameraModal(${JSON.stringify(c)})'>Sửa</button>
                     <button class="btn-row-danger" onclick="deleteCamera('${c.id}','${esc(c.name)}')">Xoá</button>
                 </td>`;
@@ -2672,6 +2736,39 @@ function openCameraModal(camera) {
     modal.style.display = 'flex';
 }
 window.openCameraModal = openCameraModal;
+
+// Xem thử luồng ngay trong phần quản lý thiết bị. Chỉ mở luồng khi modal đang
+// mở, đóng là ngắt để không có kết nối MJPEG chạy ngầm.
+function openCameraStreamModal(camera) {
+    const modal = document.getElementById('camera-stream-modal');
+    if (!modal) return;
+
+    document.getElementById('cam-stream-title').textContent = `📺 ${camera.name}`;
+    document.getElementById('cam-stream-subtitle').textContent =
+        [camera.code || camera.id, camera.area_name].filter(Boolean).join(' · ');
+
+    const img = document.getElementById('cam-stream-img');
+    const hint = document.getElementById('cam-stream-hint');
+    if (camera.status === 'online') {
+        attachStream(img, camera.id, true);
+        img.style.display = '';
+        hint.style.display = 'none';
+    } else {
+        detachStream(img);
+        img.style.display = 'none';
+        hint.textContent = 'Camera chưa chạy — bấm ▶ Chạy ở dòng tương ứng rồi xem lại.';
+        hint.style.display = '';
+    }
+    modal.style.display = 'flex';
+}
+window.openCameraStreamModal = openCameraStreamModal;
+
+function closeCameraStreamModal() {
+    const modal = document.getElementById('camera-stream-modal');
+    if (modal) modal.style.display = 'none';
+    detachStream(document.getElementById('cam-stream-img'));
+}
+window.closeCameraStreamModal = closeCameraStreamModal;
 
 function closeCameraModal() {
     const modal = document.getElementById('camera-modal');
