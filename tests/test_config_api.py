@@ -507,6 +507,30 @@ sessions = client.get("/api/v1/summary/training").json()["sessions"]
 check("mỗi ca mang số quân đang thấy trực tiếp",
       all("live_present" in s for s in sessions), str(sessions)[:200])
 
+# ===================================== trạng thái an toàn chỉ hai mức
+print("\n[9] Trạng thái an toàn chỉ còn hai mức")
+
+api.events.emit("INTRUSION", "Phát hiện 1 đối tượng đi vào vùng cấm.",
+                severity="critical")
+r = client.get("/api/v1/summary/safety").json()
+check("còn vi phạm chưa xử lý thì báo động",
+      r["state"] == "danger" and r["state_label"] == "Cảnh báo nguy hiểm", str(r["state_label"]))
+
+# Kho sự kiện dùng chung với máy đang chạy nên không xoá; xử lý nốt phần đang
+# treo rồi mới khẳng định trạng thái quay về bình thường.
+while True:
+    treo, _ = api.events.list_events(types=["INTRUSION"], acked=False, limit=200)
+    if not treo:
+        break
+    for e in treo:
+        api.events.ack(e["id"], "Chỉ huy trực ban")
+
+r = client.get("/api/v1/summary/safety").json()
+check("xử lý xong thì về bình thường, không còn mức 'đã xử lý'",
+      r["state"] == "normal" and r["state_label"] == "Bình thường", str(r)[:200])
+check("xử lý xong thì không còn cảnh báo đang treo",
+      r["active_intrusion"] is None and r["pending_count"] == 0, str(r["pending_count"]))
+
 reset()
 
 print()

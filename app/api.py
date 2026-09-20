@@ -885,8 +885,11 @@ async def v1_safety_summary(date: Optional[str] = None):
     )
     pending = [e for e in recent if not e.get("acked")]
 
-    state = "danger" if pending else ("warning" if recent else "normal")
-    labels = {"danger": "Cảnh báo nguy hiểm", "warning": "Có vi phạm đã xử lý", "normal": "Bình thường"}
+    # Chỉ hai mức: còn vi phạm chưa xử lý là báo động, xử lý xong là bình thường.
+    # Mức trung gian "có vi phạm đã xử lý" bị bỏ theo yêu cầu nghiệm thu: xong
+    # rồi thì không việc gì phải để một cái nhãn vàng treo trên màn suốt ngày.
+    state = "danger" if pending else "normal"
+    labels = {"danger": "Cảnh báo nguy hiểm", "normal": "Bình thường"}
 
     # Giao diện hiện bảng danh sách thay vì tường camera, nên mỗi camera phải
     # mang sẵn bài học, loại huấn luyện và trạng thái báo động của riêng nó.
