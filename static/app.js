@@ -2712,8 +2712,10 @@ async function loadSafetyDetail() {
         document.getElementById('sfd-state-label').textContent = cam.safety_state_label;
 
         // Chỉ gắn khi ô chưa có luồng: gán lại src là mở lại kết nối MJPEG
+        const box = document.getElementById('sfd-camera-box');
         const img = document.getElementById('sfd-stream');
         const idle = document.getElementById('sfd-idle');
+        makeZoomable(box);
         if (cam.status === 'online') {
             if (!img.getAttribute('src')) attachStream(img, cam.id, true);
             idle.style.display = 'none';
@@ -2723,18 +2725,20 @@ async function loadSafetyDetail() {
         }
 
         const mine = (data.events || []).filter(e => e.camera_id === cam.id);
+        // Xử lý xong thì rời danh sách trên, xuống nhật ký bên dưới
         const pending = mine.filter(e => !e.acked);
+        const handled = mine.filter(e => e.acked);
         document.getElementById('sfd-pending-badge').textContent = `${pending.length} chờ xử lý`;
 
         const list = document.getElementById('sfd-events-list');
         list.innerHTML = '';
-        if (!mine.length) {
-            list.innerHTML = '<p class="empty-hint">Chưa ghi nhận vi phạm an toàn nào trên camera này</p>';
+        if (!pending.length) {
+            list.innerHTML = '<p class="empty-hint">Không còn vi phạm nào chờ xử lý trên camera này</p>';
         } else {
-            mine.forEach(ev => renderEventCard(list, ev, false));
+            pending.forEach(ev => renderEventCard(list, ev, false));
         }
 
-        renderViolationGallery(mine, 'sfd-gallery');
+        renderSafetyLog(handled);
         setActiveIntrusion(data.active_intrusion);
     } catch (e) {
         console.error('Lỗi tải chi tiết camera an toàn:', e);
@@ -2746,31 +2750,37 @@ function detachSafetyStreams() {
     detachStream(document.getElementById('sfd-stream'));
 }
 
-function renderViolationGallery(events, galleryId) {
-    const gallery = document.getElementById(galleryId);
-    if (!gallery) return;
-    const withPhoto = events.filter(e => e.snapshot_url);
-    gallery.innerHTML = withPhoto.length ? '' :
-        '<p class="empty-hint">Thư viện trống — chưa có ảnh vi phạm nào được ghi nhận</p>';
+// Vi phạm đã xác nhận xử lý: rời danh sách trực tiếp và rơi xuống nhật ký, kèm
+// lỗi, thời điểm chính xác, ảnh và đoạn ghi 10 giây làm bằng chứng.
+function renderSafetyLog(events) {
+    const tbody = document.getElementById('sfd-log-tbody');
+    if (!tbody) return;
 
-    withPhoto.forEach(ev => {
+    if (!events.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="empty-row">Chưa có vi phạm nào được xử lý trên camera này</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = '';
+    events.forEach(ev => {
         const when = new Date(ev.occurred_at).toLocaleString('vi-VN');
-        gallery.insertAdjacentHTML('beforeend', `
-            <figure class="violation-card ${ev.acked ? 'acked' : ''}">
-                <img src="${ev.snapshot_url}" alt="Ảnh vi phạm an toàn"
-                     onclick="openEvidence('${ev.snapshot_url}','${esc(ev.message)}')">
-                <figcaption>
-                    <span class="viol-time">${when}</span>
-                    <span class="viol-place">${esc(ev.camera_name || '')} · ${esc((ev.detail || {}).zone_name || '')}</span>
-                    <span class="viol-msg">${esc(ev.message)}</span>
-                    <span class="viol-actions">
-                        <a class="btn-download" href="${ev.snapshot_url}" download>⬇ Tải ảnh</a>
-                        ${ev.acked
-                            ? `<span class="viol-acked">✓ ${esc(ev.acked_by || 'đã xử lý')}</span>`
-                            : `<button class="btn-event-confirm" onclick="ackEvent('${ev.id}')">Xác nhận xử lý</button>`}
-                    </span>
-                </figcaption>
-            </figure>`);
+        const zone = (ev.detail || {}).zone_name || ev.area_name || '—';
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td class="font-mono">${esc(when)}</td>
+            <td><strong>${esc(ev.message)}</strong></td>
+            <td>${esc(zone)}</td>
+            <td>${ev.snapshot_url
+                ? `<img class="evidence-thumb" src="${ev.snapshot_url}"
+                        onclick="openEvidence('${ev.snapshot_url}','${esc(ev.message)} — ${esc(when)}')"
+                        alt="Ảnh vi phạm">`
+                : '<span class="muted">—</span>'}</td>
+            <td>${ev.clip_url
+                ? `<button class="btn-event-clip" onclick="viewEventClip('${ev.id}')">▶️ Xem clip 10s</button>`
+                : '<span class="muted">Không có</span>'}</td>
+            <td>${esc(ev.acked_by || '—')}
+                ${ev.acked_at ? `<div class="cell-subtext font-mono">${esc(new Date(ev.acked_at).toLocaleString('vi-VN'))}</div>` : ''}</td>`;
+        tbody.appendChild(tr);
     });
 }
 

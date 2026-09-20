@@ -380,10 +380,15 @@ check('camera đang chạy thì dựng đúng luồng của nó, chưa chạy th
         : !sfdSrc,
     String(sfdSrc));
 const mine = safety.events.filter(e => e.camera_id === safety.cameras[0].id);
-check('sự kiện và thư viện ảnh lọc theo đúng camera',
-    doc.getElementById('sfd-events-list').children.length === (mine.length || 1)
-    && doc.getElementById('sfd-gallery') !== null,
-    `${doc.getElementById('sfd-events-list').children.length} thẻ / ${mine.length} sự kiện`);
+const minePending = mine.filter(e => !e.acked);
+const mineHandled = mine.filter(e => e.acked);
+// Danh sách trên chỉ còn việc phải làm; xử lý xong thì xuống bảng nhật ký dưới
+check('danh sách xâm nhập chỉ còn vi phạm chưa xử lý của đúng camera',
+    doc.getElementById('sfd-events-list').children.length === (minePending.length || 1),
+    `${doc.getElementById('sfd-events-list').children.length} thẻ / ${minePending.length} chờ xử lý`);
+check('vi phạm đã xử lý nằm ở bảng nhật ký bên dưới',
+    doc.getElementById('sfd-log-tbody').children.length === (mineHandled.length || 1),
+    `${doc.getElementById('sfd-log-tbody').children.length} dòng / ${mineHandled.length} đã xử lý`);
 window.switchNavTab('safety');
 await sleep(600);
 check('rời màn chi tiết thì ngắt luồng',
@@ -756,6 +761,33 @@ check('bảng camera có cột tên bài học', sfTh.includes('TÊN BÀI HỌC'
 check('bảng camera có cột loại', sfTh.includes('LOẠI'), sfTh.join(' | '));
 
 if (createdZone) await fetch(BASE + `/api/v1/zones/${createdZone.id}`, { method: 'DELETE' });
+
+console.log('\n[7c3] Chi tiết camera an toàn');
+
+window.switchNavTab('safety');
+await sleep(1000);
+const sfDetailBtn2 = doc.querySelector('#sf-camera-tbody tr button');
+check('bảng camera có nút xem chi tiết', !!sfDetailBtn2);
+
+if (sfDetailBtn2) {
+    sfDetailBtn2.click();
+    await sleep(1400);
+
+    check('mở đúng màn chi tiết camera',
+        doc.querySelector('.page-view.active').id === 'view-safety-detail',
+        doc.querySelector('.page-view.active').id);
+    check('khung camera gắn được zoom',
+        !!doc.getElementById('sfd-camera-box')
+        && doc.getElementById('sfd-camera-box').dataset.zoomable === '1');
+    check('bỏ thư viện hình ảnh vi phạm', doc.getElementById('sfd-gallery') === null);
+    check('có bảng nhật ký vi phạm đã xử lý', !!doc.getElementById('sfd-log-tbody'));
+
+    const sfdTh = [...doc.querySelectorAll('#view-safety-detail table th')].map(e => e.textContent.trim());
+    check('nhật ký có cột lỗi', sfdTh.includes('LỖI'), sfdTh.join(' | '));
+    check('nhật ký có cột thời gian', sfdTh.includes('THỜI GIAN'), sfdTh.join(' | '));
+    check('nhật ký có cột video bằng chứng',
+        sfdTh.includes('VIDEO BẰNG CHỨNG'), sfdTh.join(' | '));
+}
 
 console.log('\n[7d] Dialog chi tiết quân nhân và ca điểm danh');
 window.switchNavTab('registration');

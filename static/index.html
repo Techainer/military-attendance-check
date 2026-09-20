@@ -781,7 +781,7 @@
 
                         <div class="safety-grid">
                             <div class="camera-tile is-running">
-                                <div class="camera-tile-video">
+                                <div class="camera-tile-video" id="sfd-camera-box">
                                     <img id="sfd-stream" alt="Luồng camera giám sát an toàn">
                                     <div class="camera-tile-idle" id="sfd-idle">Camera chưa chạy</div>
                                 </div>
@@ -801,11 +801,25 @@
 
                         <div class="card-header" style="margin-top: 20px;">
                             <div>
-                                <h2>THƯ VIỆN HÌNH ẢNH VI PHẠM</h2>
-                                <p class="card-subtitle">ẢNH DO AI TỰ ĐỘNG GHI NHẬN, KHOANH ĐỎ ĐỐI TƯỢNG VI PHẠM</p>
+                                <h2>NHẬT KÝ VI PHẠM ĐÃ XỬ LÝ</h2>
+                                <p class="card-subtitle">VI PHẠM XÁC NHẬN XONG RỜI KHỎI DANH SÁCH TRÊN VÀ ĐƯỢC GHI LẠI Ở ĐÂY</p>
                             </div>
                         </div>
-                        <div class="violation-gallery" id="sfd-gallery"></div>
+                        <div class="table-responsive">
+                            <table class="personnel-table">
+                                <thead>
+                                    <tr>
+                                        <th>THỜI GIAN</th>
+                                        <th>LỖI</th>
+                                        <th>KHU VỰC</th>
+                                        <th>ẢNH</th>
+                                        <th>VIDEO BẰNG CHỨNG</th>
+                                        <th>NGƯỜI XỬ LÝ</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="sfd-log-tbody"></tbody>
+                            </table>
+                        </div>
                     </div>
                 </section>
 
