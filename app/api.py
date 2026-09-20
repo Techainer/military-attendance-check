@@ -13,6 +13,7 @@ import re
 import cv2
 import numpy as np
 import base64
+from datetime import date as date_cls, datetime, time as time_cls, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -22,7 +23,8 @@ from app import clock
 from app.video_processor import VideoProcessor
 from app.monitor import AttendanceMonitor
 from app.face_engine import FaceEngine
-from app.attendance import AttendanceManager, normalize_schedule, person_label
+from app.attendance import (STATE_LABELS, AttendanceManager, normalize_schedule,
+                            person_label)
 from app.events import CAMERA_ID, CAMERA_NAME, EventStore
 from app.safety import RULE_ATTENDANCE, ZoneStore
 from app.auth import authenticate
@@ -921,72 +923,172 @@ async def v1_safety_summary(date: Optional[str] = None):
     }
 
 
+# Thời khoá biểu là mẫu lặp hằng ngày, nên "lọc theo khoảng thời gian" nghĩa là
+# dựng một dòng cho mỗi cặp (ca, ngày). Chặn ở 31 ngày cho khỏi dựng vài nghìn
+# dòng khi người dùng gõ nhầm năm.
+MAX_RANGE_DAYS = 31
+
+
+def _range_days(date_from: Optional[str], date_to: Optional[str],
+                default_day: str) -> List[str]:
+    """Danh sách ngày cần dựng dòng lịch. Không khai khoảng thì chỉ một ngày."""
+    if not date_from and not date_to:
+        return [default_day]
+    try:
+        start = date_cls.fromisoformat(date_from or date_to)
+        end = date_cls.fromisoformat(date_to or date_from)
+    except ValueError:
+        return [default_day]
+    if end < start:
+        start, end = end, start
+    span = min((end - start).days, MAX_RANGE_DAYS - 1)
+    return [(start + timedelta(days=i)).isoformat() for i in range(span + 1)]
+
+
+def _time_on_day(day: str, hhmm) -> Optional[datetime]:
+    """Ghép 'HH:MM' vào một ngày cụ thể."""
+    parts = str(hhmm or "").strip().split(":")
+    if len(parts) < 2:
+        return None
+    try:
+        return datetime.combine(date_cls.fromisoformat(day),
+                                time_cls(int(parts[0]), int(parts[1])))
+    except ValueError:
+        return None
+
+
+def _time_progress(row: dict, day: str, now: datetime) -> dict:
+    """Tiến độ theo đồng hồ: đã trôi bao nhiêu phần khung giờ của ca.
+
+    Khác với ``progress_pct`` trong biên bản (tính theo số phút camera thực sự
+    quan sát được), cái này chỉ nhìn đồng hồ — màn lịch cần biết 'lớp còn bao
+    lâu nữa thì tan', không phải 'camera đã chạy bao lâu'.
+    """
+    start = _time_on_day(day, row.get("start_time"))
+    end = _time_on_day(day, row.get("end_time"))
+    if start is None or end is None:
+        return {"time_progress_pct": 0.0, "elapsed_minutes": 0,
+                "total_minutes": 0, "remaining_minutes": 0}
+    if end <= start:
+        end += timedelta(days=1)        # ca vắt qua nửa đêm
+    total = max(1, int((end - start).total_seconds() // 60))
+    elapsed = max(0, min(int((now - start).total_seconds() // 60), total))
+    return {
+        "time_progress_pct": round(elapsed * 100 / total, 1),
+        "elapsed_minutes": elapsed,
+        "total_minutes": total,
+        "remaining_minutes": total - elapsed,
+    }
+
+
+def _state_on_day(row: dict, day: str, today: str) -> tuple:
+    """Trạng thái của ca trong một ngày. Chỉ hôm nay mới có trạng thái sống."""
+    if day == today:
+        return row.get("state"), row.get("state_label")
+    if day < today:
+        return "finished", STATE_LABELS["finished"]
+    return "upcoming", STATE_LABELS["upcoming"]
+
+
 @app.get("/api/v1/summary/training")
 async def v1_training_summary(training_type: Optional[str] = None,
-                              date: Optional[str] = None):
-    """Tổng hợp giám sát quân số trong ngày: chỉ số nhanh + danh sách buổi.
+                              date: Optional[str] = None,
+                              date_from: Optional[str] = None,
+                              date_to: Optional[str] = None,
+                              shift: Optional[str] = None,
+                              state: Optional[str] = None,
+                              q: Optional[str] = None):
+    """Tổng hợp lịch và tiến độ huấn luyện: chỉ số nhanh + danh sách buổi.
 
-    ``training_type`` tách phân hệ đào tạo và chiến đấu; bỏ trống thì lấy cả hai.
+    ``training_type`` tách đào tạo và chiến đấu; bỏ trống thì lấy cả hai.
+    ``date_from``/``date_to`` dựng một dòng cho mỗi cặp (ca, ngày) trong khoảng.
     """
     now = clock.now()
-    today = date or now.date().isoformat()
-    logs = {l.get("schedule_id"): l for l in read_json_list(data_path / "attendance_logs.json")
-            if (l.get("date_iso") or str(l.get("started_at", ""))[:10]) == today}
+    today = now.date().isoformat()
+    default_day = date or today
+    days = _range_days(date_from, date_to, default_day)
+
+    # Biên bản tra theo (mã ca, ngày) để mỗi dòng lấy đúng buổi của nó
+    logs = {}
+    for l in read_json_list(data_path / "attendance_logs.json"):
+        key = (l.get("schedule_id"), l.get("date_iso") or str(l.get("started_at", ""))[:10])
+        logs[key] = l
+
+    needle = (q or "").strip().lower()
+    rows = schedules_view.schedules_with_state(now)
 
     sessions, running, required_total, violations = [], 0, 0, 0
-    active_cameras = set()          # gộp theo camera để không đếm trùng người
-    for row in schedules_view.schedules_with_state(now):
-        if training_type and row.get("training_type") != training_type:
-            continue
-        log = logs.get(row.get("id"), {})
-        checks = log.get("checks", {})
-        summary = log.get("attendance_summary") or {}
-        required = log.get("required", row.get("required_count") or 0)
+    active_cameras = set()
+    for day in days:
+        for row in rows:
+            if training_type and row.get("training_type") != training_type:
+                continue
+            if shift and row.get("shift") != shift:
+                continue
+            if needle and needle not in (
+                    f"{row.get('name', '')} {row.get('unit', '')} "
+                    f"{row.get('lesson_name', '')} {row.get('instructor', '')}").lower():
+                continue
 
-        live_present = 0
-        if row.get("state") in ACTIVE_STATES:
-            running += 1
-            active_cameras.add(row.get("camera_id") or CAMERA_ID)
-            live_present = _live_count(row.get("camera_id") or CAMERA_ID)
-        required_total += required or 0
-        violations += (summary.get("absent", 0) + summary.get("late", 0)
-                       + summary.get("early_leave", 0))
+            day_state, day_state_label = _state_on_day(row, day, today)
+            if state and day_state != state:
+                continue
 
-        sessions.append({
-            "id": log.get("id", row.get("id")),
-            "schedule_id": row.get("id"),
-            "date": today,
-            "name": row.get("name", ""),
-            "shift": row.get("shift", ""),
-            "unit": row.get("unit", ""),
-            "training_type": row.get("training_type"),
-            "camera_id": row.get("camera_id", CAMERA_ID),
-            # Khung giờ và thông tin bài học: màn lịch cần hiển thị giống hệt màn
-            # cấu hình, không thì hai nơi nhìn vào cùng một ca lại thấy khác nhau.
-            "start_time": row.get("start_time"),
-            "end_time": row.get("end_time"),
-            "check_window_mins": row.get("check_window_mins"),
-            "lesson_name": row.get("lesson_name"),
-            "instructor": row.get("instructor"),
-            "field": row.get("field"),
-            "class_name": row.get("class_name"),
-            "state": row.get("state"),
-            "state_label": row.get("state_label"),
-            "required": required,
-            "present_start": checks.get("start", {}).get("present", 0),
-            "present_end": checks.get("end", {}).get("present", 0),
-            "live_present": live_present,
-            "actual_minutes": log.get("actual_minutes", 0),
-            "scheduled_minutes": log.get("scheduled_minutes", 0),
-            "progress_pct": log.get("progress_pct", 0.0),
-            "violation_count": (summary.get("absent", 0) + summary.get("late", 0)
-                                + summary.get("early_leave", 0)),
-        })
+            log = logs.get((row.get("id"), day), {})
+            checks = log.get("checks", {})
+            summary = log.get("attendance_summary") or {}
+            required = log.get("required", row.get("required_count") or 0)
+            camera_id = row.get("camera_id") or CAMERA_ID
+
+            live_present = 0
+            if day == today and day_state in ACTIVE_STATES:
+                running += 1
+                active_cameras.add(camera_id)
+                live_present = _live_count(camera_id)
+
+            required_total += required or 0
+            violation_count = (summary.get("absent", 0) + summary.get("late", 0)
+                               + summary.get("early_leave", 0))
+            violations += violation_count
+
+            sessions.append({
+                "id": log.get("id", f"{row.get('id')}:{day}"),
+                "schedule_id": row.get("id"),
+                "day": day,
+                "date": day,
+                "name": row.get("name", ""),
+                "shift": row.get("shift", ""),
+                "unit": row.get("unit", ""),
+                "training_type": row.get("training_type"),
+                "camera_id": camera_id,
+                # Khung giờ và thông tin bài học: màn lịch cần hiển thị giống hệt
+                # màn cấu hình, không thì hai nơi nhìn vào cùng một ca lại khác.
+                "start_time": row.get("start_time"),
+                "end_time": row.get("end_time"),
+                "check_window_mins": row.get("check_window_mins"),
+                "lesson_name": row.get("lesson_name"),
+                "instructor": row.get("instructor"),
+                "field": row.get("field"),
+                "class_name": row.get("class_name"),
+                "state": day_state,
+                "state_label": day_state_label,
+                "required": required,
+                "present_start": checks.get("start", {}).get("present", 0),
+                "present_end": checks.get("end", {}).get("present", 0),
+                "live_present": live_present,
+                "actual_minutes": log.get("actual_minutes", 0),
+                "scheduled_minutes": log.get("scheduled_minutes", 0),
+                "progress_pct": log.get("progress_pct", 0.0),
+                "violation_count": violation_count,
+                **_time_progress(row, day, now),
+            })
 
     progress_values = [s["progress_pct"] for s in sessions if s["progress_pct"]]
     all_cameras = _load_cameras()
     return {
-        "date": today,
+        "date": default_day,
+        "date_from": days[0],
+        "date_to": days[-1],
         "training_type": training_type,
         "stats": {
             "running_sessions": running,
@@ -1000,6 +1102,7 @@ async def v1_training_summary(training_type: Optional[str] = None,
         },
         "sessions": sessions,
     }
+
 
 
 # ----------------- API v1: vùng giám sát -----------------

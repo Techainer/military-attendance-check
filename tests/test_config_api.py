@@ -531,6 +531,61 @@ check("xử lý xong thì về bình thường, không còn mức 'đã xử lý
 check("xử lý xong thì không còn cảnh báo đang treo",
       r["active_intrusion"] is None and r["pending_count"] == 0, str(r["pending_count"]))
 
+# ====================================== bộ lọc của màn lịch & tiến độ
+print("\n[10] Lọc lịch theo khoảng thời gian, ca, trạng thái, từ khoá")
+
+reset()
+write_json_list(api.schedules_file, [
+    {"id": "sch_sang", "name": "Huấn luyện điều lệnh", "start_time": "06:00",
+     "end_time": "11:30", "unit": "Đại đội 1", "shift": "Ca sáng",
+     "training_type": "dao_tao", "lesson_name": "Bài 1 — Đội ngũ", "required_count": 45},
+    {"id": "sch_chieu", "name": "Bắn súng tiểu liên AK", "start_time": "13:30",
+     "end_time": "17:30", "unit": "Đại đội 2", "shift": "Ca chiều",
+     "training_type": "chien_dau", "lesson_name": "Bài 5 — Ngắm bắn", "required_count": 50},
+])
+
+one_day = client.get("/api/v1/summary/training").json()["sessions"]
+check("không khai khoảng thì chỉ dựng một ngày", len(one_day) == 2, str(len(one_day)))
+check("mỗi dòng mang ngày của nó", all(s.get("day") for s in one_day), str(one_day)[:200])
+
+# Mốc ngày tính lùi từ hôm nay để test không hỏng khi chạy ở thời điểm khác
+from datetime import date, timedelta
+hom_nay = date.today()
+qua_3 = (hom_nay - timedelta(days=3)).isoformat()
+qua_1 = (hom_nay - timedelta(days=1)).isoformat()
+qua_5 = (hom_nay - timedelta(days=5)).isoformat()
+
+r = client.get(f"/api/v1/summary/training?date_from={qua_3}&date_to={qua_1}").json()
+check("khoảng 3 ngày dựng 3 dòng cho mỗi ca",
+      len(r["sessions"]) == 6, str(len(r["sessions"])))
+check("ngày trong quá khứ thì ca đã kết thúc",
+      all(s["state"] == "finished" for s in r["sessions"]), str(r["sessions"])[:200])
+
+r = client.get("/api/v1/summary/training?shift=Ca chiều").json()["sessions"]
+check("lọc theo ca", len(r) == 1 and r[0]["shift"] == "Ca chiều", str(r)[:200])
+
+r = client.get("/api/v1/summary/training?q=tiểu liên").json()["sessions"]
+check("tìm theo tên ca", len(r) == 1 and r[0]["schedule_id"] == "sch_chieu", str(r)[:200])
+
+r = client.get("/api/v1/summary/training?q=ngắm bắn").json()["sessions"]
+check("tìm theo tên bài học", len(r) == 1, str(r)[:200])
+
+r = client.get(f"/api/v1/summary/training?date_from={qua_3}&date_to={qua_1}"
+               "&state=finished").json()["sessions"]
+check("lọc theo trạng thái", len(r) == 6, str(len(r)))
+
+r = client.get("/api/v1/summary/training?date_from=2020-01-01&date_to=2030-01-01").json()
+check("khoảng quá dài bị chặn ở 31 ngày",
+      len(r["sessions"]) == 62, str(len(r["sessions"])))
+
+past = client.get(f"/api/v1/summary/training?date_from={qua_5}&date_to={qua_5}"
+                  ).json()["sessions"][0]
+check("ngày đã qua thì tiến độ theo giờ là 100%",
+      past.get("time_progress_pct") == 100.0, str(past.get("time_progress_pct")))
+check("có tổng số phút và số phút còn lại của ca",
+      past.get("total_minutes") == 330 and past.get("remaining_minutes") == 0,
+      str({k: past.get(k) for k in ("total_minutes", "remaining_minutes")}))
+
 reset()
 
 print()

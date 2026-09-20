@@ -484,6 +484,30 @@ paths:
         - name: training_type
           in: query
           schema: { $ref: '#/components/schemas/TrainingType' }
+        - name: date_from
+          in: query
+          description: |
+            Đầu khoảng ngày. Thời khoá biểu lặp hằng ngày nên khai khoảng sẽ dựng
+            một dòng cho mỗi cặp (ca, ngày). Tối đa 31 ngày.
+          schema: { type: string, format: date }
+        - name: date_to
+          in: query
+          description: Cuối khoảng ngày.
+          schema: { type: string, format: date }
+        - name: shift
+          in: query
+          description: 'Lọc theo ca trực, ví dụ ''Ca sáng''.'
+          schema: { type: string }
+        - name: state
+          in: query
+          description: Lọc theo trạng thái vận hành của ca trong ngày đó.
+          schema:
+            type: string
+            enum: [upcoming, check_start, running, check_end, finished]
+        - name: q
+          in: query
+          description: Tìm trong tên ca, đơn vị, tên bài học và giáo viên phụ trách.
+          schema: { type: string }
       responses:
         '200':
           description: OK
