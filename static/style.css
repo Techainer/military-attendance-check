@@ -1652,10 +1652,6 @@ a.btn-clip-ctrl {
     border-color: var(--primary-green);
 }
 
-.evidence-modal {
-    width: 900px;
-    max-width: 94vw;
-}
 
 .evidence-viewport {
     background: #0f172a;

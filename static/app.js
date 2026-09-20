@@ -1887,13 +1887,18 @@ function openLogModal(logId) {
     const sm = log.attendance_summary || {};
     const info = [
         ['Ca', log.shift],
+        ['Tên bài học', log.lesson_name || log.schedule_name],
+        ['Loại huấn luyện', TRAINING_LABEL[log.training_type] || ''],
+        ['Giáo viên phụ trách', log.instructor],
+        ['Thao trường', log.field],
+        ['Đội học / Lớp', log.class_name],
         ['Đơn vị', log.unit],
         ['Ngày', log.date],
+        ['Khung giờ', log.start_time && log.end_time ? `${log.start_time} – ${log.end_time}` : null],
         ['Sĩ số yêu cầu', log.required],
         ['Trạng thái', log.status],
         ['Thời gian diễn ra thực tế', log.actual_minutes != null
             ? `${log.actual_minutes}/${log.scheduled_minutes || '?'} phút` : null],
-        ['Tiến độ', log.progress_pct != null ? `${log.progress_pct}%` : null],
         ['Đủ giờ', sm.present],
         ['Đi chậm', sm.late],
         ['Về sớm', sm.early_leave],
@@ -1937,16 +1942,19 @@ function openLogModal(logId) {
     const violators = (log.attendance || []).filter(i => (i.violations || []).length);
     document.getElementById('log-modal-violations').innerHTML = violators.length
         ? `<div class="table-responsive"><table class="personnel-table">
-             <thead><tr><th>QUÂN NHÂN</th><th>SỐ HIỆU</th><th>THẤY LẦN ĐẦU</th>
-                        <th>THẤY LẦN CUỐI</th><th>VI PHẠM</th></tr></thead>
+             <thead><tr><th>QUÂN NHÂN</th><th>CHỨC VỤ</th><th>ĐƠN VỊ</th><th>TÊN VI PHẠM</th></tr></thead>
              <tbody>${violators.map(i => {
                  const p = i.person || {};
+                 const extra = [];
+                 if (i.late_minutes) extra.push(`chậm ${i.late_minutes}′`);
+                 if (i.early_leave_minutes) extra.push(`về sớm ${i.early_leave_minutes}′`);
                  return `<tr>
-                    <td><strong>${esc(p.rank || '')} ${esc(p.name || '')}</strong></td>
-                    <td class="font-mono">${esc(p.military_id || '—')}</td>
-                    <td class="font-mono">${fmtTime(i.first_seen)}</td>
-                    <td class="font-mono">${fmtTime(i.last_seen)}</td>
-                    <td>${(i.violations || []).map(v => VIOLATION_TAG[v] || v).join(' ')}</td>
+                    <td><strong>${esc(p.name || '')}</strong>
+                        <div class="cell-subtext font-mono">${esc(p.military_id || '')}</div></td>
+                    <td>${esc(p.rank || '—')}</td>
+                    <td>${esc(p.unit || '—')}</td>
+                    <td>${(i.violations || []).map(v => VIOLATION_TAG[v] || v).join(' ')}
+                        ${extra.length ? `<div class="cell-subtext">${extra.join(' · ')}</div>` : ''}</td>
                  </tr>`;
              }).join('')}</tbody></table></div>`
         : (log.absent_personnel || []).length
@@ -1964,25 +1972,11 @@ function closeLogModal() {
 window.closeLogModal = closeLogModal;
 
 // ----------------- EVIDENCE LIGHTBOX -----------------
+// Giữ tên cũ vì bảng nhật ký đang gọi; thực chất dùng chung hộp phóng to
 function openEvidenceModal(src, phaseLabel, caption) {
-    const modal = document.getElementById('evidence-modal');
-    const img = document.getElementById('evidence-modal-img');
-    const title = document.getElementById('evidence-modal-title');
-    const captionEl = document.getElementById('evidence-modal-caption');
-    if (!modal || !img) return;
-
-    img.src = src;
-    if (title) title.textContent = `Bằng chứng điểm danh ${phaseLabel.toLowerCase()}`;
-    if (captionEl) captionEl.textContent = caption || '';
-    modal.style.display = 'flex';
+    openEvidence(src, caption || `Bằng chứng điểm danh ${String(phaseLabel).toLowerCase()}`);
 }
 window.openEvidenceModal = openEvidenceModal;
-
-function closeEvidenceModal() {
-    const modal = document.getElementById('evidence-modal');
-    if (modal) modal.style.display = 'none';
-}
-window.closeEvidenceModal = closeEvidenceModal;
 
 
 // =====================================================================

@@ -850,6 +850,38 @@ if (firstLogRow && !firstLogRow.querySelector('.empty-row')) {
         !!firstLogRow.querySelector('td:last-child button'));
 }
 
+console.log('\n[7d3] Hộp chi tiết một ca trong nhật ký');
+
+const logDetailBtn = doc.querySelector('#attendance-logs-tbody tr td:last-child button');
+if (logDetailBtn) {
+    logDetailBtn.click();
+    await sleep(600);
+    check('mở được hộp chi tiết ca điểm danh',
+        doc.getElementById('log-modal').style.display === 'flex');
+
+    const keys = [...doc.querySelectorAll('#log-modal-info .detail-key')].map(e => e.textContent.trim());
+    ['Ca', 'Tên bài học', 'Đơn vị', 'Ngày', 'Sĩ số yêu cầu']
+        .forEach(k => check(`hộp chi tiết có ô ${k}`, keys.includes(k), keys.join(' | ')));
+
+    const violTh = [...doc.querySelectorAll('#log-modal-violations th')].map(e => e.textContent.trim());
+    if (violTh.length) {
+        check('bảng vi phạm có cột chức vụ', violTh.includes('CHỨC VỤ'), violTh.join(' | '));
+        check('bảng vi phạm có cột tên vi phạm', violTh.includes('TÊN VI PHẠM'), violTh.join(' | '));
+    }
+
+    const evImg = doc.querySelector('#log-modal-evidence img');
+    if (evImg) {
+        evImg.click();
+        await sleep(300);
+        check('bấm ảnh bằng chứng trong hộp thì mở xem toàn màn hình',
+            doc.getElementById('zoom-modal').style.display === 'flex');
+        window.closeZoomModal();
+    }
+    window.closeLogModal();
+}
+
+check('đã bỏ hộp ảnh bằng chứng cũ', doc.getElementById('evidence-modal') === null);
+
 console.log('\n[7e] Lịch & Tiến độ hiển thị đủ như màn cấu hình');
 window.switchNavTab('schedule-progress');
 await sleep(1200);
