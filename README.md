@@ -33,6 +33,7 @@ giao diện. Xem `docs/api/README.md` để biết endpoint nào đã chạy đ�
 ```bash
 python tests/test_ai.py           # vi phạm giờ giấc, xâm nhập, kho sự kiện
 python tests/test_api.py          # sự kiện, kết quả điểm danh, kênh SSE
+python tests/test_auth_api.py     # đăng nhập, đổi mật khẩu, thông tin cá nhân
 python tests/test_zones_stream.py # vùng giám sát, luồng MJPEG
 python tests/test_config_api.py   # camera, thời khoá biểu, đối chiếu hợp đồng
 python tests/test_smoke_routes.py # gọi thử MỌI route, bắt lỗi chỉ lộ lúc chạy
@@ -53,7 +54,10 @@ Bản POC có hai tài khoản khai cứng trong `app/auth.py`, không cơ sở 
 | `cbqh` | `cbqh@2026` | Cán bộ quản lý | Nghiệp vụ huấn luyện (phân hệ I + II) |
 | `qtht` | `qtht@2026` | Quản trị hệ thống | Thêm phân hệ III: camera, vùng, thời khoá biểu, đăng ký khuôn mặt |
 
-Đổi mật khẩu bằng biến môi trường `CBQH_PASSWORD` và `QTHT_PASSWORD`.
+Hai biến môi trường `CBQH_PASSWORD` và `QTHT_PASSWORD` chỉ dùng cho **lần chạy
+đầu tiên**, khi hệ thống dựng `data/users.json`. Sau đó đổi mật khẩu ngay trên
+giao diện: bấm vào avatar ở góc trái dưới cùng → Thông tin cá nhân. Xoá
+`data/users.json` là quay về hai tài khoản mặc định.
 
 **Đây không phải bảo mật thật.** Không có phiên, không có token, và các endpoint
 khác không kiểm quyền — gọi thẳng API vẫn làm được mọi thứ. Vai trò chỉ để giao

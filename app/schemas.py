@@ -124,6 +124,21 @@ class LoginInput(BaseModel):
     password: str = Field(min_length=1, max_length=200)
 
 
+class PasswordChangeInput(BaseModel):
+    """Đổi mật khẩu. POC không có phiên nên mật khẩu cũ đứng thay cho phiên."""
+
+    username: str = Field(min_length=1, max_length=60)
+    old_password: str = Field(min_length=1, max_length=200)
+    new_password: str = Field(min_length=8, max_length=200)
+
+
+class ProfilePatch(BaseModel):
+    """Sửa thông tin cá nhân hiển thị trên giao diện."""
+
+    username: str = Field(min_length=1, max_length=60)
+    display_name: str = Field(min_length=1, max_length=120)
+
+
 class AckInput(BaseModel):
     """Xác nhận đã xử lý một sự kiện."""
 

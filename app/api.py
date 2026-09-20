@@ -27,9 +27,10 @@ from app.attendance import (STATE_LABELS, AttendanceManager, normalize_schedule,
                             person_label)
 from app.events import CAMERA_ID, CAMERA_NAME, EventStore
 from app.safety import RULE_ATTENDANCE, ZoneStore
-from app.auth import authenticate
+from app.auth import authenticate, change_password, update_profile
 from app.schemas import (AckInput, CameraInput, CameraPatch, LoginInput,
-                         ScheduleInput, SchedulePatch, ZoneInput, ZonePatch)
+                         PasswordChangeInput, ProfilePatch, ScheduleInput,
+                         SchedulePatch, ZoneInput, ZonePatch)
 from app.storage import read_json_list, write_json_list
 
 
@@ -1538,6 +1539,27 @@ async def v1_login(body: LoginInput):
     if user is None:
         raise HTTPException(status_code=401, detail="Sai tài khoản hoặc mật khẩu")
     return user
+
+
+@app.post("/api/v1/auth/password")
+async def v1_change_password(body: PasswordChangeInput):
+    """Đổi mật khẩu của chính tài khoản đó.
+
+    POC không có phiên nên phải gửi kèm tên tài khoản và mật khẩu cũ; mật khẩu
+    cũ chính là thứ đứng thay cho phiên đăng nhập ở đây.
+    """
+    if not change_password(body.username, body.old_password, body.new_password):
+        raise HTTPException(status_code=400, detail="Sai tài khoản hoặc mật khẩu hiện tại")
+    return {"status": "success", "message": "Đã đổi mật khẩu"}
+
+
+@app.patch("/api/v1/auth/profile")
+async def v1_update_profile(body: ProfilePatch):
+    """Đổi tên hiển thị của tài khoản."""
+    profile = update_profile(body.username, body.display_name)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy tài khoản")
+    return profile
 
 
 # ----------------- API v1: hệ thống -----------------
