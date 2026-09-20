@@ -720,6 +720,46 @@ check('API trả khung giờ cho màn lịch', !!one.start_time && !!one.end_tim
 check('API trả cả bài học và giáo viên như màn cấu hình',
     'lesson_name' in one && 'instructor' in one, Object.keys(one).join(','));
 
+console.log('\n[7g] Màn chi tiết ca huấn luyện');
+
+window.switchNavTab('schedule-progress');
+await sleep(1000);
+const sdDetailBtn = doc.querySelector('#dt-schedule-tbody tr button');
+check('bảng lịch có nút xem chi tiết', !!sdDetailBtn);
+
+if (sdDetailBtn) {
+    sdDetailBtn.click();
+    await sleep(1400);
+
+    check('mở đúng màn chi tiết ca',
+        doc.querySelector('.page-view.active').id === 'view-session-detail',
+        doc.querySelector('.page-view.active').id);
+
+    const infoKeys = [...doc.querySelectorAll('#sd-info .detail-key')].map(e => e.textContent.trim());
+    check('có ô Sĩ số đầu buổi', infoKeys.includes('Sĩ số đầu buổi'), infoKeys.join(' | '));
+    check('có ô Sĩ số cuối buổi', infoKeys.includes('Sĩ số cuối buổi'), infoKeys.join(' | '));
+    check('bỏ ô Cửa sổ điểm danh', !infoKeys.includes('Cửa sổ điểm danh'), infoKeys.join(' | '));
+    check('bỏ ô Dung sai đi chậm', !infoKeys.includes('Dung sai đi chậm'), infoKeys.join(' | '));
+    check('tên bài học điền vào ô chứ không chỉ ở tiêu đề',
+        infoKeys.includes('Tên bài học'), infoKeys.join(' | '));
+
+    const infoVals = [...doc.querySelectorAll('#sd-info .detail-val')].map(e => e.textContent.trim());
+    check('không còn ô nào hiện undefined',
+        infoVals.every(v => !v.includes('undefined')), infoVals.join(' | '));
+
+    const headers = [...doc.querySelectorAll('#view-session-detail table th')].map(e => e.textContent.trim());
+    check('bảng đối chiếu có cột quân nhân vắng',
+        headers.includes('QUÂN NHÂN VẮNG'), headers.join(' | '));
+
+    check('màn chi tiết nhúng camera của ca', !!doc.getElementById('sd-stream'));
+    check('khung camera gắn được zoom',
+        !!doc.getElementById('sd-camera-box') && doc.getElementById('sd-camera-box').dataset.zoomable === '1',
+        doc.getElementById('sd-camera-box') && doc.getElementById('sd-camera-box').dataset.zoomable);
+    check('bỏ nút Giám sát quân số', doc.getElementById('sd-btn-watch') === null);
+    check('có bảng từng quân nhân trong ca', !!doc.getElementById('sd-attendance-tbody'));
+    check('có khu ảnh điểm danh do AI chụp', !!doc.getElementById('sd-evidence'));
+}
+
 console.log('\n[7f] Hộp xem ảnh phóng to dùng chung');
 
 check('có hàm mở ảnh bằng chứng', typeof window.openEvidence === 'function');

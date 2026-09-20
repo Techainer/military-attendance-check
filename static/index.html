@@ -582,7 +582,7 @@
                     </div>
                 </section>
 
-                <!-- MÀN 1.2 — CHI TIẾT LỊCH HUẤN LUYỆN -->
+                <!-- MÀN 1.2 — CHI TIẾT LỊCH HUẤN LUYỆN (gộp cả giám sát quân số) -->
                 <section id="view-session-detail" class="page-view">
                     <div class="glass-card section-card">
                         <div class="card-header flex-between">
@@ -591,12 +591,25 @@
                                 <h2 id="sd-title" style="margin-top: 12px;">CHI TIẾT LỊCH HUẤN LUYỆN</h2>
                                 <p class="card-subtitle" id="sd-subtitle"></p>
                             </div>
-                            <button class="btn-primary-green" id="sd-btn-watch" onclick="watchSessionAttendance()">
-                                🎖️ Giám sát quân số
-                            </button>
                         </div>
 
                         <div class="detail-grid" id="sd-info"></div>
+
+                        <!-- Camera của chính ca này, thay cho nút "Giám sát quân số" -->
+                        <div class="attendance-detail-grid" style="margin-top: 20px;">
+                            <div class="surveillance-screen-card">
+                                <div class="video-container camera-tile-video" id="sd-camera-box">
+                                    <img id="sd-stream" alt="Camera giám sát lớp">
+                                    <div class="camera-tile-idle" id="sd-camera-idle">Camera của ca này chưa chạy</div>
+                                </div>
+                                <p class="camera-caption" id="sd-camera-caption"></p>
+                            </div>
+
+                            <div class="evidence-column">
+                                <h3 class="evidence-title">ẢNH ĐIỂM DANH DO AI CHỤP</h3>
+                                <div id="sd-evidence" class="evidence-thumbs"></div>
+                            </div>
+                        </div>
 
                         <div class="card-header" style="margin-top: 20px;">
                             <h2>ĐỐI CHIẾU QUÂN SỐ ĐẦU BUỔI · CUỐI BUỔI</h2>
@@ -604,13 +617,53 @@
                         <div class="table-responsive">
                             <table class="personnel-table">
                                 <thead>
-                                    <tr><th>MỐC ĐIỂM DANH</th><th>GIỜ CHỐT</th><th>CÓ MẶT</th><th>VẮNG</th><th>BẰNG CHỨNG</th></tr>
+                                    <tr>
+                                        <th>MỐC ĐIỂM DANH</th>
+                                        <th>GIỜ CHỐT</th>
+                                        <th>CÓ MẶT</th>
+                                        <th>VẮNG</th>
+                                        <th>QUÂN NHÂN VẮNG</th>
+                                        <th>BẰNG CHỨNG</th>
+                                    </tr>
                                 </thead>
                                 <tbody id="sd-checks-tbody"></tbody>
                             </table>
                         </div>
+
+                        <div class="log-metrics-grid" id="sd-metrics" style="margin-top: 20px;"></div>
+
+                        <div class="card-header flex-between" style="margin-top: 8px;">
+                            <h2>QUÂN SỐ THAM GIA TRONG CA</h2>
+                            <div class="table-filters">
+                                <input type="text" id="sd-search" class="filter-select"
+                                       placeholder="Tìm quân nhân" oninput="renderSessionAttendance()">
+                                <select id="sd-filter" class="filter-select" onchange="renderSessionAttendance()">
+                                    <option value="all">Tất cả trạng thái</option>
+                                    <option value="absent">Không tham gia</option>
+                                    <option value="late">Đi chậm</option>
+                                    <option value="early_leave">Chưa hết giờ đã về</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="personnel-table">
+                                <thead>
+                                    <tr>
+                                        <th>QUÂN NHÂN</th>
+                                        <th>SỐ HIỆU</th>
+                                        <th>CHỨC VỤ</th>
+                                        <th>ĐƠN VỊ</th>
+                                        <th>THẤY LẦN ĐẦU</th>
+                                        <th>THẤY LẦN CUỐI</th>
+                                        <th>TRẠNG THÁI</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="sd-attendance-tbody"></tbody>
+                            </table>
+                        </div>
                     </div>
                 </section>
+
 
                 <!-- MÀN 2.1 / 4.1 — TỔNG HỢP GIÁM SÁT QUÂN SỐ -->
                 <section id="view-attendance-summary" class="page-view">

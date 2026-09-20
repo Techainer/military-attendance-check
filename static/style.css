@@ -2417,3 +2417,16 @@ a.btn-clip-ctrl {
     max-height: 100vh;
     object-fit: contain;
 }
+
+
+.absent-name-list {
+    margin: 0;
+    padding-left: 16px;
+    list-style: disc;
+    max-width: 260px;
+}
+.absent-name-list li {
+    font-size: 12.5px;
+    color: var(--warning-orange);
+    line-height: 1.6;
+}

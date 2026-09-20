@@ -133,6 +133,8 @@ function switchNavTab(tabName) {
     // Rời màn nào thì ngắt luồng hình của màn đó, không để chạy ngầm
     const adStream = document.getElementById('ad-stream');
     if (adStream && !adStream.closest('.page-view').classList.contains('active')) detachStream(adStream);
+    const sdStream = document.getElementById('sd-stream');
+    if (sdStream && !sdStream.closest('.page-view').classList.contains('active')) detachStream(sdStream);
     if (tabName !== 'monitoring') detachAllCameraStreams();
     if (tabName !== 'safety-detail') detachSafetyStreams();
 
@@ -2301,6 +2303,20 @@ async function openSessionDetail(sessionId, scheduleId) {
     sessionDetailFrom = 'schedule-progress';
     switchNavTab('session-detail');
 
+    // Hai mốc điểm danh cần cho cả ô "Sĩ số đầu/cuối buổi" lẫn bảng đối chiếu,
+    // nên nạp một lần rồi dùng lại chứ không gọi hai lượt.
+    let checks = [];
+    try {
+        checks = await getJson(`/api/v1/sessions/${encodeURIComponent(sessionDetailId)}/checks`);
+    } catch (e) {
+        checks = [];
+    }
+    const phaseOf = (ph) => checks.find(c => c.phase === ph);
+    const headcount = (ph) => {
+        const c = phaseOf(ph);
+        return c ? `${c.present} có mặt · ${c.absent} vắng` : 'Chưa chốt';
+    };
+
     try {
         const sch = await getJson(`/api/v1/schedules/${scheduleId}`);
         document.getElementById('sd-title').textContent = (sch.name || '').toUpperCase();
@@ -2311,12 +2327,13 @@ async function openSessionDetail(sessionId, scheduleId) {
         // tạo ca; service AI giữ nguyên và trả lại, ở đây chỉ hiển thị.
         const info = [
             ['Tên bài học', sch.lesson_name],
+            ['Loại huấn luyện', TRAINING_LABEL[sch.training_type] || '—'],
             ['Giáo viên phụ trách', sch.instructor],
             ['Thao trường', sch.field],
             ['Đội học / Lớp', sch.class_name],
             ['Khung giờ', `${sch.start_time} – ${sch.end_time}`],
-            ['Cửa sổ điểm danh', `${sch.check_window_mins} phút mỗi mốc`],
-            ['Dung sai đi chậm', `${sch.late_tolerance_mins} phút`],
+            ['Sĩ số đầu buổi', headcount('start')],
+            ['Sĩ số cuối buổi', headcount('end')],
             ['Sĩ số chuẩn', sch.required_count || '—'],
             ['Trạng thái', sch.state_label]
         ];
@@ -2324,45 +2341,160 @@ async function openSessionDetail(sessionId, scheduleId) {
             `<div class="detail-item"><span class="detail-key">${k}</span>
              <span class="detail-val">${esc(v || '—')}</span></div>`).join('');
 
-        const btn = document.getElementById('sd-btn-watch');
-        btn.style.display = ['check_start', 'running', 'check_end'].includes(sch.state) ? '' : 'none';
+        attachSessionCamera(sch);
     } catch (e) {
         document.getElementById('sd-subtitle').textContent = `Lỗi tải ca: ${e.message}`;
     }
 
-    await loadSessionChecks(sessionDetailId);
+    renderSessionChecks(checks);
+    renderSessionEvidence(checks);
+    await loadSessionAttendance(sessionDetailId);
 }
 window.openSessionDetail = openSessionDetail;
 
-async function loadSessionChecks(sessionId) {
+// Camera của chính ca này, thay cho nút "Giám sát quân số" ngày trước: người
+// trực mở chi tiết ca là thấy luôn lớp đang học, không phải bấm thêm một lần.
+function attachSessionCamera(sch) {
+    const box = document.getElementById('sd-camera-box');
+    const img = document.getElementById('sd-stream');
+    const idle = document.getElementById('sd-camera-idle');
+    if (!box || !img) return;
+
+    makeZoomable(box);
+    const live = ['check_start', 'running', 'check_end'].includes(sch.state);
+    if (live && sch.camera_id) {
+        attachStream(img, sch.camera_id, true);
+        if (idle) idle.style.display = 'none';
+    } else {
+        detachStream(img);
+        if (idle) {
+            idle.style.display = '';
+            idle.textContent = live ? 'Ca chưa gán camera giám sát' : 'Ca không diễn ra, camera không chạy';
+        }
+    }
+
+    // scheduleCameras chỉ được nạp ở màn cấu hình thời khoá biểu; vào thẳng màn
+    // này thì nó còn rỗng và tên camera sẽ hiện ra mã. Nạp trước rồi mới ghi chú.
+    const caption = document.getElementById('sd-camera-caption');
+    caption.textContent = 'Đang lấy thông tin camera…';
+    fillScheduleCameraSelect(sch.camera_id || '').then(() => {
+        caption.textContent =
+            `${scheduleCameraName(sch.camera_id)} — khung xanh là quân nhân đã định danh`;
+    });
+}
+
+function renderSessionChecks(checks) {
     const tbody = document.getElementById('sd-checks-tbody');
     if (!tbody) return;
-    try {
-        const checks = await getJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/checks`);
-        tbody.innerHTML = checks.length ? '' :
-            `<tr><td colspan="5" class="empty-row">Buổi chưa diễn ra — cả hai mốc đều bằng 0</td></tr>`;
-        checks.forEach(c => {
-            const tr = document.createElement('tr');
-            tr.innerHTML = `
-                <td><strong>${esc(c.phase_label)}</strong></td>
-                <td class="font-mono">${esc(c.time || '—')}</td>
-                <td class="text-green"><strong>${c.present}</strong></td>
-                <td class="${c.absent > 0 ? 'text-amber' : ''}">${c.absent}</td>
-                <td>${c.evidence_url
-                    ? `<img class="evidence-thumb" src="${c.evidence_url}" onclick="openEvidence('${c.evidence_url}','Điểm danh ${esc(c.phase_label)}')" alt="Ảnh bằng chứng">`
-                    : '<span class="muted">Chưa có</span>'}</td>`;
-            tbody.appendChild(tr);
-        });
-    } catch (e) {
-        tbody.innerHTML = `<tr><td colspan="5" class="empty-row">Chưa có biên bản điểm danh</td></tr>`;
-    }
+
+    tbody.innerHTML = checks.length ? '' :
+        `<tr><td colspan="6" class="empty-row">Buổi chưa diễn ra — cả hai mốc đều bằng 0</td></tr>`;
+
+    checks.forEach(c => {
+        const names = c.absent_personnel || [];
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td><strong>${esc(c.phase_label)}</strong></td>
+            <td class="font-mono">${esc(c.time || '—')}</td>
+            <td class="text-green"><strong>${c.present}</strong></td>
+            <td class="${c.absent > 0 ? 'text-amber' : ''}">${c.absent}</td>
+            <td>${names.length
+                ? `<ul class="absent-name-list">${names.map(n => `<li>${esc(n)}</li>`).join('')}</ul>`
+                : '<span class="muted">Không vắng ai</span>'}</td>
+            <td>${c.evidence_url
+                ? `<img class="evidence-thumb" src="${c.evidence_url}"
+                        onclick="openEvidence('${c.evidence_url}','Điểm danh ${esc(c.phase_label)} — ${c.present} có mặt')"
+                        alt="Ảnh bằng chứng">`
+                : '<span class="muted">Chưa có</span>'}</td>`;
+        tbody.appendChild(tr);
+    });
+}
+
+function renderSessionEvidence(checks) {
+    const box = document.getElementById('sd-evidence');
+    if (!box) return;
+    const withPhoto = checks.filter(c => c.evidence_url);
+    box.innerHTML = withPhoto.length ? '' :
+        '<p class="empty-hint">Chưa có ảnh điểm danh nào được chụp</p>';
+
+    withPhoto.forEach(c => {
+        box.insertAdjacentHTML('beforeend', `
+            <figure class="evidence-figure">
+                <img src="${c.evidence_url}" alt="Ảnh điểm danh ${esc(c.phase_label)}"
+                     onclick="openEvidence('${c.evidence_url}','Điểm danh ${esc(c.phase_label)} — ${c.present} có mặt')">
+                <figcaption>
+                    <strong>${esc(c.phase_label)}</strong> · ${esc(c.time || '')} · ${c.present} có mặt
+                    <a class="btn-download" href="${c.evidence_url}" download>⬇ Tải ảnh</a>
+                </figcaption>
+            </figure>`);
+    });
 }
 
 function backFromSessionDetail() { switchNavTab(sessionDetailFrom); }
 window.backFromSessionDetail = backFromSessionDetail;
 
-function watchSessionAttendance() { openAttendanceDetail(sessionDetailId, sessionDetailId); }
-window.watchSessionAttendance = watchSessionAttendance;
+let sessionAttendanceData = { items: [], summary: {} };
+
+async function loadSessionAttendance(sessionId) {
+    const metrics = document.getElementById('sd-metrics');
+    try {
+        const data = await getJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/attendance`);
+        sessionAttendanceData = { items: data.items || [], summary: data.summary || {} };
+    } catch (e) {
+        sessionAttendanceData = { items: [], summary: {} };
+    }
+
+    const sm = sessionAttendanceData.summary;
+    if (metrics) {
+        metrics.innerHTML = `
+            <div class="metric-card"><span class="metric-label">Sĩ số yêu cầu</span><span class="metric-val">${sm.required || 0}</span></div>
+            <div class="metric-card"><span class="metric-label">Đủ giờ</span><span class="metric-val text-green">${sm.present || 0}</span></div>
+            <div class="metric-card"><span class="metric-label">Đi chậm</span><span class="metric-val text-amber">${sm.late || 0}</span></div>
+            <div class="metric-card"><span class="metric-label">Về sớm</span><span class="metric-val text-amber">${sm.early_leave || 0}</span></div>
+            <div class="metric-card"><span class="metric-label">Không tham gia</span><span class="metric-val text-red">${sm.absent || 0}</span></div>`;
+    }
+    renderSessionAttendance();
+}
+window.loadSessionAttendance = loadSessionAttendance;
+
+function renderSessionAttendance() {
+    const tbody = document.getElementById('sd-attendance-tbody');
+    if (!tbody) return;
+
+    const filter = (document.getElementById('sd-filter') || {}).value || 'all';
+    const q = ((document.getElementById('sd-search') || {}).value || '').toLowerCase();
+
+    let items = sessionAttendanceData.items;
+    if (filter !== 'all') items = items.filter(i => (i.violations || []).includes(filter));
+    if (q) items = items.filter(i => {
+        const p = i.person || {};
+        return `${p.rank || ''} ${p.name || ''} ${p.military_id || ''}`.toLowerCase().includes(q);
+    });
+
+    tbody.innerHTML = items.length ? '' :
+        `<tr><td colspan="7" class="empty-row">Chưa có dữ liệu điểm danh cho ca này</td></tr>`;
+
+    items.forEach(i => {
+        const p = i.person || {};
+        const tags = (i.violations || []).map(v => VIOLATION_TAG[v] || v).join(' ')
+            || '<span class="viol-tag viol-ok">Đủ giờ</span>';
+        const extra = [];
+        if (i.late_minutes) extra.push(`chậm ${i.late_minutes}′`);
+        if (i.early_leave_minutes) extra.push(`về sớm ${i.early_leave_minutes}′`);
+
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td><strong>${esc(p.name || '')}</strong></td>
+            <td class="font-mono">${esc(p.military_id || '—')}</td>
+            <td>${esc(p.rank || '—')}</td>
+            <td>${esc(p.unit || '—')}</td>
+            <td class="font-mono">${fmtTime(i.first_seen)}</td>
+            <td class="font-mono">${fmtTime(i.last_seen)}</td>
+            <td>${tags}${extra.length ? `<br><span class="muted">${extra.join(' · ')}</span>` : ''}</td>`;
+        tbody.appendChild(tr);
+    });
+}
+window.renderSessionAttendance = renderSessionAttendance;
 
 // ----------------- MÀN 2.1 / 4.1: TỔNG HỢP QUÂN SỐ -----------------
 
