@@ -930,7 +930,8 @@ async def v1_training_summary(training_type: Optional[str] = None,
     logs = {l.get("schedule_id"): l for l in read_json_list(data_path / "attendance_logs.json")
             if (l.get("date_iso") or str(l.get("started_at", ""))[:10]) == today}
 
-    sessions, running, present_total, required_total, violations = [], 0, 0, 0, 0
+    sessions, running, required_total, violations = [], 0, 0, 0
+    active_cameras = set()          # gộp theo camera để không đếm trùng người
     for row in schedules_view.schedules_with_state(now):
         if training_type and row.get("training_type") != training_type:
             continue
@@ -939,9 +940,11 @@ async def v1_training_summary(training_type: Optional[str] = None,
         summary = log.get("attendance_summary") or {}
         required = log.get("required", row.get("required_count") or 0)
 
-        if row.get("state") in ("check_start", "running", "check_end"):
+        live_present = 0
+        if row.get("state") in ACTIVE_STATES:
             running += 1
-        present_total += checks.get("start", {}).get("present", 0)
+            active_cameras.add(row.get("camera_id") or CAMERA_ID)
+            live_present = _live_count(row.get("camera_id") or CAMERA_ID)
         required_total += required or 0
         violations += (summary.get("absent", 0) + summary.get("late", 0)
                        + summary.get("early_leave", 0))
@@ -969,6 +972,7 @@ async def v1_training_summary(training_type: Optional[str] = None,
             "required": required,
             "present_start": checks.get("start", {}).get("present", 0),
             "present_end": checks.get("end", {}).get("present", 0),
+            "live_present": live_present,
             "actual_minutes": log.get("actual_minutes", 0),
             "scheduled_minutes": log.get("scheduled_minutes", 0),
             "progress_pct": log.get("progress_pct", 0.0),
@@ -977,14 +981,17 @@ async def v1_training_summary(training_type: Optional[str] = None,
         })
 
     progress_values = [s["progress_pct"] for s in sessions if s["progress_pct"]]
+    all_cameras = _load_cameras()
     return {
         "date": today,
         "training_type": training_type,
         "stats": {
             "running_sessions": running,
-            "present_total": present_total,
+            "present_total": sum(_live_count(cid) for cid in active_cameras),
             "required_total": required_total,
             "violation_total": violations,
+            "cameras_online": sum(1 for c in all_cameras if _camera_status(c) == "online"),
+            "cameras_total": len(all_cameras),
             "overall_progress_pct": round(sum(progress_values) / len(progress_values), 1)
             if progress_values else 0.0,
         },
@@ -1165,11 +1172,27 @@ def _camera_status(camera: dict) -> str:
     return "online" if is_camera_running(camera["id"]) else "offline"
 
 
+def _live_count(camera_id: str) -> int:
+    """Số người camera đang thấy ngay lúc này. Camera chưa chạy thì 0.
+
+    Biên bản điểm danh chỉ có số sau khi cửa sổ điểm danh đóng, nên màn tổng hợp
+    phải hỏi thẳng luồng đang chạy mới ra được 'quân số thực tế'.
+    """
+    runtime = runtimes.get(camera_id)
+    if runtime is None:
+        return 0
+    try:
+        return int(runtime.monitor.get_status().get("current_count") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _camera_out(camera: dict) -> dict:
     """Bản ghi trả về giao diện, kèm trạng thái và đường dẫn dựng sẵn."""
     return {
         **camera,
         "status": _camera_status(camera),
+        "live_count": _live_count(camera["id"]),
         "stream_url": f"/api/v1/cameras/{camera['id']}/stream.mjpg?overlay=1",
         "snapshot_url": f"/api/v1/cameras/{camera['id']}/snapshot?overlay=0",
     }

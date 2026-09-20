@@ -489,6 +489,24 @@ check("đào tạo + chiến đấu = tất cả",
 check("ca cũ rơi vào nhóm đào tạo chứ không biến mất",
       len(dao_tao) == 1, str(len(dao_tao)))
 
+# ============================== quân số trực tiếp và đếm camera
+print("\n[8] Quân số thực tế và số camera trực tuyến")
+
+cams = client.get("/api/v1/cameras").json()["items"]
+check("mỗi camera mang sẵn số người đang thấy",
+      all("live_count" in c for c in cams), str(cams)[:200])
+check("camera chưa chạy thì đếm 0",
+      all(c.get("live_count") == 0 for c in cams), str(cams)[:200])
+
+stats = client.get("/api/v1/summary/training").json()["stats"]
+check("tổng hợp có số camera trực tuyến trên tổng số",
+      stats.get("cameras_total") == len(cams) and stats.get("cameras_online") == 0,
+      str(stats))
+
+sessions = client.get("/api/v1/summary/training").json()["sessions"]
+check("mỗi ca mang số quân đang thấy trực tiếp",
+      all("live_present" in s for s in sessions), str(sessions)[:200])
+
 reset()
 
 print()
