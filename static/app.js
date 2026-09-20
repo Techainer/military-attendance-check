@@ -2237,32 +2237,44 @@ async function loadTrainingSchedule() {
     const tbody = document.getElementById('dt-schedule-tbody');
     if (!tbody) return;
 
-    const dateEl = document.getElementById('dt-schedule-date');
-    const q = (document.getElementById('dt-schedule-search') || {}).value || '';
-    const date = (dateEl && dateEl.value) ? `&date=${dateEl.value}` : '';
+    const val = (id) => ((document.getElementById(id) || {}).value || '').trim();
+    const params = new URLSearchParams();
+    if (currentTrainingType) params.set('training_type', currentTrainingType);
+    if (val('dt-date-from')) params.set('date_from', val('dt-date-from'));
+    if (val('dt-date-to')) params.set('date_to', val('dt-date-to'));
+    if (val('dt-filter-shift')) params.set('shift', val('dt-filter-shift'));
+    if (val('dt-filter-state')) params.set('state', val('dt-filter-state'));
+    if (val('dt-schedule-search')) params.set('q', val('dt-schedule-search'));
 
     try {
-        const data = await getJson(`/api/v1/summary/training?_=1${trainingQuery('&')}${date}`);
-        const rows = data.sessions.filter(s =>
-            !q || `${s.name} ${s.unit}`.toLowerCase().includes(q.toLowerCase()));
+        const data = await getJson(`/api/v1/summary/training?${params.toString()}`);
+        const st = data.stats;
 
-        document.getElementById('dt-metric-running').textContent = data.stats.running_sessions;
-        const pct = Math.round(data.stats.overall_progress_pct || 0);
-        document.getElementById('dt-metric-progress').textContent = `${pct}%`;
-        document.getElementById('dt-metric-progress-bar').style.width = `${pct}%`;
+        document.getElementById('dt-metric-running').textContent = st.running_sessions;
+        document.getElementById('dt-metric-cameras').textContent =
+            `${st.cameras_online}/${st.cameras_total}`;
         document.getElementById('dt-metric-headcount').textContent =
-            `${data.stats.present_total}/${data.stats.required_total}`;
-        document.getElementById('dt-metric-violations').textContent = data.stats.violation_total;
+            `${st.present_total}/${st.required_total}`;
+        document.getElementById('dt-metric-violations').textContent = st.violation_total;
 
-        tbody.innerHTML = rows.length ? '' :
-            `<tr><td colspan="8" class="empty-row">Không có lịch huấn luyện nào cho ngày này</td></tr>`;
+        tbody.innerHTML = data.sessions.length ? '' :
+            `<tr><td colspan="10" class="empty-row">Không có lịch huấn luyện nào khớp bộ lọc</td></tr>`;
 
-        rows.forEach(s => {
-            const prog = Math.round(s.progress_pct || 0);
+        data.sessions.forEach(s => {
+            // Tiến độ ở đây là tiến độ theo đồng hồ: lớp đã học bao lâu trong
+            // khung giờ của nó, còn bao lâu nữa thì tan. Không phải số phút
+            // camera quan sát được.
+            const prog = Math.round(s.time_progress_pct || 0);
+            const remain = s.remaining_minutes || 0;
+            const conLai = s.state === 'finished' ? 'Đã kết thúc'
+                : s.state === 'upcoming' ? 'Chưa bắt đầu'
+                : `còn ${remain} phút`;
+
             const tr = document.createElement('tr');
             tr.innerHTML = `
-                <td>${TRAINING_TAG[s.training_type] || '<span class="tt-tag">—</span>'}
-                    <br><span class="muted">${esc(s.shift || '')}</span></td>
+                <td class="font-mono">${esc(s.day || '')}</td>
+                <td>${esc(s.shift || '—')}</td>
+                <td>${TRAINING_TAG[s.training_type] || '<span class="tt-tag">—</span>'}</td>
                 <td><strong>${esc(s.name)}</strong>
                     ${s.lesson_name ? `<div class="cell-subtext">${esc(s.lesson_name)}</div>` : ''}</td>
                 <td>${esc(s.unit || '—')}
@@ -2271,14 +2283,14 @@ async function loadTrainingSchedule() {
                 <td><span class="status-tag ${STATE_CLASS[s.state] || 'status-neutral'}">${esc(s.state_label)}</span></td>
                 <td>
                     <div class="progress-track"><div class="progress-fill" style="width:${prog}%"></div></div>
-                    <span class="progress-text">${prog}% · ${s.actual_minutes || 0}/${s.scheduled_minutes || 0} phút</span>
+                    <span class="progress-text">${prog}% · ${conLai}</span>
                 </td>
-                <td><strong>${s.present_start || 0}</strong> / ${s.required || 0}</td>
+                <td><strong>${s.required || 0}</strong></td>
                 <td><button class="btn-event-clip" onclick="openSessionDetail('${s.id}','${s.schedule_id}')">Xem chi tiết</button></td>`;
             tbody.appendChild(tr);
         });
     } catch (e) {
-        tbody.innerHTML = `<tr><td colspan="8" class="empty-row">Lỗi tải lịch: ${esc(e.message)}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="10" class="empty-row">Lỗi tải lịch: ${esc(e.message)}</td></tr>`;
     }
 }
 window.loadTrainingSchedule = loadTrainingSchedule;
@@ -3064,9 +3076,12 @@ async function startAppSession() {
     connectEventStream();
     startLivePolling();
 
+    // Mặc định xem lịch hôm nay; người dùng mở rộng bằng hai ô khoảng ngày
     const today = new Date().toISOString().slice(0, 10);
-    const dateInput = document.getElementById('dt-schedule-date');
-    if (dateInput) dateInput.value = today;
+    ['dt-date-from', 'dt-date-to'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = today;
+    });
 
     // Nạp sẵn các sự kiện gần đây để dòng sự kiện không trống khi mới vào
     try {

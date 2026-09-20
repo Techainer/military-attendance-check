@@ -254,6 +254,51 @@ check('tài khoản QTHT hiện đúng vai trò',
 check('hai tài khoản khác tên hiển thị',
     cbqhUser.display_name !== qtht.display_name);
 
+console.log('\n[3c] Trang Lịch & Tiến độ');
+
+window.switchNavTab('schedule-progress');
+await sleep(1000);
+
+const dtLabels = [...doc.querySelectorAll('#view-schedule-progress .metric-label')]
+    .map(e => e.textContent.trim());
+check('bỏ thẻ Tiến độ hoàn thành chung',
+    !dtLabels.some(l => l.includes('Tiến độ hoàn thành chung')), dtLabels.join(' | '));
+check('có thẻ camera trực tuyến trên tổng',
+    dtLabels.some(l => l.includes('Camera trực tuyến')), dtLabels.join(' | '));
+check('thẻ camera hiện dạng n/m',
+    /^\d+\/\d+$/.test((doc.getElementById('dt-metric-cameras') || {}).textContent || ''),
+    (doc.getElementById('dt-metric-cameras') || {}).textContent);
+check('không còn thanh tiến độ chung',
+    doc.getElementById('dt-metric-progress-bar') === null);
+
+const dtTh = [...doc.querySelectorAll('#view-schedule-progress thead th')].map(e => e.textContent.trim());
+check('bảng lịch có cột LOẠI', dtTh.includes('LOẠI'), dtTh.join(' | '));
+check('vẫn có cột tiến độ thực tế', dtTh.includes('TIẾN ĐỘ THỰC TẾ'), dtTh.join(' | '));
+
+check('có ô lọc từ ngày', !!doc.getElementById('dt-date-from'));
+check('có ô lọc đến ngày', !!doc.getElementById('dt-date-to'));
+check('có bộ lọc theo ca', !!doc.getElementById('dt-filter-shift'));
+check('có bộ lọc theo trạng thái', !!doc.getElementById('dt-filter-state'));
+check('có thanh tìm kiếm', !!doc.getElementById('dt-schedule-search'));
+
+const addBtn = doc.getElementById('dt-btn-add');
+check('nút thêm ca huấn luyện thuộc nhóm chỉ quản trị mới thấy',
+    !!addBtn && addBtn.classList.contains('role-only') && addBtn.dataset.role === 'qtht');
+
+if (addBtn) {
+    window.applyRole(cbqhUser);
+    await sleep(200);
+    check('CBQH không thấy nút thêm ca huấn luyện', addBtn.style.display === 'none',
+        addBtn.style.display);
+    window.applyRole(qtht);
+    await sleep(200);
+    check('QTHT thấy nút thêm ca huấn luyện', addBtn.style.display !== 'none');
+}
+
+const quanSo = doc.querySelector('#dt-schedule-tbody tr td:nth-child(9)');
+check('cột quân số chỉ hiện sĩ số chuẩn, không kèm dấu gạch chéo',
+    !!quanSo && !quanSo.textContent.includes('/'), quanSo && quanSo.textContent.trim());
+
 console.log('\n[4] Dashboard an toàn');
 window.switchNavTab('safety');
 await sleep(1200);

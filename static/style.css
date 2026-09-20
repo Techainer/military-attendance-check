@@ -2430,3 +2430,13 @@ a.btn-clip-ctrl {
     color: var(--warning-orange);
     line-height: 1.6;
 }
+
+
+.filter-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--military-muted);
+}

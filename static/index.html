@@ -516,19 +516,16 @@
                     </div>
                 </section>
 
-                <!-- MÀN 1.1 — TỔNG HỢP LỊCH & TIẾN ĐỘ HUẤN LUYỆN ĐÀO TẠO -->
+                <!-- MÀN 1.1 — TỔNG HỢP LỊCH & TIẾN ĐỘ HUẤN LUYỆN -->
                 <section id="view-schedule-progress" class="page-view">
                     <div class="glass-card section-card">
                         <div class="card-header flex-between">
                             <div>
-                                <h2>TỔNG HỢP LỊCH VÀ TIẾN ĐỘ HUẤN LUYỆN ĐÀO TẠO</h2>
+                                <h2>TỔNG HỢP LỊCH VÀ TIẾN ĐỘ HUẤN LUYỆN</h2>
                                 <p class="card-subtitle">LỊCH HUẤN LUYỆN TOÀN ĐƠN VỊ VÀ TIẾN ĐỘ THỰC HIỆN THEO THỜI GIAN THỰC</p>
                             </div>
-                            <div class="table-filters">
-                                <input type="date" id="dt-schedule-date" class="filter-select" onchange="loadTrainingSchedule()">
-                                <input type="text" id="dt-schedule-search" class="filter-select" placeholder="Lọc theo lớp / đơn vị" oninput="loadTrainingSchedule()">
-                                <button class="btn-primary-green" onclick="openScheduleModal()">➕ Thêm ca huấn luyện</button>
-                            </div>
+                            <button class="btn-primary-green role-only" data-role="qtht"
+                                    id="dt-btn-add" onclick="openScheduleModal()">➕ Thêm ca huấn luyện</button>
                         </div>
 
                         <div class="training-filter" id="tt-filter-schedule">
@@ -537,6 +534,30 @@
                             <button class="tt-btn" data-tt="chien_dau" onclick="setTrainingFilter('chien_dau')">Huấn luyện chiến đấu</button>
                         </div>
 
+                        <div class="table-filters" style="margin: 12px 0;">
+                            <label class="filter-inline">Từ ngày
+                                <input type="date" id="dt-date-from" class="filter-select" onchange="loadTrainingSchedule()">
+                            </label>
+                            <label class="filter-inline">Đến ngày
+                                <input type="date" id="dt-date-to" class="filter-select" onchange="loadTrainingSchedule()">
+                            </label>
+                            <select id="dt-filter-shift" class="filter-select" onchange="loadTrainingSchedule()">
+                                <option value="">Tất cả ca</option>
+                                <option value="Ca sáng">Ca sáng</option>
+                                <option value="Ca chiều">Ca chiều</option>
+                                <option value="Ca đêm">Ca đêm</option>
+                            </select>
+                            <select id="dt-filter-state" class="filter-select" onchange="loadTrainingSchedule()">
+                                <option value="">Tất cả trạng thái</option>
+                                <option value="upcoming">Chưa tới giờ</option>
+                                <option value="check_start">Đang điểm danh đầu giờ</option>
+                                <option value="running">Đang diễn ra</option>
+                                <option value="check_end">Đang điểm danh cuối giờ</option>
+                                <option value="finished">Đã kết thúc</option>
+                            </select>
+                            <input type="text" id="dt-schedule-search" class="filter-select"
+                                   placeholder="Tìm theo tên ca / bài học / đơn vị" oninput="loadTrainingSchedule()">
+                        </div>
 
                         <div class="log-metrics-grid">
                             <div class="metric-card">
@@ -544,9 +565,8 @@
                                 <span class="metric-val" id="dt-metric-running">0</span>
                             </div>
                             <div class="metric-card">
-                                <span class="metric-label">Tiến độ hoàn thành chung</span>
-                                <span class="metric-val text-green" id="dt-metric-progress">0%</span>
-                                <div class="progress-track"><div class="progress-fill" id="dt-metric-progress-bar"></div></div>
+                                <span class="metric-label">Camera trực tuyến / tổng số</span>
+                                <span class="metric-val text-green" id="dt-metric-cameras">0/0</span>
                             </div>
                             <div class="metric-card">
                                 <span class="metric-label">Quân số thực tế / yêu cầu</span>
@@ -562,7 +582,9 @@
                             <table class="personnel-table">
                                 <thead>
                                     <tr>
+                                        <th>NGÀY</th>
                                         <th>CA</th>
+                                        <th>LOẠI</th>
                                         <th>NỘI DUNG HUẤN LUYỆN</th>
                                         <th>ĐƠN VỊ</th>
                                         <th>KHUNG GIỜ</th>
@@ -577,6 +599,7 @@
                         </div>
                     </div>
                 </section>
+
 
                 <!-- MÀN 1.2 — CHI TIẾT LỊCH HUẤN LUYỆN (gộp cả giám sát quân số) -->
                 <section id="view-session-detail" class="page-view">
