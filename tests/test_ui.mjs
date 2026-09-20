@@ -720,6 +720,45 @@ check('API trả khung giờ cho màn lịch', !!one.start_time && !!one.end_tim
 check('API trả cả bài học và giáo viên như màn cấu hình',
     'lesson_name' in one && 'instructor' in one, Object.keys(one).join(','));
 
+console.log('\n[7f] Hộp xem ảnh phóng to dùng chung');
+
+check('có hàm mở ảnh bằng chứng', typeof window.openEvidence === 'function');
+check('có hàm gắn zoom cho khung camera', typeof window.makeZoomable === 'function');
+
+window.openEvidence('/static/khong-co-that.jpg', 'Ảnh thử');
+check('mở hộp ảnh thì lớp phủ hiện ra',
+    doc.getElementById('zoom-modal').style.display === 'flex',
+    doc.getElementById('zoom-modal').style.display);
+check('hộp ảnh trỏ đúng ảnh được bấm',
+    doc.getElementById('zoom-img').getAttribute('src') === '/static/khong-co-that.jpg');
+check('hộp ảnh hiện chú thích', doc.getElementById('zoom-caption').textContent === 'Ảnh thử');
+check('có nút tải ảnh trỏ đúng ảnh',
+    doc.getElementById('zoom-download').getAttribute('href') === '/static/khong-co-that.jpg');
+check('mở ra thì luôn bắt đầu ở 100%',
+    doc.getElementById('zoom-level').textContent === '100%',
+    doc.getElementById('zoom-level').textContent);
+
+const stage = doc.getElementById('zoom-stage');
+stage._zoom.zoomBy(0.5);
+check('phóng to đổi được tỉ lệ', doc.getElementById('zoom-level').textContent === '150%',
+    doc.getElementById('zoom-level').textContent);
+stage._zoom.reset();
+check('nút vừa khung đưa về 100%', doc.getElementById('zoom-level').textContent === '100%');
+
+window.closeZoomModal();
+check('đóng hộp ảnh', doc.getElementById('zoom-modal').style.display === 'none');
+
+const box = doc.createElement('div');
+box.appendChild(doc.createElement('img'));
+doc.body.appendChild(box);
+window.makeZoomable(box);
+check('gắn zoom thì thêm nút toàn màn hình',
+    !!box.querySelector('.zoom-fullscreen-btn'));
+window.makeZoomable(box);
+check('gọi lại không nhân đôi nút',
+    box.querySelectorAll('.zoom-fullscreen-btn').length === 1,
+    String(box.querySelectorAll('.zoom-fullscreen-btn').length));
+
 console.log('\n[8] Màn vẽ vùng chịu được canvas không dùng được');
 check('không sập khi trình duyệt không cấp ngữ cảnh vẽ',
     appJs.includes("if (!ctx) return;"));

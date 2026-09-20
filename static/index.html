@@ -1327,6 +1327,22 @@
         </div>
     </div>
 
+    <!-- Lớp phủ xem ảnh phóng to: mọi ảnh bằng chứng trong hệ thống dùng chung -->
+    <div id="zoom-modal" class="zoom-modal" style="display: none;" onclick="closeZoomModal(event)">
+        <div class="zoom-toolbar" onclick="event.stopPropagation()">
+            <span class="zoom-caption" id="zoom-caption"></span>
+            <button type="button" class="zoom-btn" onclick="zoomStageBy(-0.25)" title="Thu nhỏ">−</button>
+            <span class="zoom-level" id="zoom-level">100%</span>
+            <button type="button" class="zoom-btn" onclick="zoomStageBy(0.25)" title="Phóng to">+</button>
+            <button type="button" class="zoom-btn" onclick="zoomStageReset()" title="Vừa khung">⤢</button>
+            <a class="zoom-btn" id="zoom-download" download title="Tải ảnh">⬇</a>
+            <button type="button" class="zoom-btn" onclick="closeZoomModal()" title="Đóng">×</button>
+        </div>
+        <div class="zoom-stage" id="zoom-stage" onclick="event.stopPropagation()">
+            <img id="zoom-img" alt="Ảnh bằng chứng phóng to">
+        </div>
+    </div>
+
     <script src="/static/app.js?v=93ef27f0"></script>
 </body>
 </html>

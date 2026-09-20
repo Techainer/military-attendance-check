@@ -1979,6 +1979,132 @@ function closeEvidenceModal() {
 }
 window.closeEvidenceModal = closeEvidenceModal;
 
+
+// =====================================================================
+// XEM ẢNH PHÓNG TO VÀ ZOOM CAMERA — DÙNG CHUNG TOÀN HỆ THỐNG
+// Trước đây nhiều chỗ gọi openEvidence() nhưng hàm chưa bao giờ được định
+// nghĩa, nên bấm vào ảnh bằng chứng chỉ ném ReferenceError và không mở gì cả.
+// Phóng to dùng Fullscreen API và transform: scale() sẵn có, không thêm thư viện.
+// =====================================================================
+
+function toggleFullscreen(el) {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else if (el && el.requestFullscreen) el.requestFullscreen();
+}
+window.toggleFullscreen = toggleFullscreen;
+
+// Gắn khả năng phóng to / kéo di cho một khung có chứa <img>: lăn chuột để
+// zoom, kéo để di khi đã phóng, bấm đúp để về vừa khung, nút ⛶ để toàn màn hình.
+function makeZoomable(container) {
+    if (!container || container.dataset.zoomable === '1') return;
+    container.dataset.zoomable = '1';
+    container.classList.add('zoomable');
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'zoom-fullscreen-btn';
+    btn.title = 'Phóng to toàn màn hình';
+    btn.textContent = '⛶';
+    btn.onclick = (e) => { e.stopPropagation(); toggleFullscreen(container); };
+    container.appendChild(btn);
+
+    let scale = 1, x = 0, y = 0, drag = null;
+
+    const apply = () => {
+        const img = container.querySelector('img');
+        if (img) img.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+        container.classList.toggle('is-zoomed', scale > 1);
+        const label = container.querySelector('.zoom-level')
+            || document.getElementById(container.dataset.zoomLevelId || '');
+        if (label) label.textContent = `${Math.round(scale * 100)}%`;
+    };
+
+    const zoomBy = (delta) => {
+        scale = Math.min(6, Math.max(1, Math.round((scale + delta) * 100) / 100));
+        if (scale === 1) { x = 0; y = 0; }
+        apply();
+    };
+
+    const reset = () => { scale = 1; x = 0; y = 0; apply(); };
+
+    container.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        zoomBy(e.deltaY < 0 ? 0.25 : -0.25);
+    }, { passive: false });
+
+    container.addEventListener('pointerdown', (e) => {
+        if (scale === 1) return;
+        drag = { sx: e.clientX - x, sy: e.clientY - y };
+        container.classList.add('is-panning');
+        if (container.setPointerCapture) container.setPointerCapture(e.pointerId);
+    });
+    container.addEventListener('pointermove', (e) => {
+        if (!drag) return;
+        x = e.clientX - drag.sx;
+        y = e.clientY - drag.sy;
+        apply();
+    });
+    const endDrag = (e) => {
+        if (!drag) return;
+        drag = null;
+        container.classList.remove('is-panning');
+        if (container.releasePointerCapture) container.releasePointerCapture(e.pointerId);
+    };
+    container.addEventListener('pointerup', endDrag);
+    container.addEventListener('pointercancel', endDrag);
+    container.addEventListener('dblclick', reset);
+
+    container._zoom = { zoomBy, reset, get scale() { return scale; } };
+}
+window.makeZoomable = makeZoomable;
+
+function zoomStage() {
+    const stage = document.getElementById('zoom-stage');
+    if (stage && !stage._zoom) {
+        stage.dataset.zoomLevelId = 'zoom-level';
+        makeZoomable(stage);
+    }
+    return stage;
+}
+
+function zoomStageBy(delta) { const s = zoomStage(); if (s) s._zoom.zoomBy(delta); }
+window.zoomStageBy = zoomStageBy;
+
+function zoomStageReset() { const s = zoomStage(); if (s) s._zoom.reset(); }
+window.zoomStageReset = zoomStageReset;
+
+// Hàm mà toàn bộ ảnh bằng chứng trong hệ thống gọi tới
+function openEvidence(src, caption) {
+    const modal = document.getElementById('zoom-modal');
+    const img = document.getElementById('zoom-img');
+    if (!modal || !img || !src) return;
+
+    img.src = src;
+    const cap = document.getElementById('zoom-caption');
+    if (cap) cap.textContent = caption || '';
+    const dl = document.getElementById('zoom-download');
+    if (dl) dl.href = src;
+
+    modal.style.display = 'flex';
+    zoomStageReset();
+}
+window.openEvidence = openEvidence;
+
+function closeZoomModal(event) {
+    // Bấm vào chính ảnh hoặc thanh công cụ thì không đóng
+    if (event && event.target && event.target.id !== 'zoom-modal') return;
+    const modal = document.getElementById('zoom-modal');
+    if (modal) modal.style.display = 'none';
+    if (document.fullscreenElement) document.exitFullscreen();
+}
+window.closeZoomModal = closeZoomModal;
+
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const modal = document.getElementById('zoom-modal');
+    if (modal && modal.style.display !== 'none') closeZoomModal();
+});
+
 function filterAttendanceLogsByStatus() {
     const statusSelect = document.getElementById('log-filter-status');
     const selected = statusSelect ? statusSelect.value : 'all';
