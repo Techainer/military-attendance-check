@@ -4,22 +4,75 @@ A real-time student attendance monitoring system using YOLO person detection. Th
 
 ## Features
 
-- **YOLO v8 Person Detection**: Fast and accurate person detection using YOLOv8n
-- **Real-time Monitoring**: Track person count continuously throughout video playback
-- **Baseline Setting**: Manually set the expected attendance count
-- **Alert System**: Automatic alerts when count drops below baseline for >60 seconds
-- **Frame Capture**: Saves frames when alerts are triggered
-- **Web UI**: Simple, clean HTML/CSS/JS interface with live video feed
-- **Event Log**: Historical record of all attendance alerts
+- **YOLO Person Detection + Face ID**: hai model chạy song song trên cùng khung hình
+- **Điểm danh theo thời khoá biểu**: tự mở phiên N phút đầu giờ và cuối giờ, lưu ảnh bằng chứng từng mốc
+- **Vi phạm giờ giấc**: suy ra Đi chậm / Về sớm / Không tham gia từ dấu vết hiện diện cả buổi (`app/presence.py`)
+- **Giám sát an toàn**: phát hiện người vào vùng cấm hoặc vượt vạch an toàn (`app/safety.py`)
+- **Kho sự kiện thống nhất**: mọi cảnh báo về một cấu trúc, có xác nhận xử lý và kênh SSE (`app/events.py`)
+- **Web UI**: giao diện HTML/CSS/JS với luồng hình trực tiếp
 
 ## Architecture
 
 ```
-User uploads video → FastAPI backend → Video processing pipeline:
-  1. YOLO detects persons → count + bounding boxes
-  2. Monitor checks if count < baseline for >60s
-  3. WebSocket streams frames + alerts to UI
+Nguồn video / RTSP → FastAPI → Vòng xử lý mỗi khung hình:
+  1. YOLO đếm người  +  InsightFace định danh   (song song)
+  2. Lọc theo vùng điểm danh → sĩ số trong vùng
+  3. Ghi dấu vết hiện diện từng quân nhân (cả buổi, không chỉ 2 mốc)
+  4. Soi vùng cấm / vạch an toàn → sự kiện INTRUSION
+  5. Chốt mốc điểm danh khi hết cửa sổ → biên bản + bảng vi phạm
+  6. WebSocket đẩy khung hình · SSE đẩy sự kiện
 ```
+
+## Hợp đồng API
+
+`docs/api/openapi.yaml` và `docs/api/events.schema.json` là hợp đồng giao tiếp với
+giao diện. Xem `docs/api/README.md` để biết endpoint nào đã chạy được.
+
+## Kiểm thử
+
+```bash
+python tests/test_ai.py           # vi phạm giờ giấc, xâm nhập, kho sự kiện
+python tests/test_api.py          # sự kiện, kết quả điểm danh, kênh SSE
+python tests/test_auth_api.py     # đăng nhập, đổi mật khẩu, thông tin cá nhân
+python tests/test_zones_stream.py # vùng giám sát, luồng MJPEG
+python tests/test_config_api.py   # camera, thời khoá biểu, đối chiếu hợp đồng
+python tests/test_smoke_routes.py # gọi thử MỌI route, bắt lỗi chỉ lộ lúc chạy
+
+# Giao diện: cần máy chủ đang chạy và gói jsdom
+npm install jsdom && node tests/test_ui.mjs
+```
+
+Lưu ý: test ghi đè `data/cameras.json`, `data/schedules.json` và
+`data/zone_rules.json`. Sao lưu trước nếu đang có cấu hình thật trên máy.
+
+## Tài khoản
+
+Bản POC có hai tài khoản khai cứng trong `app/auth.py`, không cơ sở dữ liệu:
+
+| Tài khoản | Mật khẩu | Vai trò | Xem được |
+|---|---|---|---|
+| `cbqh` | `cbqh@2026` | Cán bộ quản lý | Nghiệp vụ huấn luyện (phân hệ I + II) |
+| `qtht` | `qtht@2026` | Quản trị hệ thống | Thêm phân hệ III: camera, vùng, thời khoá biểu, đăng ký khuôn mặt |
+
+Hai biến môi trường `CBQH_PASSWORD` và `QTHT_PASSWORD` chỉ dùng cho **lần chạy
+đầu tiên**, khi hệ thống dựng `data/users.json`. Sau đó đổi mật khẩu ngay trên
+giao diện: bấm vào avatar ở góc trái dưới cùng → Thông tin cá nhân. Xoá
+`data/users.json` là quay về hai tài khoản mặc định.
+
+**Đây không phải bảo mật thật.** Không có phiên, không có token, và các endpoint
+khác không kiểm quyền — gọi thẳng API vẫn làm được mọi thứ. Vai trò chỉ để giao
+diện hiện đúng menu.
+
+## Dữ liệu chạy thử
+
+```bash
+python scripts/seed_demo.py --reset
+```
+
+Tạo 5 ca huấn luyện đặt giờ **tương đối so với lúc chạy** nên mở giao diện là
+thấy đủ trạng thái (đã kết thúc, đang điểm danh đầu giờ, đang diễn ra, chưa tới
+giờ, ca đêm vắt qua nửa đêm), cả hai loại đào tạo và chiến đấu, kèm một biên bản
+điểm danh mẫu có đủ các dạng vi phạm giờ giấc.
 
 ## Requirements
 

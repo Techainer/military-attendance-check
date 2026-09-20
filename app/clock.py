@@ -27,3 +27,16 @@ def now() -> datetime:
 def stamp() -> str:
     """Chuỗi dấu thời gian in lên khung hình."""
     return now().strftime("%d/%m/%Y %H:%M:%S")
+
+
+def iso(dt=None) -> str:
+    """ISO-8601 kèm offset múi giờ, dạng hợp đồng API quy định.
+
+    ``now()`` trả về dạng naive cho tương thích với phần code cũ, nên
+    ``isoformat()`` trực tiếp sẽ mất phần ``+07:00`` và bên nhận dễ hiểu nhầm
+    là giờ UTC.
+    """
+    dt = now() if dt is None else dt
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=TZ)
+    return dt.isoformat()

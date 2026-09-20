@@ -6,7 +6,6 @@ import asyncio
 import os
 import threading
 import time
-import json
 import numpy as np
 from pathlib import Path
 from collections import deque
@@ -18,11 +17,67 @@ from app.overlay import draw_label
 from app.monitor import AttendanceMonitor
 from app.face_engine import FaceEngine
 from app.attendance import AttendanceManager
+from app.events import CAMERA_ID, EventStore, TYPE_ABSENT, TYPE_INTRUSION, normalize_box
+from app.safety import RULE_ATTENDANCE, RULE_CROSSING, RULE_RESTRICTED, IntrusionDetector, ZoneStore
 
 
-# Global rolling buffer for 10-second clip replay (stores last 60 frames ~ 12 seconds at 5fps)
-global_clip_buffer = deque(maxlen=60)
+# Mỗi camera có kho riêng: khung hình mới nhất và bộ đệm clip phát lại. Trước
+# đây tất cả dùng chung một biến toàn cục nên chỉ chạy được một camera; hai
+# camera cùng chạy thì camera sau ghi đè khung hình của camera trước.
+_camera_state: Dict[str, dict] = {}
+
+# Mỗi đoạn clip giữ ~60 khung base64 (vài MB), nên chỉ giữ lại bấy nhiêu đoạn
+# gần nhất; luồng chạy cả ngày mà không dọn thì bộ nhớ phình theo số sự kiện.
+MAX_STORED_CLIPS = 20
 latest_event_clips: Dict[str, List[str]] = {}
+
+
+def _state(camera_id: str) -> dict:
+    return _camera_state.setdefault(camera_id, {
+        "overlay": None,
+        "clean": None,
+        # Tăng mỗi khung hình mới; luồng MJPEG dựa vào đây để biết đã có hình
+        # mới chưa thay vì gửi lại đúng một khung nhiều lần.
+        "revision": 0,
+        "clips": deque(maxlen=60),
+    })
+
+
+def publish_frame(camera_id: str, overlay_jpeg: bytes, clean_jpeg: Optional[bytes]) -> None:
+    st = _state(camera_id)
+    st["overlay"] = overlay_jpeg
+    st["clean"] = clean_jpeg
+    st["revision"] += 1
+
+
+def clear_frames(camera_id: str) -> None:
+    """Luồng dừng thì bỏ khung hình cũ, tránh phát lại hình đã chết."""
+    st = _state(camera_id)
+    st["overlay"] = None
+    st["clean"] = None
+
+
+def get_frame(camera_id: str, overlay: bool) -> Optional[bytes]:
+    """Khung hình mới nhất của camera. Không có bản gốc thì trả bản có lớp phủ."""
+    st = _state(camera_id)
+    return (st["overlay"] if overlay else st["clean"]) or st["overlay"]
+
+
+def get_revision(camera_id: str) -> int:
+    return _state(camera_id)["revision"]
+
+
+def push_clip_frame(camera_id: str, frame_b64: str) -> None:
+    _state(camera_id)["clips"].append(frame_b64)
+
+
+def keep_clip(camera_id: str, clip_id: str) -> str:
+    """Chốt lại đoạn đệm hiện tại của camera và dọn bớt các đoạn cũ."""
+    latest_event_clips[clip_id] = list(_state(camera_id)["clips"])
+    for stale in list(latest_event_clips)[:-MAX_STORED_CLIPS]:
+        del latest_event_clips[stale]
+    return clip_id
+
 
 # Bao lâu không còn thấy một track thì bỏ ràng buộc danh tính của nó
 IDENTITY_TTL_SECONDS = 20.0
@@ -107,11 +162,24 @@ class VideoProcessor:
         self,
         fps: int = 5,
         face_engine: Optional[FaceEngine] = None,
-        attendance: Optional[AttendanceManager] = None
+        attendance: Optional[AttendanceManager] = None,
+        events: Optional[EventStore] = None,
+        data_dir: str = "data",
+        camera_id: str = CAMERA_ID,
+        camera_name: str = "",
     ):
+        self.camera_id = camera_id
+        self.camera_name = camera_name or camera_id
         self.detector = PersonDetector(model_name=os.environ.get("YOLO_MODEL", "yolo11s.pt"))
+        # Model nhận diện khuôn mặt dùng chung được: nó không giữ trạng thái của
+        # riêng luồng nào. Bộ phát hiện người thì mỗi camera một bản vì có tracker.
         self.face_engine = face_engine or FaceEngine()
         self.attendance = attendance
+        self.events = events
+        # Chỉ lấy vùng của chính camera này; trước đây lấy hết nên camera này
+        # réo còi theo vùng cấm vẽ cho camera khác.
+        self.zones = ZoneStore(data_dir, camera_id=camera_id)
+        self.intrusion = IntrusionDetector(self.zones)
         self.fps = fps
         self._stop_requested = False
         # track_id -> {"scores": {person_id: điểm cộng dồn}, "person": dict, "last_seen": ts}
@@ -158,6 +226,20 @@ class VideoProcessor:
             matched_boxes.append(rf["bbox"])
 
         return matched_boxes
+
+    async def _archive_clip(self, event: dict, clip_id: Optional[str]) -> None:
+        """Ghi đoạn phát lại của sự kiện ra file mp4.
+
+        Bộ đệm khung hình nằm trong RAM nên khởi động lại là mất. Dựng mp4 tốn
+        CPU (giải mã vài chục ảnh JPEG) nên đẩy sang luồng khác, không chặn vòng
+        xử lý khung hình.
+        """
+        if self.events is None or not clip_id:
+            return
+        frames = latest_event_clips.get(clip_id)
+        if not frames:
+            return
+        await asyncio.to_thread(self.events.save_clip, event["id"], list(frames))
 
     def _rescan_regions(self, person_boxes, in_zone_indices, claimed, frame_shape) -> list:
         """Chọn vùng ảnh quanh những người trong vùng chưa định danh để quét lại."""
@@ -230,7 +312,6 @@ class VideoProcessor:
         """
         Process video file or RTSP stream and stream results via callback.
         """
-        global global_clip_buffer, latest_event_clips
         is_rtsp = "://" in video_path
         reader = None
         cap = None
@@ -317,32 +398,33 @@ class VideoProcessor:
                 h_img, w_img = frame.shape[:2]
                 display_frame = frame.copy()
 
-                # Load Dynamic Zone Rules from data/zone_rules.json
-                zone_file = Path("data/zone_rules.json")
+                # Vẽ các vùng đã cấu hình. Vùng đếm quân số màu xanh, vùng cấm màu
+                # đỏ, vạch an toàn màu cam.
                 np_pts = None
-                if zone_file.exists():
-                    try:
-                        with open(zone_file, "r", encoding="utf-8") as f:
-                            z_data = json.load(f)
-                            # Draw polygon
-                            poly_pts = z_data.get("polygon_points", [])
-                            if len(poly_pts) >= 3:
-                                raw_pts = [[int(pt["x"] * w_img), int(pt["y"] * h_img)] for pt in poly_pts]
-                                np_pts = np.array(raw_pts, np.int32)
-                                # Semi-transparent green polygon fill + solid boundary
-                                overlay = display_frame.copy()
-                                cv2.fillPoly(overlay, [np_pts], (20, 160, 60))
-                                cv2.addWeighted(overlay, 0.15, display_frame, 0.85, 0, display_frame)
-                                cv2.polylines(display_frame, [np_pts], isClosed=True, color=(30, 220, 90), thickness=2)
+                for zone in self.zones.zones():
+                    points = zone.get("points", [])
+                    rule = zone.get("rule")
+                    if rule == RULE_CROSSING and len(points) >= 2:
+                        p1 = (int(points[0]["x"] * w_img), int(points[0]["y"] * h_img))
+                        p2 = (int(points[1]["x"] * w_img), int(points[1]["y"] * h_img))
+                        cv2.line(display_frame, p1, p2, (0, 140, 255), 2, cv2.LINE_AA)
+                        continue
+                    if len(points) < 3:
+                        continue
 
-                            # Draw tripwire
-                            tw_pts = z_data.get("tripwire_points", [])
-                            if len(tw_pts) >= 2:
-                                p1 = (int(tw_pts[0]["x"] * w_img), int(tw_pts[0]["y"] * h_img))
-                                p2 = (int(tw_pts[1]["x"] * w_img), int(tw_pts[1]["y"] * h_img))
-                                cv2.line(display_frame, p1, p2, (0, 140, 255), 2, cv2.LINE_AA)
-                    except Exception:
-                        pass
+                    pts = np.array([[int(p["x"] * w_img), int(p["y"] * h_img)] for p in points], np.int32)
+                    fill, border = ((20, 160, 60), (30, 220, 90)) if rule == RULE_ATTENDANCE \
+                        else ((0, 0, 200), (0, 60, 255))
+                    overlay = display_frame.copy()
+                    cv2.fillPoly(overlay, [pts], fill)
+                    cv2.addWeighted(overlay, 0.15, display_frame, 0.85, 0, display_frame)
+                    cv2.polylines(display_frame, [pts], isClosed=True, color=border, thickness=2)
+                    if rule == RULE_ATTENDANCE:
+                        np_pts = pts
+                    elif rule == RULE_RESTRICTED:
+                        draw_label(display_frame, f"VÙNG CẤM · {zone.get('name', '')}",
+                                   (int(pts[:, 0].mean()), int(pts[:, 1].min())), font_size=14,
+                                   bg_color=(0, 40, 160), anchor="bottom")
 
                 if np_pts is None:
                     # Default Fallback Zone
@@ -372,6 +454,11 @@ class VideoProcessor:
 
                 # Sĩ số trong vùng = chỉ những người NẰM TRONG vùng đã cấu hình
                 person_count = len(in_zone_indices)
+
+                # 3b. Giám sát an toàn: ai vào vùng cấm hoặc vượt vạch an toàn
+                now = clock.now()
+                intrusions = self.intrusion.check(person_boxes, track_ids, w_img, h_img, now)
+                intrusion_indices = {idx for v in intrusions for idx in v["indices"]}
 
                 # 4. Gắn khuôn mặt đã quét được vào người trong vùng
                 now_mono = time.monotonic()
@@ -428,7 +515,12 @@ class VideoProcessor:
                     is_in_zone = p_idx in in_zone_indices
                     is_occluded = occluded_flags[p_idx]
 
-                    if is_in_zone:
+                    if p_idx in intrusion_indices:
+                        # VI PHẠM AN TOÀN: khoanh đỏ đậm, ưu tiên hơn mọi trạng thái khác
+                        cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
+                        draw_label(display_frame, "VI PHẠM AN TOÀN", (x1, y1), font_size=15,
+                                      bg_color=(0, 0, 200), anchor="bottom")
+                    elif is_in_zone:
                         if p_idx in person_to_face_match:
                             # RECOGNIZED SOLDIER IN ZONE: Bright glowing green box & identification banner
                             p_info = person_to_face_match[p_idx]
@@ -460,14 +552,62 @@ class VideoProcessor:
                     fx1, fy1, fx2, fy2 = fbox
                     cv2.rectangle(display_frame, (fx1, fy1), (fx2, fy2), (0, 255, 120), 2)
 
+                # Vi phạm an toàn được chốt sau khi đã vẽ xong khung đỏ, để ảnh
+                # bằng chứng nhìn thấy đúng đối tượng bị phát hiện.
+                for violation in intrusions:
+                    if self.events is None:
+                        break
+                    zone = violation["zone"]
+                    # Người vi phạm mà đã nhận diện được thì ghi tên vào biên bản
+                    identified = []
+                    boxes = []
+                    for idx in violation["indices"]:
+                        person = person_to_face_match.get(idx)
+                        if person is None:
+                            boxes.append(normalize_box(person_boxes[idx], w_img, h_img,
+                                                       confidences[idx], "Không xác định"))
+                            continue
+                        name = f"{person.get('rank', '')} {person.get('name', '')}".strip()
+                        identified.append({"person_id": person.get("id"), "person_name": name})
+                        boxes.append(normalize_box(person_boxes[idx], w_img, h_img,
+                                                   confidences[idx], name))
+                    # Giữ lại đoạn đệm dẫn tới lúc vi phạm để chỉ huy xem lại
+                    clip_id = keep_clip(self.camera_id,
+                                        f"clip_{int(time.time())}_{zone.get('id', 'zone')}")
+
+                    event = self.events.emit(
+                        TYPE_INTRUSION,
+                        f"Phát hiện {len(boxes):02d} đối tượng "
+                        f"{'vượt' if zone.get('rule') == RULE_CROSSING else 'đi vào'} "
+                        f"{zone.get('name', 'vùng cấm')}.",
+                        severity="critical",
+                        frame=display_frame,
+                        boxes=boxes,
+                        camera_id=self.camera_id,
+                        camera_name=self.camera_name,
+                        zone_id=zone.get("id"),
+                        clip_id=clip_id,
+                        detail={
+                            "zone_name": zone.get("name", ""),
+                            "zone_rule": zone.get("rule"),
+                            "object_count": len(boxes),
+                            "object_class": "person",
+                            "identified": identified,
+                            "dwell_seconds": violation["dwell_seconds"],
+                        },
+                    )
+                    # Đẩy cảnh báo đi trước rồi mới ghi file: cảnh báo đỏ phải
+                    # hiện ngay, đừng đợi dựng xong mp4
+                    await on_update({"type": "event", "event": event})
+                    await self._archive_clip(event, clip_id)
+
                 # Phiên điểm danh: mở theo thời khoá biểu (đầu giờ / cuối giờ)
-                now = clock.now()
                 if self.attendance is not None and self.attendance.session is None:
                     self.attendance.maybe_open_scheduled(now)
 
                 # 5. Top & Bottom HUD Overlays
                 cv2.circle(display_frame, (25, 28), 6, (0, 0, 240), -1)
-                draw_label(display_frame, "CAM-01 · SÂN TẬP TRUNG", (38, 18), font_size=16,
+                draw_label(display_frame, self.camera_name.upper(), (38, 18), font_size=16,
                               text_color=(230, 230, 230), bg_color=(18, 22, 28))
 
                 # Dấu thời gian của máy chủ (giờ Việt Nam) để đối chiếu với đồng hồ camera
@@ -504,13 +644,15 @@ class VideoProcessor:
                 # 6. Ghi nhận vào phiên điểm danh và chốt biên bản khi hết cửa sổ.
                 #    Khung hình dùng làm bằng chứng là khung đã vẽ đầy đủ HUD.
                 if self.attendance is not None:
-                    if self.attendance.session is not None:
-                        quality = live_matches * 100 + len(present_personnel)
-                        self.attendance.record(
-                            [p["id"] for p in present_personnel],
-                            frame=display_frame,
-                            quality=quality
-                        )
+                    # Ghi dấu vết hiện diện trên MỌI khung hình, không chỉ trong hai
+                    # cửa sổ điểm danh — có vậy mới suy được ai đi chậm, ai về sớm.
+                    quality = live_matches * 100 + len(present_personnel)
+                    self.attendance.observe(
+                        [p["id"] for p in present_personnel],
+                        now,
+                        frame=display_frame,
+                        quality=quality
+                    )
                     closed_log = self.attendance.close_if_due(now)
                     if closed_log:
                         await on_update({'type': 'attendance_complete', 'log': closed_log})
@@ -519,12 +661,17 @@ class VideoProcessor:
                 _, buffer = cv2.imencode('.jpg', display_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
                 frame_b64 = base64.b64encode(buffer).decode('utf-8')
 
+                # Khung hình cho luồng MJPEG: bản có lớp phủ và bản gốc
+                _, clean_buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                publish_frame(self.camera_id, buffer.tobytes(), clean_buffer.tobytes())
+
                 # Store into global 10-second rolling clip buffer
-                global_clip_buffer.append(frame_b64)
+                push_clip_frame(self.camera_id, frame_b64)
 
                 # Send frame update over WebSocket
                 await on_update({
                     'type': 'frame_update',
+                    'camera_id': self.camera_id,
                     'frame': frame_b64,
                     'count': person_count,
                     'baseline': baseline_val,
@@ -541,14 +688,35 @@ class VideoProcessor:
                 # Check for baseline drop alerts
                 alert_result = monitor.update_count(person_count, frame)
                 if alert_result['alert_triggered']:
-                    event_clip_id = f"clip_{int(time.time())}"
-                    latest_event_clips[event_clip_id] = list(global_clip_buffer)
+                    event_clip_id = keep_clip(self.camera_id, f"clip_{int(time.time())}")
+                    alert_data = alert_result['alert_data']
+
+                    if self.events is not None:
+                        baseline = alert_data.get('baseline') or 0
+                        event = self.events.emit(
+                            TYPE_ABSENT,
+                            f"Thiếu {max(0, baseline - person_count):02d} quân nhân so với "
+                            f"sĩ số chuẩn ({person_count}/{baseline}).",
+                            severity="warning",
+                            frame=display_frame,
+                            camera_id=self.camera_id,
+                            camera_name=self.camera_name,
+                            clip_id=event_clip_id,
+                            detail={
+                                "current_count": person_count,
+                                "required_count": baseline,
+                                "missing_count": max(0, baseline - person_count),
+                                "duration_seconds": monitor.ALERT_THRESHOLD_SECONDS,
+                            },
+                        )
+                        await on_update({"type": "event", "event": event})
+                        await self._archive_clip(event, event_clip_id)
 
                     await on_update({
                         'type': 'alert',
                         'category': 'ABSENT',
                         'clip_id': event_clip_id,
-                        **alert_result['alert_data']
+                        **alert_data
                     })
                 elif alert_result.get('recovered'):
                     await on_update({
@@ -571,6 +739,8 @@ class VideoProcessor:
                 reader.stop()
             elif cap:
                 cap.release()
+
+            clear_frames(self.camera_id)
 
             if self.attendance is not None and self.attendance.session is not None:
                 if self._stop_requested:

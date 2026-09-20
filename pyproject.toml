@@ -13,5 +13,6 @@ dependencies = [
     "pillow>=10.0.0",
     "numpy==1.26.4",
     "insightface>=0.7.3",
-    "onnxruntime>=1.17.0",
+    # 1.24 trở lên bỏ wheel cho cp310, mà .python-version đang ghim 3.10
+    "onnxruntime>=1.17.0,<1.24",
 ]
