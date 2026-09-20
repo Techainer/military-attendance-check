@@ -1767,15 +1767,22 @@ const attendanceLogsTbody = document.getElementById('attendance-logs-tbody');
 
 async function loadAttendanceLogs() {
     if (!attendanceLogsTbody) return;
-    const unitFilter = document.getElementById('log-filter-unit');
-    const unit = unitFilter ? unitFilter.value : 'all';
+    const val = (id) => ((document.getElementById(id) || {}).value || '').trim();
+
+    const params = new URLSearchParams();
+    params.set('unit', val('log-filter-unit') || 'all');
+    if (val('log-filter-shift')) params.set('shift', val('log-filter-shift'));
+    if (val('log-date-from')) params.set('date_from', val('log-date-from'));
+    if (val('log-date-to')) params.set('date_to', val('log-date-to'));
+    if (val('log-search')) params.set('q', val('log-search'));
 
     try {
-        const res = await fetch(`/api/attendance-logs?unit=${encodeURIComponent(unit)}`);
+        const res = await fetch(`/api/attendance-logs?${params.toString()}`);
         const result = await res.json();
         if (result.status === 'success' && result.data) {
             attendanceLogsData = result.data;
-            renderAttendanceLogsTable(attendanceLogsData);
+            // Qua bộ lọc trạng thái để lần nạp lại không xoá lựa chọn đang có
+            filterAttendanceLogsByStatus();
             updateLogMetrics(attendanceLogsData);
         }
     } catch (e) {
@@ -1837,7 +1844,7 @@ function renderAttendanceLogsTable(logs) {
     attendanceLogsTbody.innerHTML = '';
 
     if (logs.length === 0) {
-        attendanceLogsTbody.innerHTML = `<tr><td colspan="11" style="text-align: center; color: #94a3b8; padding: 24px;">Không có bản ghi điểm danh nào phù hợp</td></tr>`;
+        attendanceLogsTbody.innerHTML = `<tr><td colspan="12" class="empty-row">Không có bản ghi điểm danh nào phù hợp</td></tr>`;
         return;
     }
 
@@ -1847,23 +1854,19 @@ function renderAttendanceLogsTable(logs) {
         const startCheck = getCheck(log, 'start');
         const endCheck = getCheck(log, 'end');
 
-        // Bấm vào dòng để xem chi tiết; trừ khi bấm đúng vào ảnh bằng chứng
-        row.className = 'row-clickable';
-        row.title = 'Bấm để xem chi tiết ca điểm danh';
-        row.onclick = (ev) => { if (!ev.target.closest('img')) openLogModal(log.id); };
-
         row.innerHTML = `
-            <td class="font-mono"><strong>${log.date}</strong> ${log.time || ''}</td>
-            <td>${log.shift}<div class="cell-subtext">${log.schedule_name || ''}</div></td>
-            <td><strong>${log.unit}</strong></td>
+            <td class="font-mono"><strong>${esc(log.date)}</strong> ${esc(log.time || '')}</td>
+            <td>${esc(log.shift)}</td>
+            <td><strong>${esc(log.lesson_name || log.schedule_name || '—')}</strong></td>
+            <td><strong>${esc(log.unit)}</strong></td>
             <td>${log.required}</td>
             <td>${renderCheckCell(startCheck, log.required)}</td>
             <td>${renderEvidenceCell(startCheck, log, 'Đầu giờ')}</td>
             <td>${renderCheckCell(endCheck, log.required)}</td>
             <td>${renderEvidenceCell(endCheck, log, 'Cuối giờ')}</td>
             <td style="max-width: 260px;">${renderAbsentList(log)}</td>
-            <td><span class="status-tag ${statusClass}">${log.status}</span></td>
-            <td>${log.commander || '—'}</td>
+            <td><span class="status-tag ${statusClass}">${esc(log.status)}</span></td>
+            <td><button class="btn-event-clip" onclick="openLogModal('${log.id}')">Xem chi tiết</button></td>
         `;
         attendanceLogsTbody.appendChild(row);
     });

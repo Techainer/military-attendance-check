@@ -810,10 +810,10 @@ if (people.data && people.data.length) {
 
 window.switchNavTab('logs');
 await sleep(1000);
-const logRows = doc.querySelectorAll('#attendance-logs-tbody tr.row-clickable');
-check('dòng nhật ký bấm được để xem chi tiết', logRows.length >= 0);
-if (logRows.length) {
-    logRows[0].onclick({ target: logRows[0] });
+const logDetailBtns = doc.querySelectorAll('#attendance-logs-tbody tr td:last-child button');
+check('mỗi dòng nhật ký có nút xem chi tiết riêng', logDetailBtns.length >= 0);
+if (logDetailBtns.length) {
+    logDetailBtns[0].click();
     await sleep(300);
     check('mở được dialog chi tiết ca',
         doc.getElementById('log-modal').style.display === 'flex');
@@ -824,6 +824,30 @@ if (logRows.length) {
     window.closeLogModal();
     check('đóng được dialog chi tiết ca',
         doc.getElementById('log-modal').style.display === 'none');
+}
+
+console.log('\n[7d2] Bộ lọc và cột của bảng nhật ký điểm danh');
+
+window.switchNavTab('logs');
+await sleep(1000);
+
+check('có bộ lọc theo ca', !!doc.getElementById('log-filter-shift'));
+check('có ô lọc từ ngày', !!doc.getElementById('log-date-from'));
+check('có ô lọc đến ngày', !!doc.getElementById('log-date-to'));
+check('có thanh tìm kiếm theo tên bài', !!doc.getElementById('log-search'));
+
+const logTh = [...doc.querySelectorAll('#view-logs thead th')].map(e => e.textContent.trim());
+check('bảng nhật ký có cột tên bài học', logTh.includes('TÊN BÀI HỌC'), logTh.join(' | '));
+check('cột cuối cùng là xem chi tiết',
+    logTh[logTh.length - 1] === 'XEM CHI TIẾT', logTh.join(' | '));
+
+const firstLogRow = doc.querySelector('#attendance-logs-tbody tr');
+if (firstLogRow && !firstLogRow.querySelector('.empty-row')) {
+    check('ô ca điểm danh không còn kèm tên bài bên dưới',
+        !firstLogRow.querySelector('td:nth-child(2) .cell-subtext'),
+        firstLogRow.querySelector('td:nth-child(2)').innerHTML.slice(0, 120));
+    check('dòng nhật ký có nút xem chi tiết',
+        !!firstLogRow.querySelector('td:last-child button'));
 }
 
 console.log('\n[7e] Lịch & Tiến độ hiển thị đủ như màn cấu hình');

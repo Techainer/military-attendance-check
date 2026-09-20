@@ -888,6 +888,20 @@
                                 <option value="Đại đội 2">Đại đội 2</option>
                                 <option value="Tiểu đoàn 3">Tiểu đoàn 3</option>
                             </select>
+                            <select id="log-filter-shift" class="filter-select" onchange="loadAttendanceLogs()">
+                                <option value="">Tất cả ca</option>
+                                <option value="Ca sáng">Ca sáng</option>
+                                <option value="Ca chiều">Ca chiều</option>
+                                <option value="Ca đêm">Ca đêm</option>
+                            </select>
+                            <label class="filter-inline">Từ ngày
+                                <input type="date" id="log-date-from" class="filter-select" onchange="loadAttendanceLogs()">
+                            </label>
+                            <label class="filter-inline">Đến ngày
+                                <input type="date" id="log-date-to" class="filter-select" onchange="loadAttendanceLogs()">
+                            </label>
+                            <input type="text" id="log-search" class="filter-select"
+                                   placeholder="Tìm theo tên bài học" oninput="loadAttendanceLogs()">
                             <select id="log-filter-status" class="filter-select" onchange="filterAttendanceLogsByStatus()">
                                 <option value="all">Tất cả trạng thái</option>
                                 <option value="success">Đủ quân số</option>
@@ -901,6 +915,7 @@
                                     <tr>
                                         <th>THỜI GIAN</th>
                                         <th>CA ĐIỂM DANH</th>
+                                        <th>TÊN BÀI HỌC</th>
                                         <th>ĐƠN VỊ</th>
                                         <th>SĨ SỐ YÊU CẦU</th>
                                         <th>ĐẦU GIỜ</th>
@@ -909,7 +924,7 @@
                                         <th>BẰNG CHỨNG CUỐI GIỜ</th>
                                         <th>QUÂN NHÂN VẮNG</th>
                                         <th>TRẠNG THÁI</th>
-                                        <th>CHỈ HUY DUYỆT</th>
+                                        <th>XEM CHI TIẾT</th>
                                     </tr>
                                 </thead>
                                 <tbody id="attendance-logs-tbody">
