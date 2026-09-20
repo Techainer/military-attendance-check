@@ -568,6 +568,7 @@ async function loadCameraWall() {
                     <button class="btn-event-clip"></button>
                 </div>`;
             wall.appendChild(tile);
+            makeZoomable(tile.querySelector('.camera-tile-video'));
         }
 
         const running = cam.status === 'online';
@@ -665,6 +666,11 @@ function handleAiEvent(event) {
 
 function renderEventCard(container, event, prepend) {
     if (!container) return;
+
+    // Dòng sự kiện trực tiếp chỉ để việc còn phải làm. Xử lý xong thì biến mất
+    // khỏi đây; muốn tra lại thì có nhật ký vi phạm ở màn chi tiết camera.
+    if (container.id === 'events-list-container' && event.acked) return;
+
     const hint = container.querySelector('.empty-hint');
     if (hint) hint.remove();
 
@@ -694,6 +700,7 @@ function renderEventCard(container, event, prepend) {
     if (prepend) container.prepend(card); else container.appendChild(card);
     while (container.children.length > 60) container.lastElementChild.remove();
 }
+window.renderEventCard = renderEventCard;
 
 async function ackEvent(eventId) {
     const who = document.querySelector('.user-name');
@@ -706,9 +713,21 @@ async function ackEvent(eventId) {
         if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
         const updated = await res.json();
 
-        document.querySelectorAll(`#evt-${eventId} .event-card-actions`).forEach(el => {
-            el.innerHTML = `<button class="btn-event-processed" disabled>✓ ${updated.acked_by}</button>`;
+        // Ở dòng sự kiện trực tiếp thì gỡ hẳn; ở danh sách khác thì đổi nút
+        document.querySelectorAll(`#evt-${eventId}`).forEach(el => {
+            if (el.closest('#events-list-container')) {
+                el.remove();
+            } else {
+                const actions = el.querySelector('.event-card-actions');
+                if (actions) actions.innerHTML =
+                    `<button class="btn-event-processed" disabled>✓ ${updated.acked_by}</button>`;
+            }
         });
+
+        const feed = document.getElementById('events-list-container');
+        if (feed && !feed.querySelector('.event-card')) {
+            feed.innerHTML = '<p class="empty-hint">Không còn sự kiện nào chờ xử lý.</p>';
+        }
         pendingEventsCount = Math.max(0, pendingEventsCount - 1);
         if (pendingEventsBadge) pendingEventsBadge.textContent = `${pendingEventsCount} chờ xử lý`;
         if (currentTabName === 'safety') loadSafetyDashboard();
@@ -3180,7 +3199,7 @@ async function startAppSession() {
 
     // Nạp sẵn các sự kiện gần đây để dòng sự kiện không trống khi mới vào
     try {
-        const recent = await getJson('/api/v1/events?page_size=20');
+        const recent = await getJson('/api/v1/events?page_size=20&acked=false');
         recent.items.slice().reverse().forEach(ev => {
             lastEventId = lastEventId || ev.id;
             renderEventCard(eventsListContainer, ev, true);

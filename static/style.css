@@ -348,7 +348,10 @@ body {
     display: grid;
     grid-template-columns: 1fr 380px;
     gap: 20px;
-    align-items: start;
+    align-items: stretch;
+    /* Trừ chiều cao thanh trên cùng và khoảng đệm của khung nội dung, để cột
+       sự kiện cao bằng đúng phần màn hình còn lại chứ không cụt ở giữa trang */
+    min-height: calc(100vh - 150px);
 }
 
 /* Surveillance Column */
@@ -610,13 +613,15 @@ input:checked + .slider:before {
 .events-feed-column {
     display: flex;
     flex-direction: column;
+    min-height: 0;
 }
 
 .events-feed-card {
     padding: 16px;
     display: flex;
     flex-direction: column;
-    min-height: 540px;
+    flex: 1;
+    min-height: 0;
 }
 
 .events-feed-header {
@@ -650,7 +655,8 @@ input:checked + .slider:before {
     flex-direction: column;
     gap: 12px;
     overflow-y: auto;
-    max-height: 520px;
+    flex: 1;
+    min-height: 0;
 }
 
 .event-card {

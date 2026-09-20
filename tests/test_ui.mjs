@@ -937,6 +937,39 @@ if (sdDetailBtn) {
     check('có khu ảnh điểm danh do AI chụp', !!doc.getElementById('sd-evidence'));
 }
 
+console.log('\n[7e2] Màn giám sát trực tiếp');
+
+window.switchNavTab('monitoring');
+await sleep(1400);
+
+const camTile = doc.querySelector('.camera-tile .camera-tile-video');
+check('ô camera có khung video', !!camTile);
+check('ô camera gắn được zoom và toàn màn hình',
+    !!camTile && camTile.dataset.zoomable === '1', camTile && camTile.dataset.zoomable);
+
+const ackedEvent = {
+    id: 'evt_da_xu_ly', type: 'INTRUSION', severity: 'critical',
+    message: 'Sự kiện đã xử lý', occurred_at: new Date().toISOString(),
+    acked: true, acked_by: 'Trực ban'
+};
+const feedEl = doc.getElementById('events-list-container');
+const beforeCount = feedEl.querySelectorAll('.event-card').length;
+window.renderEventCard(feedEl, ackedEvent, true);
+check('sự kiện đã xử lý không hiện trong dòng sự kiện trực tiếp',
+    feedEl.querySelectorAll('.event-card').length === beforeCount,
+    String(feedEl.querySelectorAll('.event-card').length));
+
+const pendingEvent = { ...ackedEvent, id: 'evt_cho_xu_ly', acked: false, snapshot_url: '/static/x.jpg' };
+window.renderEventCard(feedEl, pendingEvent, true);
+const pendingCard = doc.getElementById('evt-evt_cho_xu_ly');
+check('sự kiện chờ xử lý vẫn hiện', !!pendingCard);
+check('ảnh trong thẻ sự kiện bấm được để phóng to',
+    !!pendingCard && !!pendingCard.querySelector('img')
+    && pendingCard.querySelector('img').getAttribute('onclick').includes('openEvidence'),
+    pendingCard && pendingCard.querySelector('img')
+        && pendingCard.querySelector('img').getAttribute('onclick'));
+if (pendingCard) pendingCard.remove();
+
 console.log('\n[7f] Hộp xem ảnh phóng to dùng chung');
 
 check('có hàm mở ảnh bằng chứng', typeof window.openEvidence === 'function');
