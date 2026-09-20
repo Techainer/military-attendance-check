@@ -705,7 +705,7 @@ check('vùng cấm hiện trong danh sách với nhãn riêng',
 check('vùng đếm quân số và vùng cấm là hai mục tách biệt',
     doc.querySelectorAll('#zone-list .zone-row').length >= 1);
 
-console.log('\n[7c] Cảnh báo đỏ kèm ảnh khi có người vào vùng cấm');
+console.log('\n[7c] Cảnh báo đỏ toàn hệ thống khi có người vào vùng cấm');
 const intrusion = {
     id: 'evt_ui_test', type: 'INTRUSION', severity: 'critical',
     occurred_at: new Date().toISOString(),
@@ -721,27 +721,39 @@ await sleep(400);
 window.handleAiEvent(intrusion);
 await sleep(400);
 
-const ov = doc.getElementById('intrusion-overlay');
-check('cảnh báo hiện lên dù đang ở màn khác', ov.style.display === 'flex', ov.style.display);
-check('cảnh báo nhấp nháy đỏ', ov.classList.contains('blinking'));
-check('có tên vùng cấm trong tiêu đề',
-    doc.getElementById('intrusion-title').textContent.includes('KHỐI CHẮN'),
-    doc.getElementById('intrusion-title').textContent);
-check('kèm ảnh bằng chứng',
-    (doc.getElementById('intrusion-photo').getAttribute('src') || '').includes('/data/events/'),
-    doc.getElementById('intrusion-photo').getAttribute('src'));
-check('có nút tải ảnh bằng chứng',
-    doc.getElementById('intrusion-download').hasAttribute('download'));
-check('hiện tên quân nhân nhận diện được',
-    doc.getElementById('intrusion-meta').textContent.includes('Nguyễn Văn A'),
-    doc.getElementById('intrusion-meta').textContent.slice(0, 120));
+const gAlert = doc.getElementById('global-alert');
+check('có dải cảnh báo toàn hệ thống', !!gAlert);
+check('cảnh báo hiện lên dù đang ở màn khác',
+    !!gAlert && gAlert.style.display === 'flex', gAlert && gAlert.style.display);
+check('cảnh báo nhấp nháy đỏ', !!gAlert && gAlert.classList.contains('blinking'));
+check('dải đỏ ghi rõ lỗi kèm tên vùng cấm',
+    doc.getElementById('global-alert-text').textContent.includes('Khối chắn tuyến bắn'),
+    doc.getElementById('global-alert-text').textContent);
+check('dải cảnh báo nằm giữa đỉnh màn hình, không che cả trang',
+    doc.getElementById('intrusion-overlay') === null);
 
 window.toggleSafetySiren();
-check('tắt được cảnh báo âm thanh thì thôi nhấp nháy', !ov.classList.contains('blinking'));
+check('tắt được cảnh báo âm thanh thì thôi nhấp nháy', !gAlert.classList.contains('blinking'));
 window.toggleSafetySiren();
 
-window.dismissIntrusion();
-check('đóng được cảnh báo', ov.style.display === 'none');
+gAlert.querySelector('.global-alert-body').click();
+await sleep(1000);
+check('bấm vào thông báo thì sang trang An toàn bắn đạn thật',
+    doc.querySelector('.page-view.active').id === 'view-safety',
+    doc.querySelector('.page-view.active').id);
+
+window.hideGlobalAlert();
+check('đóng được dải cảnh báo', gAlert.style.display === 'none');
+
+console.log('\n[7c2] Bộ lọc màn An toàn');
+window.switchNavTab('safety');
+await sleep(1000);
+check('có thanh tìm kiếm camera / bài học', !!doc.getElementById('sf-search'));
+check('có bộ lọc theo trạng thái', !!doc.getElementById('sf-filter-state'));
+
+const sfTh = [...doc.querySelectorAll('#view-safety thead th')].map(e => e.textContent.trim());
+check('bảng camera có cột tên bài học', sfTh.includes('TÊN BÀI HỌC'), sfTh.join(' | '));
+check('bảng camera có cột loại', sfTh.includes('LOẠI'), sfTh.join(' | '));
 
 if (createdZone) await fetch(BASE + `/api/v1/zones/${createdZone.id}`, { method: 'DELETE' });
 

@@ -2641,16 +2641,25 @@ window.loadSafetyDashboard = loadSafetyDashboard;
 // Trường bắn có thể có nhiều camera nên màn này phải thấy hết. Dựng luồng cho
 // tất cả cùng lúc thì lag, nên ở đây chỉ là bảng danh sách; ấn vào một dòng mới
 // mở luồng của đúng camera đó.
+let safetyCameras = [];
+
 function renderSafetyCameraTable(cameras) {
     const tbody = document.getElementById('sf-camera-tbody');
     if (!tbody) return;
+    if (cameras) safetyCameras = cameras;
 
-    const rows = currentTrainingType
-        ? cameras.filter(c => c.training_type === currentTrainingType)
-        : cameras;
+    const q = ((document.getElementById('sf-search') || {}).value || '').toLowerCase();
+    const stateFilter = (document.getElementById('sf-filter-state') || {}).value || '';
+
+    let rows = currentTrainingType
+        ? safetyCameras.filter(c => c.training_type === currentTrainingType)
+        : safetyCameras.slice();
+    if (stateFilter) rows = rows.filter(c => c.safety_state === stateFilter);
+    if (q) rows = rows.filter(c =>
+        `${c.name || ''} ${c.area_name || ''} ${c.lesson_name || ''}`.toLowerCase().includes(q));
 
     if (!rows.length) {
-        tbody.innerHTML = '<tr><td colspan="6" class="empty-row">Chưa có camera nào giám sát trường bắn</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" class="empty-row">Không có camera nào khớp bộ lọc</td></tr>';
         return;
     }
 
@@ -2663,12 +2672,13 @@ function renderSafetyCameraTable(cameras) {
             <td>${esc(cam.lesson_name || '—')}</td>
             <td>${TRAINING_TAG[cam.training_type] || '—'}</td>
             <td>${cam.safety_state === 'danger'
-                    ? `<span class="status-tag status-danger">Báo động${cam.alarm_count > 1 ? ` (${cam.alarm_count})` : ''}</span>`
+                    ? `<span class="status-tag status-danger">Cảnh báo${cam.alarm_count > 1 ? ` (${cam.alarm_count})` : ''}</span>`
                     : '<span class="status-tag status-ok">Bình thường</span>'}</td>
             <td><button class="btn-event-clip" onclick="openSafetyDetail('${cam.id}')">Xem chi tiết</button></td>`;
         tbody.appendChild(tr);
     });
 }
+window.renderSafetyCameraTable = renderSafetyCameraTable;
 
 // ---------- màn chi tiết một camera ----------
 
@@ -2801,65 +2811,39 @@ function onIntrusionEvent(event) {
 
 let pendingIntrusion = null;
 
-function showIntrusionAlert(event) {
-    pendingIntrusion = event;
-    const overlay = document.getElementById('intrusion-overlay');
-    if (!overlay) return;
-
-    const detail = event.detail || {};
-    document.getElementById('intrusion-title').textContent = detail.zone_name
-        ? `PHÁT HIỆN ĐỐI TƯỢNG TRONG ${String(detail.zone_name).toUpperCase()}`
-        : 'PHÁT HIỆN ĐỐI TƯỢNG TRONG VÙNG CẤM';
-    document.getElementById('intrusion-desc').textContent = event.message;
-
-    const photo = document.getElementById('intrusion-photo');
-    const link = document.getElementById('intrusion-download');
-    if (event.snapshot_url) {
-        photo.src = event.snapshot_url;
-        photo.style.display = '';
-        link.href = event.snapshot_url;
-        link.style.display = '';
-    } else {
-        photo.removeAttribute('src');
-        photo.style.display = 'none';
-        link.style.display = 'none';
-    }
-
-    const identified = (detail.identified || []).map(p => p.person_name).filter(Boolean);
-    const meta = [
-        ['Thời điểm', new Date(event.occurred_at).toLocaleString('vi-VN')],
-        ['Camera', event.camera_name],
-        ['Khu vực', event.area_name],
-        ['Số đối tượng', detail.object_count],
-        ['Đã ở trong vùng', detail.dwell_seconds != null ? `${detail.dwell_seconds} giây` : null],
-        ['Nhận diện được', identified.length ? identified.join(', ') : 'Không xác định']
-    ];
-    document.getElementById('intrusion-meta').innerHTML = meta
-        .filter(([, v]) => v !== null && v !== undefined && v !== '')
-        .map(([k, v]) => `<div class="detail-item"><span class="detail-key">${k}</span>
-                          <span class="detail-val">${esc(v)}</span></div>`).join('');
-
-    overlay.style.display = 'flex';
-    overlay.classList.toggle('blinking', !isSafetySirenMuted);
+function showGlobalAlert(message) {
+    const bar = document.getElementById('global-alert');
+    if (!bar) return;
+    document.getElementById('global-alert-text').textContent = message;
+    bar.style.display = 'flex';
+    bar.classList.toggle('blinking', !isSafetySirenMuted);
 }
+window.showGlobalAlert = showGlobalAlert;
 
-function dismissIntrusion() {
-    const overlay = document.getElementById('intrusion-overlay');
-    if (overlay) { overlay.style.display = 'none'; overlay.classList.remove('blinking'); }
+function hideGlobalAlert() {
+    const bar = document.getElementById('global-alert');
+    if (!bar) return;
+    bar.style.display = 'none';
+    bar.classList.remove('blinking');
     // Chỉ ẩn khỏi màn hình, sự kiện vẫn nằm trong danh sách chờ xử lý
     pendingIntrusion = null;
 }
-window.dismissIntrusion = dismissIntrusion;
+window.hideGlobalAlert = hideGlobalAlert;
 
-async function ackIntrusionFromAlert() {
-    if (!pendingIntrusion) return dismissIntrusion();
-    await ackEvent(pendingIntrusion.id);
-    dismissIntrusion();
+// Vi phạm an toàn phải thấy ngay dù đang ở màn nào, nhưng che kín màn hình thì
+// người trực không làm được gì khác. Nên chỉ một dải đỏ bám đỉnh, bấm vào là
+// sang thẳng trang An toàn và thấy camera nào đang báo động.
+function showIntrusionAlert(event) {
+    pendingIntrusion = event;
+    const zone = (event.detail || {}).zone_name;
+    showGlobalAlert(zone
+        ? `Có người đi vào ${zone}`
+        : (event.message || 'Có người đi vào vùng cấm'));
 }
-window.ackIntrusionFromAlert = ackIntrusionFromAlert;
 
 function openSafetyFromAlert() {
-    dismissIntrusion();
+    const bar = document.getElementById('global-alert');
+    if (bar) bar.classList.remove('blinking');
     switchNavTab('safety');
 }
 window.openSafetyFromAlert = openSafetyFromAlert;
@@ -2874,15 +2858,15 @@ window.ackActiveIntrusion = ackActiveIntrusion;
 function toggleSafetySiren() {
     isSafetySirenMuted = !isSafetySirenMuted;
     const label = isSafetySirenMuted ? '🔔 Bật cảnh báo âm thanh' : '🔕 Tắt cảnh báo âm thanh';
-    ['btn-safety-siren', 'btn-intrusion-siren'].forEach(id => {
+    ['btn-safety-siren'].forEach(id => {
         const btn = document.getElementById(id);
         if (btn) btn.textContent = label;
     });
 
     const banner = document.getElementById('safety-alert-banner');
     if (banner) banner.classList.toggle('blinking', !isSafetySirenMuted && !!activeIntrusion);
-    const overlay = document.getElementById('intrusion-overlay');
-    if (overlay) overlay.classList.toggle('blinking', !isSafetySirenMuted && !!pendingIntrusion);
+    const bar = document.getElementById('global-alert');
+    if (bar) bar.classList.toggle('blinking', !isSafetySirenMuted && !!pendingIntrusion);
 }
 window.toggleSafetySiren = toggleSafetySiren;
 

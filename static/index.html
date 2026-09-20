@@ -10,6 +10,15 @@
     <link rel="stylesheet" href="/static/style.css?v=b73c8426">
 </head>
 <body>
+    <!-- Cảnh báo vi phạm an toàn: bám đỉnh màn hình, nổi trên mọi trang -->
+    <div id="global-alert" class="global-alert" style="display: none;">
+        <div class="global-alert-body" onclick="openSafetyFromAlert()" title="Bấm để xem trang An toàn bắn đạn thật">
+            <span class="global-alert-icon">⚠</span>
+            <span id="global-alert-text">Có người đi vào vùng cấm</span>
+        </div>
+        <button type="button" class="global-alert-close" onclick="hideGlobalAlert()" title="Ẩn cảnh báo">×</button>
+    </div>
+
     <div id="login-screen" class="login-screen">
         <form class="login-card" id="login-form" onsubmit="handleLogin(event)">
             <div class="login-brand">
@@ -726,6 +735,16 @@
                         </div>
 
 
+                        <div class="table-filters" style="margin: 12px 0;">
+                            <input type="text" id="sf-search" class="filter-select"
+                                   placeholder="Tìm theo camera / khu vực / bài học" oninput="renderSafetyCameraTable()">
+                            <select id="sf-filter-state" class="filter-select" onchange="renderSafetyCameraTable()">
+                                <option value="">Tất cả trạng thái</option>
+                                <option value="danger">Cảnh báo</option>
+                                <option value="normal">Bình thường</option>
+                            </select>
+                        </div>
+
                         <!-- Bảng danh sách thay cho tường camera: không mở luồng
                              nào ở màn này, xem chi tiết mới dựng stream -->
                         <div class="table-responsive" style="margin-top: 16px;">
@@ -1107,32 +1126,6 @@
                     <button type="submit" class="btn-primary-green">Lưu ca huấn luyện</button>
                 </div>
             </form>
-        </div>
-    </div>
-
-    <!-- Cảnh báo xâm nhập vùng cấm: nổi trên mọi màn, kèm ảnh AI chụp -->
-    <div id="intrusion-overlay" class="intrusion-overlay" style="display: none;">
-        <div class="intrusion-card">
-            <div class="intrusion-head">
-                <span class="intrusion-icon">⚠</span>
-                <div>
-                    <strong id="intrusion-title">PHÁT HIỆN ĐỐI TƯỢNG TRONG VÙNG CẤM</strong>
-                    <p id="intrusion-desc"></p>
-                </div>
-                <button class="btn-close-modal" onclick="dismissIntrusion()" title="Ẩn cảnh báo">✕</button>
-            </div>
-
-            <div class="intrusion-body">
-                <img id="intrusion-photo" alt="Ảnh bằng chứng vi phạm an toàn">
-                <div class="intrusion-meta" id="intrusion-meta"></div>
-            </div>
-
-            <div class="intrusion-actions">
-                <button class="btn-mute" onclick="toggleSafetySiren()" id="btn-intrusion-siren">🔕 Tắt cảnh báo âm thanh</button>
-                <a class="btn-toolbar-neutral" id="intrusion-download" download>⬇ Tải ảnh bằng chứng</a>
-                <button class="btn-toolbar-neutral" onclick="openSafetyFromAlert()">Mở màn giám sát an toàn</button>
-                <button class="btn-primary-green" onclick="ackIntrusionFromAlert()">✓ Xác nhận xử lý</button>
-            </div>
         </div>
     </div>
 
