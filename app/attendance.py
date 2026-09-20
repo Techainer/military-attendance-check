@@ -69,6 +69,31 @@ def _schedule_window_mins(schedule: dict) -> int:
     return mins if mins > 0 else DEFAULT_WINDOW_MINS
 
 
+DEFAULT_TRAINING_TYPE = "dao_tao"
+
+# Trường chỉ để hiển thị: lõi AI không đọc, nhưng thiếu thì giao diện hiện trống
+_DISPLAY_FIELDS = ("lesson_name", "instructor", "field", "class_name", "shift", "unit")
+
+
+def normalize_schedule(schedule: dict) -> dict:
+    """Điền các trường một ca cũ còn thiếu, trả về bản sao.
+
+    Lõi AI vốn đã tự chịu được ca thiếu trường (xem ``_tolerance_mins``), nhưng
+    API trả nguyên bản ghi nên giao diện hiện 'undefined phút' và bộ lọc theo
+    loại huấn luyện bỏ sót sạch ca cũ. Chuẩn hoá tại đúng một chỗ để mọi route
+    đọc ca đều thấy cùng một dạng dữ liệu.
+    """
+    row = dict(schedule)
+    row["training_type"] = row.get("training_type") or DEFAULT_TRAINING_TYPE
+    row["camera_id"] = row.get("camera_id") or DEFAULT_CAMERA_ID
+    row["check_window_mins"] = _schedule_window_mins(schedule)
+    row["late_tolerance_mins"] = _tolerance_mins(schedule, "late_tolerance_mins")
+    row["early_leave_tolerance_mins"] = _tolerance_mins(schedule, "early_leave_tolerance_mins")
+    for name in _DISPLAY_FIELDS:
+        row[name] = row.get(name) or ""
+    return row
+
+
 def _time_on(day: datetime, raw_time) -> Optional[datetime]:
     """Ghép chuỗi 'HH:MM' vào ngày đang xét."""
     parts = str(raw_time or "").strip().split(":")
@@ -634,7 +659,7 @@ class AttendanceManager:
         """Thời khoá biểu kèm trạng thái vận hành và tình hình điểm danh hôm nay."""
         rows = []
         for schedule in self._load_schedules():
-            row = dict(schedule)
+            row = normalize_schedule(schedule)
             row.update(schedule_runtime_state(schedule, now))
             done = {}
             for phase, win_start, _win_end in schedule_windows(schedule, now):

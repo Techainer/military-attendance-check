@@ -453,6 +453,42 @@ check("lọc ca đang tắt", r.status_code == 200 and r.json()["total"] == 0, r
 for goner in ["/areas", "/classes", "/sessions", "/sessions/{session_id}/approve"]:
     check(f"đã bỏ {goner} khỏi hợp đồng (hệ thống quản lý sở hữu)", goner not in declared)
 
+# ================================================ ca cũ thiếu trường
+print("\n[7] Ca cũ thiếu trường vẫn hiển thị đủ")
+
+reset()
+write_json_list(api.schedules_file, [{
+    "id": "sch_cu",
+    "name": "Ca sáng - Huấn luyện điều lệnh",
+    "start_time": "06:00",
+    "end_time": "11:30",
+    "unit": "Đại đội 1",
+    "shift": "Ca sáng",
+    "required_count": 45,
+}])
+
+row = client.get("/api/v1/schedules/sch_cu").json()
+check("ca cũ được gán loại huấn luyện mặc định",
+      row.get("training_type") == "dao_tao", str(row)[:200])
+check("ca cũ có cửa sổ điểm danh, không để undefined",
+      row.get("check_window_mins") == 5, str(row.get("check_window_mins")))
+check("ca cũ có dung sai đi chậm và về sớm",
+      row.get("late_tolerance_mins") == 5 and row.get("early_leave_tolerance_mins") == 5,
+      str(row)[:200])
+check("ca cũ được gán camera mặc định", row.get("camera_id") == CAMERA_ID,
+      str(row.get("camera_id")))
+check("trường giao diện thiếu thì là chuỗi rỗng, không phải None",
+      row.get("lesson_name") == "" and row.get("instructor") == "", str(row)[:200])
+
+tat_ca = client.get("/api/v1/summary/training").json()["sessions"]
+dao_tao = client.get("/api/v1/summary/training?training_type=dao_tao").json()["sessions"]
+chien_dau = client.get("/api/v1/summary/training?training_type=chien_dau").json()["sessions"]
+check("đào tạo + chiến đấu = tất cả",
+      len(dao_tao) + len(chien_dau) == len(tat_ca),
+      f"{len(dao_tao)} + {len(chien_dau)} != {len(tat_ca)}")
+check("ca cũ rơi vào nhóm đào tạo chứ không biến mất",
+      len(dao_tao) == 1, str(len(dao_tao)))
+
 reset()
 
 print()

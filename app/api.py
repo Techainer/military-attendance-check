@@ -22,7 +22,7 @@ from app import clock
 from app.video_processor import VideoProcessor
 from app.monitor import AttendanceMonitor
 from app.face_engine import FaceEngine
-from app.attendance import AttendanceManager, person_label
+from app.attendance import AttendanceManager, normalize_schedule, person_label
 from app.events import CAMERA_ID, CAMERA_NAME, EventStore
 from app.safety import RULE_ATTENDANCE, ZoneStore
 from app.auth import authenticate
@@ -715,8 +715,9 @@ def _find_log(session_id: str) -> Optional[dict]:
 
 
 def _find_schedule(schedule_id: str) -> Optional[dict]:
-    return next((s for s in read_json_list(data_path / "schedules.json")
-                 if s.get("id") == schedule_id), None)
+    row = next((s for s in read_json_list(data_path / "schedules.json")
+                if s.get("id") == schedule_id), None)
+    return normalize_schedule(row) if row is not None else None
 
 
 @app.get("/api/v1/events")
