@@ -1683,8 +1683,12 @@ function scheduleCameraName(cameraId) {
     return cam ? cam.name : cameraId;
 }
 
+// Danh sách ca đang hiển thị, để nút sửa lấy lại đúng bản ghi
+let scheduleRows = [];
+
 function renderSchedulesTable(schedules) {
     if (!schedulesTbody) return;
+    scheduleRows = schedules;
     schedulesTbody.innerHTML = '';
 
     if (schedules.length === 0) {
@@ -1712,12 +1716,22 @@ function renderSchedulesTable(schedules) {
                 ${checkedBadge(done.end, 'Cuối giờ')}
             </td>
             <td>
+                <button class="icon-btn icon-btn-edit" title="Sửa ca" onclick="editSchedule('${sch.id}')">✏️</button>
                 <button class="icon-btn icon-btn-delete" title="Xóa ca" onclick="deleteSchedule('${sch.id}')">🗑️</button>
             </td>
         `;
         schedulesTbody.appendChild(row);
     });
 }
+
+// Không có nút này thì ca đã tạo không bao giờ gán được camera giám sát khác,
+// nên cột CAMERA của bảng mãi mãi giữ nguyên camera mặc định.
+function editSchedule(scheduleId) {
+    const sch = scheduleRows.find(s => s.id === scheduleId);
+    if (!sch) return;
+    openScheduleModal(sch);
+}
+window.editSchedule = editSchedule;
 
 async function handleCreateSchedule(e) {
     e.preventDefault();

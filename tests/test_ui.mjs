@@ -1009,6 +1009,37 @@ check('gọi lại không nhân đôi nút',
     box.querySelectorAll('.zoom-fullscreen-btn').length === 1,
     String(box.querySelectorAll('.zoom-fullscreen-btn').length));
 
+console.log('\n[7h] Cấu hình thời khoá biểu');
+
+window.switchNavTab('schedule');
+await sleep(1400);
+
+const schRow = doc.querySelector('#schedules-tbody tr');
+check('bảng thời khoá biểu có dòng', !!schRow && !schRow.querySelector('.empty-row'));
+
+if (schRow && !schRow.querySelector('.empty-row')) {
+    const camCell = schRow.querySelector('td:nth-child(5)').textContent.trim();
+    check('cột camera hiện tên camera chứ không để trống',
+        camCell !== '' && camCell !== '—', camCell);
+    check('mỗi dòng có nút sửa ca',
+        !!schRow.querySelector('td:last-child .icon-btn-edit'));
+
+    const editBtn = schRow.querySelector('td:last-child .icon-btn-edit');
+    if (editBtn) {
+        editBtn.click();
+        await sleep(800);
+        check('bấm sửa thì mở hộp cập nhật ca',
+            doc.getElementById('schedule-modal').style.display === 'flex');
+        check('tiêu đề hộp là cập nhật chứ không phải thêm mới',
+            doc.getElementById('schedule-modal-title').textContent.includes('Cập nhật'),
+            doc.getElementById('schedule-modal-title').textContent);
+        check('hộp điền sẵn mã ca đang sửa',
+            doc.getElementById('sch-id').value !== '',
+            doc.getElementById('sch-id').value);
+        window.closeScheduleModal();
+    }
+}
+
 console.log('\n[8] Màn vẽ vùng chịu được canvas không dùng được');
 check('không sập khi trình duyệt không cấp ngữ cảnh vẽ',
     appJs.includes("if (!ctx) return;"));

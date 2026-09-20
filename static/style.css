@@ -2470,3 +2470,7 @@ a.btn-clip-ctrl {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.55; }
 }
+
+
+.icon-btn-edit { color: var(--primary-green); }
+.icon-btn-edit:hover { background: var(--primary-green-light); }
