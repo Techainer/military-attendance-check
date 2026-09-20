@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 import app.api as api
 from app.events import CAMERA_ID
-from app.storage import write_json_list
+from app.storage import read_json_list, write_json_list
 
 failures = []
 
@@ -586,6 +586,49 @@ check("có tổng số phút và số phút còn lại của ca",
       past.get("total_minutes") == 330 and past.get("remaining_minutes") == 0,
       str({k: past.get(k) for k in ("total_minutes", "remaining_minutes")}))
 
+# ============================================ nhật ký điểm danh
+print("\n[11] Nhật ký điểm danh: ghép tên bài và bộ lọc")
+
+reset()
+logs_file = api.data_path / "attendance_logs.json"
+logs_goc = read_json_list(logs_file)          # trả lại nguyên trạng ở cuối nhóm
+
+write_json_list(api.schedules_file, [
+    {"id": "sch_sang", "name": "Huấn luyện điều lệnh", "start_time": "06:00",
+     "end_time": "11:30", "unit": "Đại đội 1", "shift": "Ca sáng",
+     "training_type": "dao_tao", "lesson_name": "Bài 1 — Đội ngũ",
+     "instructor": "Đại uý Phạm Minh Đức", "required_count": 45},
+])
+write_json_list(logs_file, [
+    {"id": "log_1", "schedule_id": "sch_sang", "date": "18/09/2026",
+     "date_iso": "2026-09-18", "shift": "Ca sáng", "schedule_name": "Huấn luyện điều lệnh",
+     "unit": "Đại đội 1", "required": 45, "checks": {}},
+    {"id": "log_2", "schedule_id": "sch_sang", "date": "19/09/2026",
+     "date_iso": "2026-09-19", "shift": "Ca chiều", "schedule_name": "Huấn luyện điều lệnh",
+     "unit": "Đại đội 2", "required": 45, "checks": {}},
+])
+
+rows = client.get("/api/attendance-logs").json()["data"]
+check("nhật ký ghép được tên bài học từ ca",
+      all(r.get("lesson_name") == "Bài 1 — Đội ngũ" for r in rows), str(rows)[:250])
+check("nhật ký ghép được giáo viên phụ trách",
+      rows[0].get("instructor") == "Đại uý Phạm Minh Đức", str(rows[0])[:250])
+check("nhật ký mang loại huấn luyện",
+      rows[0].get("training_type") == "dao_tao", str(rows[0].get("training_type")))
+
+r = client.get("/api/attendance-logs?shift=Ca chiều").json()["data"]
+check("lọc nhật ký theo ca", len(r) == 1 and r[0]["id"] == "log_2", str(r)[:200])
+
+r = client.get("/api/attendance-logs?date_from=2026-09-19&date_to=2026-09-19").json()["data"]
+check("lọc nhật ký theo khoảng ngày", len(r) == 1 and r[0]["id"] == "log_2", str(r)[:200])
+
+r = client.get("/api/attendance-logs?q=đội ngũ").json()["data"]
+check("tìm nhật ký theo tên bài học", len(r) == 2, str(len(r)))
+
+r = client.get("/api/attendance-logs?q=khong-co-gi").json()["data"]
+check("từ khoá không khớp thì trả rỗng", r == [], str(r)[:120])
+
+write_json_list(logs_file, logs_goc)
 reset()
 
 print()

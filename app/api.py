@@ -426,12 +426,52 @@ async def delete_schedule(sch_id: str):
 
 
 @app.get("/api/attendance-logs")
-async def get_attendance_logs(unit: Optional[str] = None):
-    """Get history of attendance roll-call logs."""
+async def get_attendance_logs(unit: Optional[str] = None, shift: Optional[str] = None,
+                              date_from: Optional[str] = None, date_to: Optional[str] = None,
+                              q: Optional[str] = None):
+    """Lịch sử điểm danh, ghép thêm thông tin bài học lấy từ thời khoá biểu.
+
+    Biên bản chỉ lưu những gì lõi AI cần. Tên bài, giáo viên, loại huấn luyện
+    nằm ở ca; ghép lúc đọc thì bản ghi cũ cũng hiện đủ, khỏi phải vá dữ liệu.
+    """
     logs = read_json_list(data_path / "attendance_logs.json")
-    if unit and unit != "all" and unit != "Tất cả đơn vị":
-        logs = [l for l in logs if l.get("unit") == unit]
-    return {"status": "success", "data": logs}
+    schedules = {s["id"]: normalize_schedule(s)
+                 for s in read_json_list(schedules_file) if s.get("id")}
+
+    enriched = []
+    for log in logs:
+        sch = schedules.get(log.get("schedule_id"), {})
+        enriched.append({
+            **log,
+            "lesson_name": log.get("lesson_name") or sch.get("lesson_name", ""),
+            "instructor": log.get("instructor") or sch.get("instructor", ""),
+            "field": log.get("field") or sch.get("field", ""),
+            "class_name": log.get("class_name") or sch.get("class_name", ""),
+            "training_type": log.get("training_type") or sch.get("training_type", ""),
+            "start_time": sch.get("start_time", ""),
+            "end_time": sch.get("end_time", ""),
+        })
+
+    if unit and unit not in ("all", "Tất cả đơn vị"):
+        enriched = [l for l in enriched if l.get("unit") == unit]
+    if shift and shift not in ("all", "Tất cả ca"):
+        enriched = [l for l in enriched if l.get("shift") == shift]
+
+    def day_of(log):
+        return log.get("date_iso") or str(log.get("started_at", ""))[:10]
+
+    if date_from:
+        enriched = [l for l in enriched if day_of(l) >= date_from]
+    if date_to:
+        enriched = [l for l in enriched if day_of(l) <= date_to]
+
+    needle = (q or "").strip().lower()
+    if needle:
+        enriched = [l for l in enriched if needle in (
+            f"{l.get('lesson_name', '')} {l.get('schedule_name', '')} "
+            f"{l.get('shift', '')} {l.get('unit', '')} {l.get('instructor', '')}").lower()]
+
+    return {"status": "success", "data": enriched}
 
 
 # ----------------- Roll-call (Điểm danh) Endpoints -----------------
