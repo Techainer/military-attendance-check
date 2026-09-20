@@ -1701,7 +1701,7 @@ a.btn-clip-ctrl {
 
 /* Luồng MJPEG thay cho canvas: giữ đúng khung như cũ */
 #video-stream,
-#ad-stream,
+#sd-stream,
 #sf-stream {
     width: 100%;
     height: 100%;

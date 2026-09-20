@@ -171,8 +171,8 @@ check('hiện vai trò của tài khoản',
     doc.getElementById('user-role').textContent);
 check('CBQH đăng nhập thì không thấy phân hệ III',
     [...doc.querySelectorAll('.role-only')].every(el => el.style.display === 'none'));
-check('vào bằng CBQH thì mở màn giám sát quân số',
-    doc.querySelector('.page-view.active').id === 'view-attendance-summary',
+check('vào bằng CBQH thì mở màn lịch và tiến độ',
+    doc.querySelector('.page-view.active').id === 'view-schedule-progress',
     doc.querySelector('.page-view.active').id);
 
 console.log('\n[1] Trang chạy không lỗi sau khi đăng nhập');
@@ -183,8 +183,8 @@ check('kênh sự kiện SSE mở sau khi đăng nhập',
 const activeView = doc.querySelector('.page-view.active');
 check('có đúng một màn hình đang hiển thị',
     doc.querySelectorAll('.page-view.active').length === 1, String(doc.querySelectorAll('.page-view.active').length));
-check('vào thẳng màn giám sát quân số',
-    activeView && activeView.id === 'view-attendance-summary', activeView && activeView.id);
+check('vào thẳng màn lịch và tiến độ',
+    activeView && activeView.id === 'view-schedule-progress', activeView && activeView.id);
 
 console.log('\n[2] Điều hướng qua đủ các màn');
 // Đăng nhập bằng QTHT để xem được mọi màn
@@ -193,7 +193,7 @@ const qtht = await (await fetch(BASE + '/api/v1/auth/login', {
     body: JSON.stringify({ username: 'qtht', password: 'qtht@2026' })
 })).json();
 window.applyRole(qtht);
-const tabs = ['schedule-progress', 'attendance', 'safety', 'logs',
+const tabs = ['schedule-progress', 'safety', 'logs',
               'monitoring', 'schedule', 'zones', 'cameras', 'registration'];
 for (const tab of tabs) {
     jsErrors.length = 0;
@@ -205,20 +205,17 @@ for (const tab of tabs) {
 }
 
 console.log('\n[3] Phân hệ I và II là một màn, tách bằng bộ lọc loại huấn luyện');
-window.switchNavTab('attendance');
+window.switchNavTab('schedule-progress');
 await sleep(900);
-const rowsAll = doc.querySelectorAll('#as-tbody tr').length;
-const titleAll = doc.getElementById('as-title').textContent;
+const rowsAll = doc.querySelectorAll('#dt-schedule-tbody tr').length;
 
 window.setTrainingFilter('dao_tao');
 await sleep(900);
-const rowsDt = doc.querySelectorAll('#as-tbody tr').length;
-const titleDt = doc.getElementById('as-title').textContent;
+const rowsDt = doc.querySelectorAll('#dt-schedule-tbody tr').length;
 
 window.setTrainingFilter('chien_dau');
 await sleep(900);
-const rowsCd = doc.querySelectorAll('#as-tbody tr').length;
-const titleCd = doc.getElementById('as-title').textContent;
+const rowsCd = doc.querySelectorAll('#dt-schedule-tbody tr').length;
 
 window.setTrainingFilter('');
 await sleep(900);
@@ -227,12 +224,9 @@ check('không lọc thì thấy cả hai loại', rowsAll >= 1, String(rowsAll))
 check('lọc đào tạo ra ít ca hơn tổng', rowsDt < rowsAll, `${rowsDt} / ${rowsAll}`);
 check('lọc chiến đấu ra ít ca hơn tổng', rowsCd < rowsAll, `${rowsCd} / ${rowsAll}`);
 check('hai loại cộng lại bằng tổng', rowsDt + rowsCd === rowsAll, `${rowsDt}+${rowsCd} vs ${rowsAll}`);
-check('tiêu đề đổi theo loại đang lọc',
-    titleDt.includes('ĐÀO TẠO') && titleCd.includes('CHIẾN ĐẤU') && !titleAll.includes('ĐÀO TẠO'),
-    `${titleAll} | ${titleDt} | ${titleCd}`);
-check('nút lọc sáng đúng nút đang chọn',
-    doc.querySelector('#tt-filter-attendance .tt-btn.active').dataset.tt === undefined
-    || doc.querySelector('#tt-filter-attendance .tt-btn.active').dataset.tt === '');
+check('đã bỏ hẳn tab giám sát quân số',
+    doc.getElementById('nav-attendance') === null
+    && doc.getElementById('view-attendance-summary') === null);
 
 console.log('\n[3b] Hai tài khoản thấy hai bộ menu khác nhau');
 const cbqhUser = await (await fetch(BASE + '/api/v1/auth/login', {
@@ -245,7 +239,7 @@ await sleep(300);
 check('CBQH không thấy phân hệ III',
     [...doc.querySelectorAll('.role-only')].every(el => el.style.display === 'none'));
 check('CBQH vẫn thấy nghiệp vụ huấn luyện',
-    doc.getElementById('nav-attendance') !== null);
+    doc.getElementById('nav-schedule-progress') !== null);
 check('tài khoản CBQH hiện đúng vai trò',
     doc.getElementById('user-role').textContent === 'Cán bộ quản lý',
     doc.getElementById('user-role').textContent);

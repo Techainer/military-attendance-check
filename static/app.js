@@ -117,7 +117,6 @@ let scheduleRefreshTimer = null;
 // Phân hệ I và II không phải hai nhóm màn riêng: cùng một nghiệp vụ, chỉ khác
 // loại lịch. Nên dùng chung màn và tách bằng bộ lọc training_type.
 const SHARED_VIEW = {
-    'attendance': 'attendance-summary',
     'safety': 'safety'
 };
 
@@ -131,8 +130,6 @@ function switchNavTab(tabName) {
     if (targetView) targetView.classList.add('active');
 
     // Rời màn nào thì ngắt luồng hình của màn đó, không để chạy ngầm
-    const adStream = document.getElementById('ad-stream');
-    if (adStream && !adStream.closest('.page-view').classList.contains('active')) detachStream(adStream);
     const sdStream = document.getElementById('sd-stream');
     if (sdStream && !sdStream.closest('.page-view').classList.contains('active')) detachStream(sdStream);
     if (tabName !== 'monitoring') detachAllCameraStreams();
@@ -140,11 +137,9 @@ function switchNavTab(tabName) {
 
     const titles = {
         'schedule-progress': 'Lịch & Tiến độ huấn luyện',
-        'attendance': 'Giám sát quân số',
         'safety': 'An toàn bắn đạn thật',
         'safety-detail': 'Chi tiết camera an toàn',
         'session-detail': 'Chi tiết lịch huấn luyện',
-        'attendance-detail': 'Chi tiết giám sát quân số',
         'monitoring': 'Giám sát trực tiếp',
         'zones': 'Vùng giám sát',
         'cameras': 'Thiết bị camera',
@@ -193,9 +188,6 @@ function switchNavTab(tabName) {
     switch (tabName) {
         case 'schedule-progress':
             loadTrainingSchedule();
-            break;
-        case 'attendance':
-            loadAttendanceSummary();
             break;
         case 'safety':
             currentSafetyType = currentTrainingType;
@@ -2185,9 +2177,8 @@ window.exportAttendanceLogsCsv = exportAttendanceLogsCsv;
 
 // Rỗng = xem cả hai loại huấn luyện. Phân hệ I và II chỉ khác nhau ở đây.
 let currentTrainingType = '';
-let currentTabName = 'attendance';
+let currentTabName = 'schedule-progress';
 let currentSafetyType = null;
-let attendanceDetailData = { items: [], session: null };
 let safetyPollTimer = null;
 let isSafetySirenMuted = false;
 
@@ -2213,7 +2204,6 @@ function setTrainingFilter(value) {
 
     // Nạp lại đúng màn đang xem, không nạp cả ba
     if (currentTabName === 'schedule-progress') loadTrainingSchedule();
-    else if (currentTabName === 'attendance') loadAttendanceSummary();
     else if (currentTabName === 'safety') {
         currentSafetyType = currentTrainingType;
         loadSafetyDashboard();
@@ -2496,163 +2486,12 @@ function renderSessionAttendance() {
 }
 window.renderSessionAttendance = renderSessionAttendance;
 
-// ----------------- MÀN 2.1 / 4.1: TỔNG HỢP QUÂN SỐ -----------------
-
-async function loadAttendanceSummary() {
-    const tbody = document.getElementById('as-tbody');
-    if (!tbody) return;
-
-    document.getElementById('as-title').textContent = currentTrainingType
-        ? `TỔNG HỢP GIÁM SÁT QUÂN SỐ HUẤN LUYỆN ${TRAINING_LABEL[currentTrainingType].toUpperCase()}`
-        : 'TỔNG HỢP GIÁM SÁT QUÂN SỐ HUẤN LUYỆN';
-    document.getElementById('as-subtitle').textContent =
-        'CÁC LỚP ĐANG DIỄN RA TRÊN THAO TRƯỜNG · CẬP NHẬT THEO THỜI GIAN THỰC';
-
-    try {
-        const data = await getJson(`/api/v1/summary/training?_=1${trainingQuery('&')}`);
-        document.getElementById('as-metric-running').textContent = data.stats.running_sessions;
-        document.getElementById('as-metric-present').textContent = data.stats.present_total;
-        document.getElementById('as-metric-required').textContent = data.stats.required_total;
-        document.getElementById('as-metric-violations').textContent = data.stats.violation_total;
-
-        tbody.innerHTML = data.sessions.length ? '' :
-            `<tr><td colspan="8" class="empty-row">
-                Chưa có lớp nào${currentTrainingType ? ` thuộc huấn luyện ${TRAINING_LABEL[currentTrainingType].toLowerCase()}` : ''}
-             </td></tr>`;
-
-        data.sessions.forEach(s => {
-            const tr = document.createElement('tr');
-            tr.innerHTML = `
-                <td><strong>${esc(s.name)}</strong><br>
-                    ${TRAINING_TAG[s.training_type] || ''}
-                    <span class="muted">${esc(s.shift || '')}</span></td>
-                <td>${esc(s.unit || '—')}</td>
-                <td><span class="status-tag ${STATE_CLASS[s.state] || 'status-neutral'}">${esc(s.state_label)}</span></td>
-                <td class="text-green"><strong>${s.present_start || 0}</strong></td>
-                <td>${s.present_end || 0}</td>
-                <td>${s.required || 0}</td>
-                <td class="${s.violation_count > 0 ? 'text-amber' : ''}"><strong>${s.violation_count || 0}</strong></td>
-                <td><button class="btn-event-clip" onclick="openAttendanceDetail('${s.id}','${s.schedule_id}')">Xem chi tiết điểm danh</button></td>`;
-            tbody.appendChild(tr);
-        });
-    } catch (e) {
-        tbody.innerHTML = `<tr><td colspan="8" class="empty-row">Lỗi tải dữ liệu: ${esc(e.message)}</td></tr>`;
-    }
-}
-window.loadAttendanceSummary = loadAttendanceSummary;
-
-// ----------------- MÀN 2.2 / 4.2: CHI TIẾT + HÌNH ẢNH AI -----------------
-
+// Nhãn vi phạm giờ giấc, dùng ở màn chi tiết ca và hộp chi tiết nhật ký
 const VIOLATION_TAG = {
     late: '<span class="viol-tag viol-late">Đi chậm</span>',
     early_leave: '<span class="viol-tag viol-early">Chưa hết giờ đã về</span>',
     absent: '<span class="viol-tag viol-absent">Không tham gia</span>'
 };
-
-async function openAttendanceDetail(sessionId, scheduleId) {
-    attendanceDetailData.session = sessionId || scheduleId;
-    switchNavTab('attendance-detail');
-
-    document.getElementById('ad-title').textContent = currentTrainingType
-        ? `CHI TIẾT GIÁM SÁT QUÂN SỐ · ${TRAINING_LABEL[currentTrainingType].toUpperCase()}`
-        : 'CHI TIẾT GIÁM SÁT QUÂN SỐ';
-
-    attachStream(document.getElementById('ad-stream'), activeCameraId, true);
-    document.getElementById('ad-camera-caption').textContent =
-        'Camera AI đang giám sát lớp học — khung xanh là quân nhân đã định danh';
-
-    try {
-        const data = await getJson(
-            `/api/v1/sessions/${encodeURIComponent(attendanceDetailData.session)}/attendance`);
-        attendanceDetailData.items = data.items || [];
-
-        const sm = data.summary || {};
-        document.getElementById('ad-metrics').innerHTML = `
-            <div class="metric-card"><span class="metric-label">Sĩ số yêu cầu</span><span class="metric-val">${sm.required || 0}</span></div>
-            <div class="metric-card"><span class="metric-label">Đủ giờ</span><span class="metric-val text-green">${sm.present || 0}</span></div>
-            <div class="metric-card"><span class="metric-label">Đi chậm</span><span class="metric-val text-amber">${sm.late || 0}</span></div>
-            <div class="metric-card"><span class="metric-label">Về sớm</span><span class="metric-val text-amber">${sm.early_leave || 0}</span></div>
-            <div class="metric-card"><span class="metric-label">Không tham gia</span><span class="metric-val text-red">${sm.absent || 0}</span></div>`;
-        document.getElementById('ad-subtitle').textContent =
-            `Quân số danh sách ${sm.required || 0} · ${attendanceDetailData.items.length} bản ghi`;
-    } catch (e) {
-        attendanceDetailData.items = [];
-        document.getElementById('ad-subtitle').textContent = `Chưa có dữ liệu điểm danh: ${e.message}`;
-        document.getElementById('ad-metrics').innerHTML = '';
-    }
-
-    await loadAttendanceEvidence(attendanceDetailData.session);
-    renderAttendanceDetail();
-}
-window.openAttendanceDetail = openAttendanceDetail;
-
-async function loadAttendanceEvidence(sessionId) {
-    const box = document.getElementById('ad-evidence');
-    if (!box) return;
-    try {
-        const checks = await getJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/checks`);
-        const withPhoto = checks.filter(c => c.evidence_url);
-        box.innerHTML = withPhoto.length ? '' :
-            '<p class="empty-hint">Chưa có ảnh điểm danh nào được chụp</p>';
-        withPhoto.forEach(c => {
-            box.insertAdjacentHTML('beforeend', `
-                <figure class="evidence-figure">
-                    <img src="${c.evidence_url}" alt="Ảnh điểm danh ${esc(c.phase_label)}"
-                         onclick="openEvidence('${c.evidence_url}','Điểm danh ${esc(c.phase_label)} — ${c.present} có mặt')">
-                    <figcaption>
-                        <strong>${esc(c.phase_label)}</strong> · ${esc(c.time || '')} · ${c.present} có mặt
-                        <a class="btn-download" href="${c.evidence_url}" download>⬇ Tải ảnh</a>
-                    </figcaption>
-                </figure>`);
-        });
-    } catch (e) {
-        box.innerHTML = '<p class="empty-hint">Chưa có ảnh điểm danh nào được chụp</p>';
-    }
-}
-
-function renderAttendanceDetail() {
-    const tbody = document.getElementById('ad-tbody');
-    if (!tbody) return;
-
-    const filter = (document.getElementById('ad-filter') || {}).value || 'all';
-    const q = ((document.getElementById('ad-search') || {}).value || '').toLowerCase();
-
-    let items = attendanceDetailData.items;
-    if (filter !== 'all') items = items.filter(i => (i.violations || []).includes(filter));
-    if (q) items = items.filter(i => {
-        const p = i.person || {};
-        return `${p.rank || ''} ${p.name || ''} ${p.military_id || ''}`.toLowerCase().includes(q);
-    });
-
-    tbody.innerHTML = items.length ? '' :
-        `<tr><td colspan="6" class="empty-row">Không có quân nhân nào khớp bộ lọc</td></tr>`;
-
-    items.forEach(i => {
-        const p = i.person || {};
-        const tags = (i.violations || []).map(v => VIOLATION_TAG[v] || v).join(' ')
-            || '<span class="viol-tag viol-ok">Đủ giờ</span>';
-        const extra = [];
-        if (i.late_minutes) extra.push(`chậm ${i.late_minutes}′`);
-        if (i.early_leave_minutes) extra.push(`về sớm ${i.early_leave_minutes}′`);
-
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-            <td><strong>${esc(p.rank || '')} ${esc(p.name || '')}</strong></td>
-            <td class="font-mono">${esc(p.military_id || '—')}</td>
-            <td>${esc(p.unit || '—')}</td>
-            <td class="font-mono">${fmtTime(i.first_seen)}</td>
-            <td class="font-mono">${fmtTime(i.last_seen)}</td>
-            <td>${tags}${extra.length ? `<br><span class="muted">${extra.join(' · ')}</span>` : ''}</td>`;
-        tbody.appendChild(tr);
-    });
-}
-window.renderAttendanceDetail = renderAttendanceDetail;
-
-function backFromAttendanceDetail() {
-    detachStream(document.getElementById('ad-stream'));
-    switchNavTab('attendance');
-}
-window.backFromAttendanceDetail = backFromAttendanceDetail;
 
 
 // =====================================================================
@@ -3131,7 +2970,7 @@ window.setRtspDemo = setRtspDemo;
 // =====================================================================
 
 const ROLES = {
-    cbqh: { home: 'attendance' },
+    cbqh: { home: 'schedule-progress' },
     qtht: { home: 'monitoring' }
 };
 

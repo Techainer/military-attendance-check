@@ -72,13 +72,9 @@
 
             <div class="nav-section-title">NGHIỆP VỤ HUẤN LUYỆN</div>
             <nav class="sidebar-nav">
-                <a href="#schedule-progress" class="nav-item" id="nav-schedule-progress" onclick="switchNavTab('schedule-progress')">
+                <a href="#schedule-progress" class="nav-item active" id="nav-schedule-progress" onclick="switchNavTab('schedule-progress')">
                     <span class="nav-icon nav-glyph">🗓</span>
                     <span>Lịch &amp; Tiến độ</span>
-                </a>
-                <a href="#attendance" class="nav-item active" id="nav-attendance" onclick="switchNavTab('attendance')">
-                    <span class="nav-icon nav-glyph">🎖</span>
-                    <span>Giám sát quân số</span>
                 </a>
                 <a href="#safety" class="nav-item" id="nav-safety" onclick="switchNavTab('safety')">
                     <span class="nav-icon nav-glyph">🎯</span>
@@ -664,117 +660,6 @@
                     </div>
                 </section>
 
-
-                <!-- MÀN 2.1 / 4.1 — TỔNG HỢP GIÁM SÁT QUÂN SỐ -->
-                <section id="view-attendance-summary" class="page-view">
-                    <div class="glass-card section-card">
-                        <div class="card-header flex-between">
-                            <div>
-                                <h2 id="as-title">TỔNG HỢP GIÁM SÁT QUÂN SỐ</h2>
-                                <p class="card-subtitle" id="as-subtitle"></p>
-                            </div>
-                            <button class="btn-toolbar-neutral" onclick="loadAttendanceSummary()">↻ Làm mới</button>
-                        </div>
-
-                        <div class="training-filter" id="tt-filter-attendance">
-                            <button class="tt-btn active" data-tt="" onclick="setTrainingFilter('')">Tất cả</button>
-                            <button class="tt-btn" data-tt="dao_tao" onclick="setTrainingFilter('dao_tao')">Huấn luyện đào tạo</button>
-                            <button class="tt-btn" data-tt="chien_dau" onclick="setTrainingFilter('chien_dau')">Huấn luyện chiến đấu</button>
-                        </div>
-
-
-                        <div class="log-metrics-grid">
-                            <div class="metric-card">
-                                <span class="metric-label">Tổng số lớp đang học</span>
-                                <span class="metric-val" id="as-metric-running">0</span>
-                            </div>
-                            <div class="metric-card">
-                                <span class="metric-label">Quân số thực tế có mặt</span>
-                                <span class="metric-val text-green" id="as-metric-present">0</span>
-                            </div>
-                            <div class="metric-card">
-                                <span class="metric-label">Sĩ số yêu cầu</span>
-                                <span class="metric-val" id="as-metric-required">0</span>
-                            </div>
-                            <div class="metric-card">
-                                <span class="metric-label">Ca vi phạm giờ giấc</span>
-                                <span class="metric-val text-amber" id="as-metric-violations">0</span>
-                            </div>
-                        </div>
-
-                        <div class="table-responsive">
-                            <table class="personnel-table">
-                                <thead>
-                                    <tr>
-                                        <th>LỚP / NỘI DUNG</th>
-                                        <th>ĐƠN VỊ</th>
-                                        <th>TRẠNG THÁI</th>
-                                        <th>ĐẦU BUỔI</th>
-                                        <th>CUỐI BUỔI</th>
-                                        <th>SĨ SỐ CHUẨN</th>
-                                        <th>VI PHẠM</th>
-                                        <th>THAO TÁC</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="as-tbody"></tbody>
-                            </table>
-                        </div>
-                    </div>
-                </section>
-
-                <!-- MÀN 2.2 / 4.2 — CHI TIẾT GIÁM SÁT QUÂN SỐ VÀ HÌNH ẢNH AI -->
-                <section id="view-attendance-detail" class="page-view">
-                    <div class="glass-card section-card">
-                        <div class="card-header flex-between">
-                            <div>
-                                <button class="btn-toolbar-neutral" onclick="backFromAttendanceDetail()">← Quay lại</button>
-                                <h2 id="ad-title" style="margin-top: 12px;">CHI TIẾT GIÁM SÁT QUÂN SỐ</h2>
-                                <p class="card-subtitle" id="ad-subtitle"></p>
-                            </div>
-                            <div class="table-filters">
-                                <input type="text" id="ad-search" class="filter-select" placeholder="Tìm quân nhân" oninput="renderAttendanceDetail()">
-                                <select id="ad-filter" class="filter-select" onchange="renderAttendanceDetail()">
-                                    <option value="all">Tất cả trạng thái</option>
-                                    <option value="absent">Không tham gia</option>
-                                    <option value="late">Đi chậm</option>
-                                    <option value="early_leave">Chưa hết giờ đã về</option>
-                                </select>
-                            </div>
-                        </div>
-
-                        <div class="attendance-detail-grid">
-                            <div class="surveillance-screen-card">
-                                <div class="video-container">
-                                    <img id="ad-stream" alt="Camera giám sát lớp">
-                                </div>
-                                <p class="camera-caption" id="ad-camera-caption"></p>
-                            </div>
-
-                            <div class="evidence-column">
-                                <h3 class="evidence-title">ẢNH ĐIỂM DANH DO AI CHỤP</h3>
-                                <div id="ad-evidence" class="evidence-thumbs"></div>
-                            </div>
-                        </div>
-
-                        <div class="log-metrics-grid" id="ad-metrics"></div>
-
-                        <div class="table-responsive">
-                            <table class="personnel-table">
-                                <thead>
-                                    <tr>
-                                        <th>QUÂN NHÂN</th>
-                                        <th>SỐ HIỆU</th>
-                                        <th>ĐƠN VỊ</th>
-                                        <th>THẤY LẦN ĐẦU</th>
-                                        <th>THẤY LẦN CUỐI</th>
-                                        <th>TRẠNG THÁI</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="ad-tbody"></tbody>
-                            </table>
-                        </div>
-                    </div>
-                </section>
 
                 <!-- MÀN 3.1 / 5.1 — DASHBOARD GIÁM SÁT AN TOÀN BẮN ĐẠN THẬT -->
                 <section id="view-safety" class="page-view">
