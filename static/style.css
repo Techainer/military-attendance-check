@@ -2440,3 +2440,64 @@ a.btn-clip-ctrl {
     font-weight: 600;
     color: var(--military-muted);
 }
+
+
+/* ----------------- TÀI KHOẢN Ở GÓC TRÁI DƯỚI CÙNG ----------------- */
+.sidebar-footer {
+    margin-top: auto;
+    position: relative;
+    padding: 10px;
+    border-top: 1px solid var(--sidebar-border);
+}
+
+.sidebar-user {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    background: none;
+    cursor: pointer;
+    text-align: left;
+}
+.sidebar-user:hover { background: #ffffff; border-color: var(--sidebar-border); }
+.sidebar-user .user-block { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.sidebar-user .user-name,
+.sidebar-user .user-role { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-caret { color: #6b937e; font-size: 12px; }
+
+.account-menu {
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    bottom: calc(100% - 4px);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: #ffffff;
+    border: 1px solid var(--sidebar-border);
+    border-radius: 10px;
+    padding: 6px;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+    z-index: 20;
+}
+
+.account-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 10px;
+    border: none;
+    border-radius: 7px;
+    background: none;
+    color: #435b4f;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    text-align: left;
+}
+.account-menu-item:hover { background: var(--primary-green-light); }
+.account-menu-danger { color: var(--danger-red); }
+.account-menu-danger:hover { background: rgba(220, 38, 38, 0.08); }

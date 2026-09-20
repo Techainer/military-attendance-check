@@ -17,7 +17,6 @@ let pendingEventsCount = 2;
 const currentPageTitle = document.getElementById('current-page-title');
 const liveTimeEl = document.getElementById('live-time');
 const liveDateEl = document.getElementById('live-date');
-const topbarAttendanceStat = document.getElementById('topbar-attendance-stat');
 const topbarAlertStat = document.getElementById('topbar-alert-stat');
 const pendingEventsBadge = document.getElementById('pending-events-badge');
 
@@ -313,8 +312,6 @@ async function lockBaselineManual() {
         const data = await res.json();
         if (res.ok) {
             baselineCount = data.baseline;
-            if (topbarAttendanceStat) topbarAttendanceStat.textContent = `Quân số: ${currentCount || baselineCount}/${baselineCount}`;
-
             alert(`✓ Đã chốt sĩ số chuẩn: ${data.baseline} quân nhân`);
         }
     } catch (e) {
@@ -528,6 +525,7 @@ async function loadCameraWall() {
     try {
         const data = await getJson('/api/v1/cameras');
         cameraWallData = data.items;
+        knownCameraTotal = cameraWallData.length;
     } catch (e) {
         wall.innerHTML = `<p class="empty-hint">Không tải được danh sách camera: ${esc(e.message)}</p>`;
         return;
@@ -724,6 +722,14 @@ window.ackEvent = ackEvent;
 // ---------- chỉ số trực tiếp ----------
 // MJPEG chỉ mang hình, các con số lấy bằng cách hỏi máy chủ định kỳ.
 
+// Tổng số thiết bị camera. Chỉ đổi khi thêm / xoá camera, nên không việc gì
+// phải hỏi lại máy chủ mỗi nhịp 2 giây của pollLiveStatus.
+let knownCameraTotal = 0;
+
+async function refreshCameraTotal() {
+    try { knownCameraTotal = (await getJson('/api/v1/cameras')).total; } catch (e) { /* bỏ qua nhịp này */ }
+}
+
 async function pollLiveStatus() {
     try {
         const [statusRes, attRes] = await Promise.all([
@@ -736,8 +742,10 @@ async function pollLiveStatus() {
         currentCount = status.current_count || 0;
         if (typeof status.baseline_count === 'number') baselineCount = status.baseline_count;
 
-        if (topbarAttendanceStat) {
-            topbarAttendanceStat.textContent = `Quân số: ${currentCount}/${baselineCount || 0}`;
+        const camPill = document.getElementById('topbar-camera-stat');
+        if (camPill) {
+            const online = (status.cameras_running || []).length;
+            camPill.textContent = `Camera: ${online}/${knownCameraTotal} trực tuyến`;
         }
 
         const attBtn = document.getElementById('attendance-btn-text');
@@ -2165,6 +2173,101 @@ function exportAttendanceLogsCsv() {
 window.exportAttendanceLogsCsv = exportAttendanceLogsCsv;
 
 
+// =====================================================================
+// MENU TÀI KHOẢN Ở GÓC TRÁI DƯỚI CÙNG
+// =====================================================================
+
+function toggleAccountMenu() {
+    const menu = document.getElementById('account-menu');
+    if (!menu) return;
+    menu.style.display = menu.style.display === 'flex' ? 'none' : 'flex';
+}
+window.toggleAccountMenu = toggleAccountMenu;
+
+document.addEventListener('click', (e) => {
+    const footer = e.target.closest && e.target.closest('.sidebar-footer');
+    if (footer) return;
+    const menu = document.getElementById('account-menu');
+    if (menu) menu.style.display = 'none';
+});
+
+function openAccountModal() {
+    const modal = document.getElementById('account-modal');
+    if (!modal) return;
+    const menu = document.getElementById('account-menu');
+    if (menu) menu.style.display = 'none';
+
+    document.getElementById('acc-display-name').value =
+        (currentUser && currentUser.display_name) || '';
+    ['acc-old-password', 'acc-new-password'].forEach(id => {
+        document.getElementById(id).value = '';
+    });
+    ['acc-profile-status', 'acc-password-status'].forEach(id => {
+        document.getElementById(id).textContent = '';
+    });
+    modal.style.display = 'flex';
+}
+window.openAccountModal = openAccountModal;
+
+function closeAccountModal() {
+    const modal = document.getElementById('account-modal');
+    if (modal) modal.style.display = 'none';
+}
+window.closeAccountModal = closeAccountModal;
+
+function setAccountStatus(id, text, ok) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = text;
+    el.style.color = ok ? 'var(--primary-green)' : 'var(--danger-red)';
+}
+
+async function submitProfileForm(event) {
+    event.preventDefault();
+    if (!currentUser) return;
+    const displayName = document.getElementById('acc-display-name').value.trim();
+    try {
+        const res = await fetch('/api/v1/auth/profile', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: currentUser.username, display_name: displayName })
+        });
+        if (!res.ok) throw new Error(describeApiError(await res.json()));
+        const user = await res.json();
+        try { localStorage.setItem('horus_user', JSON.stringify(user)); } catch (e) { /* chế độ riêng tư */ }
+        applyRole(user);
+        setAccountStatus('acc-profile-status', '✓ Đã lưu tên hiển thị', true);
+    } catch (e) {
+        setAccountStatus('acc-profile-status', `✗ ${e.message}`, false);
+    }
+}
+window.submitProfileForm = submitProfileForm;
+
+async function submitPasswordForm(event) {
+    event.preventDefault();
+    if (!currentUser) return;
+    try {
+        const res = await fetch('/api/v1/auth/password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                username: currentUser.username,
+                old_password: document.getElementById('acc-old-password').value,
+                new_password: document.getElementById('acc-new-password').value
+            })
+        });
+        if (!res.ok) throw new Error(describeApiError(await res.json()));
+        ['acc-old-password', 'acc-new-password'].forEach(id => {
+            document.getElementById(id).value = '';
+        });
+        setAccountStatus('acc-password-status', '✓ Đã đổi mật khẩu', true);
+    } catch (e) {
+        setAccountStatus('acc-password-status', `✗ ${e.message}`, false);
+    }
+}
+window.submitPasswordForm = submitPasswordForm;
+
+
 // ----------------- INITIALIZATION -----------------
 
 
@@ -3073,6 +3176,7 @@ async function startAppSession() {
     appSessionStarted = true;
 
     loadRegisteredFaces();
+    refreshCameraTotal();
     connectEventStream();
     startLivePolling();
 

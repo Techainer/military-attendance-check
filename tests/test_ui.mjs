@@ -299,6 +299,44 @@ const quanSo = doc.querySelector('#dt-schedule-tbody tr td:nth-child(9)');
 check('cột quân số chỉ hiện sĩ số chuẩn, không kèm dấu gạch chéo',
     !!quanSo && !quanSo.textContent.includes('/'), quanSo && quanSo.textContent.trim());
 
+console.log('\n[3d] Tài khoản ở góc trái dưới cùng');
+
+check('avatar nằm trong sidebar chứ không ở thanh trên',
+    !!doc.querySelector('.sidebar #sidebar-user'));
+check('thanh trên không còn khối tài khoản',
+    doc.querySelector('.top-header .user-badge') === null);
+check('bỏ pill Quân số trên thanh trên',
+    doc.getElementById('topbar-attendance-stat') === null);
+check('pill camera có id để cập nhật được',
+    !!doc.getElementById('topbar-camera-stat'));
+check('pill camera hiện dạng n/m trực tuyến',
+    /\d+\/\d+/.test((doc.getElementById('topbar-camera-stat') || {}).textContent || ''),
+    (doc.getElementById('topbar-camera-stat') || {}).textContent);
+
+const accMenu = doc.getElementById('account-menu');
+check('menu tài khoản mặc định đóng', !!accMenu && accMenu.style.display === 'none',
+    accMenu && accMenu.style.display);
+if (accMenu) {
+    window.toggleAccountMenu();
+    check('bấm avatar thì mở menu', accMenu.style.display === 'flex', accMenu.style.display);
+    check('menu có nút đăng xuất', accMenu.textContent.includes('Đăng xuất'), accMenu.textContent);
+    check('menu có nút đổi thông tin cá nhân',
+        accMenu.textContent.includes('Thông tin cá nhân'), accMenu.textContent);
+    window.toggleAccountMenu();
+    check('bấm lần nữa thì đóng menu', accMenu.style.display === 'none');
+
+    window.openAccountModal();
+    check('mở được hộp thông tin cá nhân',
+        doc.getElementById('account-modal').style.display === 'flex');
+    check('hộp điền sẵn tên hiển thị hiện tại',
+        doc.getElementById('acc-display-name').value.length > 0,
+        doc.getElementById('acc-display-name').value);
+    check('hộp có ô đổi mật khẩu',
+        !!doc.getElementById('acc-old-password') && !!doc.getElementById('acc-new-password'));
+    window.closeAccountModal();
+    check('đóng được hộp', doc.getElementById('account-modal').style.display === 'none');
+}
+
 console.log('\n[4] Dashboard an toàn');
 window.switchNavTab('safety');
 await sleep(1200);

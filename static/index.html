@@ -109,6 +109,26 @@
                     <span>Đăng ký khuôn mặt</span>
                 </a>
             </nav>
+
+            <!-- Tài khoản: góc trái dưới cùng, bấm vào mở menu -->
+            <div class="sidebar-footer">
+                <div id="account-menu" class="account-menu" style="display: none;">
+                    <button type="button" class="account-menu-item" onclick="openAccountModal()">
+                        👤 Thông tin cá nhân
+                    </button>
+                    <button type="button" class="account-menu-item account-menu-danger" onclick="handleLogout()">
+                        ⏻ Đăng xuất
+                    </button>
+                </div>
+                <button type="button" class="sidebar-user" id="sidebar-user" onclick="toggleAccountMenu()">
+                    <span class="avatar-letter" id="user-avatar">H</span>
+                    <span class="user-block">
+                        <span class="user-name" id="user-name">—</span>
+                        <span class="user-role" id="user-role">—</span>
+                    </span>
+                    <span class="account-caret">⌃</span>
+                </button>
+            </div>
         </aside>
 
         <!-- Main Content Area -->
@@ -125,11 +145,7 @@
                 <div class="header-badges">
                     <div class="status-pill pill-online">
                         <span class="pill-dot"></span>
-                        <span>Camera: 1/1 Trực tuyến</span>
-                    </div>
-                    <div class="status-pill pill-attendance">
-                        <span class="pill-icon">📈</span>
-                        <span id="topbar-attendance-stat">Quân số: 45/45</span>
+                        <span id="topbar-camera-stat">Camera: 0/0 trực tuyến</span>
                     </div>
                     <div class="status-pill pill-neutral">
                         <span class="pill-icon">💡</span>
@@ -147,14 +163,6 @@
                         🔔
                         <span class="noti-badge" id="header-noti-badge">0</span>
                     </button>
-                    <div class="user-badge">
-                        <div class="avatar-letter" id="user-avatar">H</div>
-                        <div class="user-block">
-                            <span class="user-name" id="user-name">—</span>
-                            <span class="user-role" id="user-role">—</span>
-                        </div>
-                    </div>
-                    <button class="logout-btn" onclick="handleLogout()" title="Đăng xuất">Đăng xuất</button>
                 </div>
             </header>
 
@@ -1285,6 +1293,42 @@
                     <span>Chạy camera này ngay sau khi gán nguồn</span>
                 </label>
             </div>
+        </div>
+    </div>
+
+    <!-- Thông tin cá nhân và đổi mật khẩu -->
+    <div id="account-modal" class="modal-backdrop" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Thông tin cá nhân</h3>
+                <button class="modal-close" onclick="closeAccountModal()">×</button>
+            </div>
+
+            <form id="account-profile-form" onsubmit="submitProfileForm(event)">
+                <div class="form-group">
+                    <label for="acc-display-name">Tên hiển thị</label>
+                    <input type="text" id="acc-display-name" class="form-input" required>
+                </div>
+                <p id="acc-profile-status" class="status-message"></p>
+                <button type="submit" class="btn-primary-green">Lưu tên hiển thị</button>
+            </form>
+
+            <hr style="margin: 20px 0; border: none; border-top: 1px solid var(--card-border);">
+
+            <form id="account-password-form" onsubmit="submitPasswordForm(event)">
+                <div class="form-group">
+                    <label for="acc-old-password">Mật khẩu hiện tại</label>
+                    <input type="password" id="acc-old-password" class="form-input"
+                           autocomplete="current-password" required>
+                </div>
+                <div class="form-group">
+                    <label for="acc-new-password">Mật khẩu mới (tối thiểu 8 ký tự)</label>
+                    <input type="password" id="acc-new-password" class="form-input"
+                           autocomplete="new-password" minlength="8" required>
+                </div>
+                <p id="acc-password-status" class="status-message"></p>
+                <button type="submit" class="btn-primary-green">Đổi mật khẩu</button>
+            </form>
         </div>
     </div>
 
