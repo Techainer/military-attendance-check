@@ -57,7 +57,13 @@ body {
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
-    position: relative;
+    /* Đứng yên khi cuộn trang: cao đúng một màn hình thay vì dài theo nội dung,
+       nên menu và avatar góc dưới luôn trong tầm mắt */
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    align-self: flex-start;
+    overflow-y: auto;
 }
 
 .brand-header {

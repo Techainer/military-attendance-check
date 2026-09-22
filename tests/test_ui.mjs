@@ -20,6 +20,7 @@ function check(name, cond, extra = '') {
 const root = new URL('..', import.meta.url).pathname;
 const html = readFileSync(root + 'static/index.html', 'utf8');
 const appJs = readFileSync(root + 'static/app.js', 'utf8');
+const styleCss = readFileSync(root + 'static/style.css', 'utf8');
 
 // jsdom không vẽ được canvas thật. Màn vẽ vùng dùng canvas nên luôn báo dòng
 // này; đó là giới hạn công cụ, không phải lỗi giao diện. Lỗi khác vẫn bắt.
@@ -1114,6 +1115,15 @@ check('chặn kéo-thả ảnh mặc định của trình duyệt (thứ cắt n
 
 zbox.dispatchEvent(new window.MouseEvent('dblclick', { bubbles: true }));
 check('bấm đúp đưa về vừa khung', tf() === 'translate(0px,0px)scale(1)', tf());
+
+console.log('\n[7f3] Sidebar đứng yên khi cuộn trang');
+
+// jsdom không tải stylesheet ngoài nên kiểm thẳng luật CSS của .sidebar
+const sidebarRule = (styleCss.match(/^\.sidebar\s*\{([^}]*)\}/m) || [, ''])[1];
+check('sidebar bám dính khi cuộn trang', /position:\s*sticky/.test(sidebarRule), sidebarRule.trim());
+check('sidebar neo ở mép trên', /top:\s*0/.test(sidebarRule), sidebarRule.trim());
+check('sidebar cao đúng một màn hình, không dài theo trang', /height:\s*100vh/.test(sidebarRule), sidebarRule.trim());
+check('menu dài hơn màn hình thì cuộn riêng trong sidebar', /overflow-y:\s*auto/.test(sidebarRule), sidebarRule.trim());
 
 console.log('\n[8] Màn vẽ vùng chịu được canvas không dùng được');
 check('không sập khi trình duyệt không cấp ngữ cảnh vẽ',
