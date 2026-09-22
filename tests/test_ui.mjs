@@ -935,7 +935,10 @@ if (sdDetailBtn) {
         doc.getElementById('sd-camera-box') && doc.getElementById('sd-camera-box').dataset.zoomable);
     check('bỏ nút Giám sát quân số', doc.getElementById('sd-btn-watch') === null);
     check('có bảng từng quân nhân trong ca', !!doc.getElementById('sd-attendance-tbody'));
-    check('có khu ảnh điểm danh do AI chụp', !!doc.getElementById('sd-evidence'));
+    check('bỏ khu ảnh điểm danh do AI chụp (bảng đối chiếu đã có bằng chứng)',
+        doc.getElementById('sd-evidence') === null);
+    check('bằng chứng vẫn còn ở cột BẰNG CHỨNG của bảng đối chiếu',
+        [...doc.querySelectorAll('#view-session-detail table th')].some(e => e.textContent.trim() === 'BẰNG CHỨNG'));
 }
 
 console.log('\n[7e2] Màn giám sát trực tiếp');

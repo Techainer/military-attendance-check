@@ -2535,7 +2535,6 @@ async function openSessionDetail(sessionId, scheduleId) {
         renderSessionChecks(checks, { state });
     }
 
-    renderSessionEvidence(checks);
     await loadSessionAttendance(sessionDetailId);
 }
 window.openSessionDetail = openSessionDetail;
@@ -2612,29 +2611,6 @@ function renderSessionChecks(checks, sch) {
         tbody.appendChild(tr);
     });
 }
-
-function renderSessionEvidence(checks) {
-    const box = document.getElementById('sd-evidence');
-    if (!box) return;
-    const withPhoto = checks.filter(c => c.evidence_url);
-    box.innerHTML = withPhoto.length ? '' :
-        '<p class="empty-hint">Chưa có ảnh điểm danh nào được chụp</p>';
-
-    withPhoto.forEach(c => {
-        box.insertAdjacentHTML('beforeend', `
-            <figure class="evidence-figure">
-                <img src="${c.evidence_url}" alt="Ảnh điểm danh ${esc(c.phase_label)}"
-                     onclick="openEvidence('${c.evidence_url}','Điểm danh ${esc(c.phase_label)} — ${c.present} có mặt')">
-                <figcaption>
-                    <strong>${esc(c.phase_label)}</strong> · ${esc(c.time || '')} · ${c.present} có mặt
-                    <a class="btn-download" href="${c.evidence_url}" download>⬇ Tải ảnh</a>
-                </figcaption>
-            </figure>`);
-    });
-}
-
-function backFromSessionDetail() { switchNavTab(sessionDetailFrom); }
-window.backFromSessionDetail = backFromSessionDetail;
 
 let sessionAttendanceData = { items: [], summary: {} };
 
