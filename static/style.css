@@ -2474,3 +2474,5 @@ a.btn-clip-ctrl {
 
 .icon-btn-edit { color: var(--primary-green); }
 .icon-btn-edit:hover { background: var(--primary-green-light); }
+
+.no-record { color: var(--warning-orange); font-weight: 600; }

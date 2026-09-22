@@ -1121,6 +1121,9 @@ async def v1_training_summary(training_type: Optional[str] = None,
                 "scheduled_minutes": log.get("scheduled_minutes", 0),
                 "progress_pct": log.get("progress_pct", 0.0),
                 "violation_count": violation_count,
+                # Ca đã qua mà không có biên bản: camera không chạy trong cửa sổ
+                # điểm danh. Giao diện cần biết để báo đúng, không nói "chưa diễn ra".
+                "has_record": bool(log),
                 **_time_progress(row, day, now),
             })
 

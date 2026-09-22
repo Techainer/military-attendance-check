@@ -2366,6 +2366,10 @@ async function getJson(url) {
 
 // ----------------- MÀN 1.1: LỊCH & TIẾN ĐỘ -----------------
 
+// Dòng lịch đang hiển thị, theo id. Màn chi tiết cần trạng thái của ĐÚNG NGÀY
+// được bấm; /schedules/{id} chỉ trả trạng thái của hôm nay.
+let trainingRowsById = {};
+
 async function loadTrainingSchedule() {
     const tbody = document.getElementById('dt-schedule-tbody');
     if (!tbody) return;
@@ -2393,7 +2397,9 @@ async function loadTrainingSchedule() {
         tbody.innerHTML = data.sessions.length ? '' :
             `<tr><td colspan="10" class="empty-row">Không có lịch huấn luyện nào khớp bộ lọc</td></tr>`;
 
+        trainingRowsById = {};
         data.sessions.forEach(s => {
+            trainingRowsById[s.id] = s;
             // Tiến độ ở đây là tiến độ theo đồng hồ: lớp đã học bao lâu trong
             // khung giờ của nó, còn bao lâu nữa thì tan. Không phải số phút
             // camera quan sát được.
@@ -2413,7 +2419,9 @@ async function loadTrainingSchedule() {
                 <td>${esc(s.unit || '—')}
                     ${s.instructor ? `<div class="cell-subtext">${esc(s.instructor)}</div>` : ''}</td>
                 <td class="font-mono">${esc(s.start_time || '--:--')} – ${esc(s.end_time || '--:--')}</td>
-                <td><span class="status-tag ${STATE_CLASS[s.state] || 'status-neutral'}">${esc(s.state_label)}</span></td>
+                <td><span class="status-tag ${STATE_CLASS[s.state] || 'status-neutral'}">${esc(s.state_label)}</span>
+                    ${s.state === 'finished' && !s.has_record
+                        ? '<div class="cell-subtext no-record">Không có biên bản</div>' : ''}</td>
                 <td>
                     <div class="progress-track"><div class="progress-fill" style="width:${prog}%"></div></div>
                     <span class="progress-text">${prog}% · ${conLai}</span>
@@ -2446,17 +2454,23 @@ async function openSessionDetail(sessionId, scheduleId) {
     } catch (e) {
         checks = [];
     }
+    const row = trainingRowsById[sessionId] || {};
     const phaseOf = (ph) => checks.find(c => c.phase === ph);
+    let state = row.state;
     const headcount = (ph) => {
         const c = phaseOf(ph);
-        return c ? `${c.present} có mặt · ${c.absent} vắng` : 'Chưa chốt';
+        if (c) return `${c.present} có mặt · ${c.absent} vắng`;
+        return state === 'finished' ? 'Không ghi nhận' : 'Chưa chốt';
     };
 
     try {
         const sch = await getJson(`/api/v1/schedules/${scheduleId}`);
+        state = row.state || sch.state;
+        const stateLabel = row.state_label || sch.state_label;
         document.getElementById('sd-title').textContent = (sch.name || '').toUpperCase();
         document.getElementById('sd-subtitle').textContent =
-            `${sch.shift || ''} · ${sch.start_time}–${sch.end_time} · ${sch.unit || 'Toàn đơn vị'}`;
+            [row.day, sch.shift, `${sch.start_time}–${sch.end_time}`, sch.unit || 'Toàn đơn vị']
+                .filter(Boolean).join(' · ');
 
         // Trường giáo viên / thao trường / bài học do hệ thống quản lý gửi kèm khi
         // tạo ca; service AI giữ nguyên và trả lại, ở đây chỉ hiển thị.
@@ -2470,18 +2484,19 @@ async function openSessionDetail(sessionId, scheduleId) {
             ['Sĩ số đầu buổi', headcount('start')],
             ['Sĩ số cuối buổi', headcount('end')],
             ['Sĩ số chuẩn', sch.required_count || '—'],
-            ['Trạng thái', sch.state_label]
+            ['Trạng thái', stateLabel]
         ];
         document.getElementById('sd-info').innerHTML = info.map(([k, v]) =>
             `<div class="detail-item"><span class="detail-key">${k}</span>
              <span class="detail-val">${esc(v || '—')}</span></div>`).join('');
 
-        attachSessionCamera(sch);
+        attachSessionCamera({ ...sch, state });
+        renderSessionChecks(checks, { ...sch, state });
     } catch (e) {
         document.getElementById('sd-subtitle').textContent = `Lỗi tải ca: ${e.message}`;
+        renderSessionChecks(checks, { state });
     }
 
-    renderSessionChecks(checks);
     renderSessionEvidence(checks);
     await loadSessionAttendance(sessionDetailId);
 }
@@ -2518,12 +2533,27 @@ function attachSessionCamera(sch) {
     });
 }
 
-function renderSessionChecks(checks) {
+// Bảng đối chiếu trống vì nhiều lý do khác nhau; nói "chưa diễn ra" cho một ca
+// đã kết thúc khiến người xem tưởng hệ thống lúc có lúc không.
+function emptyChecksMessage(sch) {
+    const win = sch.check_window_mins || 5;
+    if (sch.state === 'finished') {
+        const windows = sch.start_time && sch.end_time
+            ? ` đầu giờ (${sch.start_time}–${addMinutesToClock(sch.start_time, win)})`
+              + ` và cuối giờ (${addMinutesToClock(sch.end_time, -win)}–${sch.end_time})`
+            : '';
+        return `Ca đã kết thúc nhưng không có biên bản điểm danh — camera không chạy trong cửa sổ điểm danh${windows}.`;
+    }
+    if (sch.state === 'upcoming') return 'Ca chưa diễn ra.';
+    return 'Ca đang diễn ra, chưa tới mốc chốt điểm danh nào.';
+}
+
+function renderSessionChecks(checks, sch) {
     const tbody = document.getElementById('sd-checks-tbody');
     if (!tbody) return;
 
     tbody.innerHTML = checks.length ? '' :
-        `<tr><td colspan="6" class="empty-row">Buổi chưa diễn ra — cả hai mốc đều bằng 0</td></tr>`;
+        `<tr><td colspan="6" class="empty-row">${esc(emptyChecksMessage(sch || {}))}</td></tr>`;
 
     checks.forEach(c => {
         const names = c.absent_personnel || [];

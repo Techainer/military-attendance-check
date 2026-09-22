@@ -970,6 +970,46 @@ check('ảnh trong thẻ sự kiện bấm được để phóng to',
         && pendingCard.querySelector('img').getAttribute('onclick'));
 if (pendingCard) pendingCard.remove();
 
+console.log('\n[7g2] Ca đã kết thúc mà không có biên bản');
+
+window.switchNavTab('schedule-progress');
+await sleep(800);
+doc.getElementById('dt-date-from').value = '2020-01-06';
+doc.getElementById('dt-date-to').value = '2020-01-06';
+await window.loadTrainingSchedule();
+await sleep(300);
+
+const pastRow = doc.querySelector('#dt-schedule-tbody tr');
+check('dòng ca đã qua không có biên bản được đánh dấu ngay trong bảng',
+    !!pastRow && pastRow.textContent.includes('Không có biên bản'),
+    pastRow && pastRow.textContent.replace(/\s+/g, ' ').slice(0, 160));
+
+if (pastRow && pastRow.querySelector('button')) {
+    pastRow.querySelector('button').click();
+    await sleep(1400);
+    const emptyMsg = doc.getElementById('sd-checks-tbody').textContent;
+    check('không báo "chưa diễn ra" cho ca đã kết thúc', !emptyMsg.includes('chưa diễn ra'), emptyMsg);
+    check('báo rõ ca đã kết thúc nhưng không có biên bản',
+        emptyMsg.includes('không có biên bản'), emptyMsg);
+    check('nêu nguyên nhân: camera không chạy trong cửa sổ điểm danh',
+        emptyMsg.includes('camera không chạy'), emptyMsg);
+
+    const kv = {};
+    doc.querySelectorAll('#sd-info .detail-item').forEach(it => {
+        kv[it.querySelector('.detail-key').textContent.trim()] = it.querySelector('.detail-val').textContent.trim();
+    });
+    check('sĩ số đầu buổi ghi "Không ghi nhận" thay vì "Chưa chốt"',
+        kv['Sĩ số đầu buổi'] === 'Không ghi nhận', kv['Sĩ số đầu buổi']);
+    check('trạng thái là của ngày đó, không phải của hôm nay',
+        kv['Trạng thái'] === 'Đã kết thúc', kv['Trạng thái']);
+    check('ca của ngày cũ không gắn luồng camera trực tiếp',
+        !doc.getElementById('sd-stream').getAttribute('src'));
+}
+
+const todayIso = new Date().toISOString().slice(0, 10);
+doc.getElementById('dt-date-from').value = todayIso;
+doc.getElementById('dt-date-to').value = todayIso;
+
 console.log('\n[7f] Hộp xem ảnh phóng to dùng chung');
 
 check('có hàm mở ảnh bằng chứng', typeof window.openEvidence === 'function');
