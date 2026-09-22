@@ -1858,18 +1858,19 @@ function renderEvidenceCell(check, log, phaseLabel) {
         + ` onclick="openEvidenceModal('${check.evidence}', '${phaseLabel}', '${caption.replace(/'/g, "\\'")}')">`;
 }
 
+// Tên quân nhân xếp hàng dọc, mỗi người một gạch đầu dòng: đọc nhanh hơn một
+// chuỗi dài nối bằng dấu phẩy, nhất là khi vắng nhiều người
+function absentNameList(names) {
+    return `<ul class="absent-name-list">${(names || []).map(n => `<li>${esc(n)}</li>`).join('')}</ul>`;
+}
+
 function renderAbsentList(log) {
-    const startCheck = getCheck(log, 'start');
-    const endCheck = getCheck(log, 'end');
-    const parts = [];
-    if (startCheck && (startCheck.absent_personnel || []).length > 0) {
-        parts.push(`<div><span class="phase-tag">Đầu giờ</span> ${startCheck.absent_personnel.join(', ')}</div>`);
-    }
-    if (endCheck && (endCheck.absent_personnel || []).length > 0) {
-        parts.push(`<div><span class="phase-tag">Cuối giờ</span> ${endCheck.absent_personnel.join(', ')}</div>`);
-    }
+    const parts = [['start', 'Đầu giờ'], ['end', 'Cuối giờ']]
+        .map(([phase, label]) => [label, (getCheck(log, phase) || {}).absent_personnel || []])
+        .filter(([, names]) => names.length)
+        .map(([label, names]) => `<div><span class="phase-tag">${label}</span>${absentNameList(names)}</div>`);
     if (parts.length === 0) return '<span style="color: #64748b;">-</span>';
-    return `<span style="color: #d97706; font-weight: 500;">${parts.join('')}</span>`;
+    return parts.join('');
 }
 
 function renderAttendanceLogsTable(logs) {
@@ -1953,10 +1954,12 @@ function openLogModal(logId) {
                 <td class="font-mono">${esc(c.time || '—')}</td>
                 <td class="text-green"><strong>${c.present}</strong></td>
                 <td class="${c.absent > 0 ? 'text-amber' : ''}">${c.absent}</td>
+                <td>${(c.absent_personnel || []).length
+                    ? absentNameList(c.absent_personnel) : '<span class="muted">Không vắng ai</span>'}</td>
                 <td>${c.scans != null ? c.scans : '—'}</td>
             </tr>`;
         }).join('')
-        : '<tr><td colspan="5" class="empty-row">Buổi chưa diễn ra — cả hai mốc đều bằng 0</td></tr>';
+        : '<tr><td colspan="6" class="empty-row">Biên bản chưa có mốc điểm danh nào</td></tr>';
 
     const photos = rows.filter(ph => checks[ph].evidence);
     document.getElementById('log-modal-evidence').innerHTML = photos.length
@@ -1991,7 +1994,7 @@ function openLogModal(logId) {
                  </tr>`;
              }).join('')}</tbody></table></div>`
         : (log.absent_personnel || []).length
-            ? `<p class="muted">Danh sách vắng: ${esc((log.absent_personnel || []).join(', '))}</p>`
+            ? `<p class="muted">Danh sách vắng:</p>${absentNameList(log.absent_personnel)}`
             : '<p class="empty-hint">Không có vi phạm giờ giấc trong ca này</p>';
 
     document.getElementById('log-modal').style.display = 'flex';
@@ -2601,7 +2604,7 @@ function renderSessionChecks(checks, sch) {
             <td class="text-green"><strong>${c.present}</strong></td>
             <td class="${c.absent > 0 ? 'text-amber' : ''}">${c.absent}</td>
             <td>${names.length
-                ? `<ul class="absent-name-list">${names.map(n => `<li>${esc(n)}</li>`).join('')}</ul>`
+                ? absentNameList(names)
                 : '<span class="muted">Không vắng ai</span>'}</td>
             <td>${c.evidence_url
                 ? `<img class="evidence-thumb" src="${c.evidence_url}"

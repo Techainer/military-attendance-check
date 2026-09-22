@@ -883,6 +883,35 @@ if (logDetailBtn) {
 
 check('đã bỏ hộp ảnh bằng chứng cũ', doc.getElementById('evidence-modal') === null);
 
+console.log('\n[7d4] Nhật ký: danh sách quân nhân dạng gạch đầu dòng');
+
+window.switchNavTab('logs');
+await sleep(1000);
+const namedRow = [...doc.querySelectorAll('#attendance-logs-tbody tr')]
+    .find(tr => (tr.querySelector('td:nth-child(10)') || {}).textContent
+                && tr.querySelector('td:nth-child(10)').textContent.trim() !== '-');
+if (namedRow) {
+    const cell = namedRow.querySelector('td:nth-child(10)');
+    check('cột quân nhân vắng liệt kê hàng dọc theo gạch đầu dòng',
+        cell.querySelectorAll('ul.absent-name-list li').length >= 2, cell.innerHTML.slice(0, 160));
+    check('không còn nối tên bằng dấu phẩy', !cell.textContent.includes(','), cell.textContent.trim());
+    check('vẫn tách riêng mốc đầu giờ và cuối giờ',
+        cell.textContent.includes('Đầu giờ') && cell.textContent.includes('Cuối giờ'), cell.textContent.trim());
+
+    namedRow.querySelector('td:last-child button').click();
+    await sleep(500);
+    const modalTh = [...doc.querySelectorAll('#log-modal-checks')].length
+        ? [...doc.getElementById('log-modal-checks').closest('table').querySelectorAll('th')].map(e => e.textContent.trim())
+        : [];
+    check('bảng đối chiếu trong hộp chi tiết có cột QUÂN NHÂN VẮNG',
+        modalTh.includes('QUÂN NHÂN VẮNG'), modalTh.join(' | '));
+    check('tên vắng trong hộp chi tiết cũng dạng gạch đầu dòng',
+        doc.querySelectorAll('#log-modal-checks ul.absent-name-list li').length >= 2);
+    window.closeLogModal();
+} else {
+    console.log('  BỎ QUA  chưa có biên bản nào có quân nhân vắng');
+}
+
 console.log('\n[7e] Lịch & Tiến độ hiển thị đủ như màn cấu hình');
 window.switchNavTab('schedule-progress');
 await sleep(1200);
