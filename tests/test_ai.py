@@ -238,6 +238,83 @@ check("đoạn clip chỉ chứa khung của đúng camera",
       latest_event_clips["clip_x"] == ["khung-cua-X"],
       str(latest_event_clips.get("clip_x")))
 
+# ------------------------------------------------------ ca qua đêm
+print("\n[9] Ca qua đêm: mốc đầu và mốc cuối về chung một biên bản")
+
+from app.attendance import AttendanceManager
+
+
+class _KhongCoQuanNhan:
+    """Face engine giả: không cần mô hình thật để kiểm việc ghép biên bản."""
+    registered_faces = []
+
+    def get_registered_faces(self, unit=None, **kwargs):
+        return []
+
+
+def _ca_dem_dir(logs=None):
+    d = Path(tempfile.mkdtemp())
+    (d / "schedules.json").write_text(json.dumps([{
+        "id": "sch_dem", "name": "Ca đêm - Tuần tra", "start_time": "21:00",
+        "end_time": "05:00", "unit": "Tiểu đoàn 3", "shift": "Ca đêm",
+        "check_window_mins": 5, "required_count": 12,
+    }], ensure_ascii=False), encoding="utf-8")
+    (d / "attendance_logs.json").write_text(
+        json.dumps(logs or [], ensure_ascii=False), encoding="utf-8")
+    return d
+
+
+def _chay_moc(mgr, mo_luc, chot_luc):
+    """Mở phiên đúng cửa sổ rồi chốt khi hết cửa sổ, như vòng xử lý thật."""
+    session = mgr.maybe_open_scheduled(mo_luc)
+    if session is None:
+        return None
+    return mgr.close_if_due(chot_luc)
+
+
+def _bien_ban(d):
+    return [l for l in json.loads((d / "attendance_logs.json").read_text(encoding="utf-8"))
+            if l.get("schedule_id") == "sch_dem"]
+
+
+d = _ca_dem_dir()
+mgr = AttendanceManager(data_dir=str(d), face_engine=_KhongCoQuanNhan(), camera_id=None)
+_chay_moc(mgr, datetime(2026, 9, 21, 21, 0, 30), datetime(2026, 9, 21, 21, 5, 0))
+_chay_moc(mgr, datetime(2026, 9, 22, 4, 55, 30), datetime(2026, 9, 22, 5, 0, 0))
+
+logs = _bien_ban(d)
+check("đêm 21/09 chỉ sinh đúng một biên bản", len(logs) == 1,
+      str([(l.get("date_iso"), list(l.get("checks", {}))) for l in logs]))
+check("mốc cuối giờ 05:00 sáng 22/09 về chung biên bản đêm 21/09",
+      len(logs) == 1 and set(logs[0].get("checks", {})) == {"start", "end"},
+      str([list(l.get("checks", {})) for l in logs]))
+check("biên bản mang ngày ca bắt đầu, không phải ngày chốt mốc",
+      len(logs) == 1 and logs[0].get("date_iso") == "2026-09-21",
+      str([l.get("date_iso") for l in logs]))
+
+# Khởi động lại máy chủ giữa chừng: không được chạy lại mốc đã chốt, cũng không
+# được bỏ qua mốc của đêm sau
+mgr2 = AttendanceManager(data_dir=str(d), face_engine=_KhongCoQuanNhan(), camera_id=None)
+check("khởi động lại thì mốc cuối đêm 21/09 không bị chạy lại",
+      mgr2.maybe_open_scheduled(datetime(2026, 9, 22, 4, 56, 0)) is None)
+mgr2.cancel_session()
+check("khởi động lại vẫn mở mốc đầu giờ của đêm 22/09",
+      mgr2.maybe_open_scheduled(datetime(2026, 9, 22, 21, 0, 30)) is not None)
+mgr2.cancel_session()
+
+# Biên bản cũ (trước bản sửa) để mốc cuối đêm 21 nằm trong biên bản ngày 22.
+# Đọc nhầm nó là "cuối giờ đêm 22 đã xong" thì sáng 23/09 sẽ bỏ qua mốc cuối.
+d_cu = _ca_dem_dir(logs=[{
+    "id": "log_cu", "schedule_id": "sch_dem", "date": "22/09/2026", "date_iso": "2026-09-22",
+    "shift": "Ca đêm", "schedule_name": "Ca đêm - Tuần tra", "unit": "Tiểu đoàn 3",
+    "required": 12,
+    "checks": {"end": {"phase": "end", "time": "05:00", "present": 0, "absent": 0}},
+}])
+mgr3 = AttendanceManager(data_dir=str(d_cu), face_engine=_KhongCoQuanNhan(), camera_id=None)
+check("biên bản cũ chưa vá không làm bỏ qua mốc cuối của đêm kế tiếp",
+      mgr3.maybe_open_scheduled(datetime(2026, 9, 23, 4, 55, 30)) is not None)
+mgr3.cancel_session()
+
 # ---------------------------------------------------------------- kết luận
 print()
 if failures:
