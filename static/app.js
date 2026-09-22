@@ -2041,46 +2041,84 @@ function makeZoomable(container) {
     container.appendChild(btn);
 
     let scale = 1, x = 0, y = 0, drag = null;
+    const img = () => container.querySelector('img');
+
+    // Giữ ảnh trong khung: phóng to hơn khung thì không cho kéo lộ khoảng trống,
+    // nhỏ hơn khung thì căn giữa. Không có cái này thì kéo quá tay là mất ảnh.
+    const clamp = () => {
+        const el = img();
+        if (!el) return;
+        const cw = container.clientWidth, ch = container.clientHeight;
+        const w = el.offsetWidth * scale, h = el.offsetHeight * scale;
+        const ox = el.offsetLeft, oy = el.offsetTop;
+        x = w >= cw ? Math.min(-ox, Math.max(cw - ox - w, x)) : (cw - w) / 2 - ox;
+        y = h >= ch ? Math.min(-oy, Math.max(ch - oy - h, y)) : (ch - h) / 2 - oy;
+    };
 
     const apply = () => {
-        const img = container.querySelector('img');
-        if (img) img.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+        const el = img();
+        if (el) {
+            el.draggable = false;
+            // Gốc biến đổi ở góc trên-trái để tự tính điểm neo theo con trỏ
+            el.style.transformOrigin = '0 0';
+            el.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+        }
         container.classList.toggle('is-zoomed', scale > 1);
         const label = container.querySelector('.zoom-level')
             || document.getElementById(container.dataset.zoomLevelId || '');
         if (label) label.textContent = `${Math.round(scale * 100)}%`;
     };
 
-    const zoomBy = (delta) => {
-        scale = Math.min(6, Math.max(1, Math.round((scale + delta) * 100) / 100));
+    // Phóng quanh điểm (mx, my) tính trong khung: điểm ảnh đang nằm dưới con trỏ
+    // vẫn nằm dưới con trỏ sau khi phóng, thay vì luôn phóng vào giữa khung.
+    const zoomAt = (delta, mx, my) => {
+        const next = Math.min(6, Math.max(1, Math.round((scale + delta) * 100) / 100));
+        if (next === scale) return;
+        const el = img();
+        const ox = el ? el.offsetLeft : 0, oy = el ? el.offsetTop : 0;
+        x = mx - ox - (mx - ox - x) * next / scale;
+        y = my - oy - (my - oy - y) * next / scale;
+        scale = next;
         if (scale === 1) { x = 0; y = 0; }
+        clamp();
         apply();
     };
+
+    const zoomBy = (delta) => zoomAt(delta, container.clientWidth / 2, container.clientHeight / 2);
 
     const reset = () => { scale = 1; x = 0; y = 0; apply(); };
 
     container.addEventListener('wheel', (e) => {
         e.preventDefault();
-        zoomBy(e.deltaY < 0 ? 0.25 : -0.25);
+        const r = container.getBoundingClientRect();
+        zoomAt(e.deltaY < 0 ? 0.25 : -0.25, e.clientX - r.left, e.clientY - r.top);
     }, { passive: false });
 
+    // Trình duyệt tự bắt đầu kéo-thả khi nhấn giữ trên ảnh, cắt ngang thao tác kéo
+    container.addEventListener('dragstart', (e) => e.preventDefault());
+
     container.addEventListener('pointerdown', (e) => {
-        if (scale === 1) return;
+        if (scale === 1 || (e.target.closest && e.target.closest('button'))) return;
+        e.preventDefault();
         drag = { sx: e.clientX - x, sy: e.clientY - y };
         container.classList.add('is-panning');
-        if (container.setPointerCapture) container.setPointerCapture(e.pointerId);
+        if (container.setPointerCapture && e.pointerId !== undefined) container.setPointerCapture(e.pointerId);
     });
     container.addEventListener('pointermove', (e) => {
         if (!drag) return;
         x = e.clientX - drag.sx;
         y = e.clientY - drag.sy;
+        clamp();
         apply();
     });
     const endDrag = (e) => {
         if (!drag) return;
         drag = null;
         container.classList.remove('is-panning');
-        if (container.releasePointerCapture) container.releasePointerCapture(e.pointerId);
+        if (container.releasePointerCapture && e.pointerId !== undefined
+            && container.hasPointerCapture && container.hasPointerCapture(e.pointerId)) {
+            container.releasePointerCapture(e.pointerId);
+        }
     };
     container.addEventListener('pointerup', endDrag);
     container.addEventListener('pointercancel', endDrag);

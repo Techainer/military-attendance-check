@@ -1080,6 +1080,41 @@ if (schRow && !schRow.querySelector('.empty-row')) {
     }
 }
 
+console.log('\n[7f2] Zoom tại vị trí chuột và kéo để xem vùng khác');
+
+// jsdom không dựng layout: gán kích thước giả cho khung 400x300 và ảnh lấp đầy khung
+const zbox = doc.createElement('div');
+const zimg = doc.createElement('img');
+zbox.appendChild(zimg);
+doc.body.appendChild(zbox);
+const def = (el, k, v) => Object.defineProperty(el, k, { configurable: true, get: () => v });
+def(zbox, 'clientWidth', 400); def(zbox, 'clientHeight', 300);
+zbox.getBoundingClientRect = () => ({ left: 0, top: 0, right: 400, bottom: 300, width: 400, height: 300 });
+def(zimg, 'offsetLeft', 0); def(zimg, 'offsetTop', 0);
+def(zimg, 'offsetWidth', 400); def(zimg, 'offsetHeight', 300);
+window.makeZoomable(zbox);
+
+const tf = () => zimg.style.transform.replace(/\s+/g, '');
+zbox.dispatchEvent(new window.WheelEvent('wheel', { deltaY: -100, clientX: 100, clientY: 75, bubbles: true, cancelable: true }));
+check('lăn chuột zoom quanh đúng điểm con trỏ, không phải giữa khung',
+    tf() === 'translate(-25px,-18.75px)scale(1.25)', tf());
+
+const ptr = (type, x, y) => zbox.dispatchEvent(
+    new window.MouseEvent(type, { clientX: x, clientY: y, bubbles: true, cancelable: true }));
+ptr('pointerdown', 200, 150); ptr('pointermove', 220, 160); ptr('pointerup', 220, 160);
+check('kéo khi đang zoom thì di chuyển vùng xem', tf() === 'translate(-5px,-8.75px)scale(1.25)', tf());
+
+ptr('pointerdown', 200, 150); ptr('pointermove', 1200, 1150); ptr('pointerup', 1200, 1150);
+check('kéo quá tay thì ảnh không trôi ra khỏi khung', tf() === 'translate(0px,0px)scale(1.25)', tf());
+
+const drag = new window.Event('dragstart', { bubbles: true, cancelable: true });
+zimg.dispatchEvent(drag);
+check('chặn kéo-thả ảnh mặc định của trình duyệt (thứ cắt ngang thao tác kéo)',
+    drag.defaultPrevented && zimg.draggable === false);
+
+zbox.dispatchEvent(new window.MouseEvent('dblclick', { bubbles: true }));
+check('bấm đúp đưa về vừa khung', tf() === 'translate(0px,0px)scale(1)', tf());
+
 console.log('\n[8] Màn vẽ vùng chịu được canvas không dùng được');
 check('không sập khi trình duyệt không cấp ngữ cảnh vẽ',
     appJs.includes("if (!ctx) return;"));
