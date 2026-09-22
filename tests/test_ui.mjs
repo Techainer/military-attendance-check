@@ -282,19 +282,11 @@ check('có bộ lọc theo ca', !!doc.getElementById('dt-filter-shift'));
 check('có bộ lọc theo trạng thái', !!doc.getElementById('dt-filter-state'));
 check('có thanh tìm kiếm', !!doc.getElementById('dt-schedule-search'));
 
-const addBtn = doc.getElementById('dt-btn-add');
-check('nút thêm ca huấn luyện thuộc nhóm chỉ quản trị mới thấy',
-    !!addBtn && addBtn.classList.contains('role-only') && addBtn.dataset.role === 'qtht');
-
-if (addBtn) {
-    window.applyRole(cbqhUser);
-    await sleep(200);
-    check('CBQH không thấy nút thêm ca huấn luyện', addBtn.style.display === 'none',
-        addBtn.style.display);
-    window.applyRole(qtht);
-    await sleep(200);
-    check('QTHT thấy nút thêm ca huấn luyện', addBtn.style.display !== 'none');
-}
+check('Lịch & Tiến độ không còn nút thêm ca huấn luyện, kể cả với quản trị',
+    doc.getElementById('dt-btn-add') === null
+    && !doc.getElementById('view-schedule-progress').textContent.includes('Thêm ca huấn luyện'));
+check('thêm ca huấn luyện chỉ còn ở Cấu hình thời khoá biểu',
+    doc.getElementById('view-schedule').textContent.includes('Thêm ca huấn luyện'));
 
 const quanSo = doc.querySelector('#dt-schedule-tbody tr td:nth-child(9)');
 check('cột quân số chỉ hiện sĩ số chuẩn, không kèm dấu gạch chéo',
