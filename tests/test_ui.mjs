@@ -20,6 +20,7 @@ function check(name, cond, extra = '') {
 const root = new URL('..', import.meta.url).pathname;
 const html = readFileSync(root + 'static/index.html', 'utf8');
 const appJs = readFileSync(root + 'static/app.js', 'utf8');
+const styleCss = readFileSync(root + 'static/style.css', 'utf8');
 
 // jsdom không vẽ được canvas thật. Màn vẽ vùng dùng canvas nên luôn báo dòng
 // này; đó là giới hạn công cụ, không phải lỗi giao diện. Lỗi khác vẫn bắt.
@@ -281,19 +282,11 @@ check('có bộ lọc theo ca', !!doc.getElementById('dt-filter-shift'));
 check('có bộ lọc theo trạng thái', !!doc.getElementById('dt-filter-state'));
 check('có thanh tìm kiếm', !!doc.getElementById('dt-schedule-search'));
 
-const addBtn = doc.getElementById('dt-btn-add');
-check('nút thêm ca huấn luyện thuộc nhóm chỉ quản trị mới thấy',
-    !!addBtn && addBtn.classList.contains('role-only') && addBtn.dataset.role === 'qtht');
-
-if (addBtn) {
-    window.applyRole(cbqhUser);
-    await sleep(200);
-    check('CBQH không thấy nút thêm ca huấn luyện', addBtn.style.display === 'none',
-        addBtn.style.display);
-    window.applyRole(qtht);
-    await sleep(200);
-    check('QTHT thấy nút thêm ca huấn luyện', addBtn.style.display !== 'none');
-}
+check('Lịch & Tiến độ không còn nút thêm ca huấn luyện, kể cả với quản trị',
+    doc.getElementById('dt-btn-add') === null
+    && !doc.getElementById('view-schedule-progress').textContent.includes('Thêm ca huấn luyện'));
+check('thêm ca huấn luyện chỉ còn ở Cấu hình thời khoá biểu',
+    doc.getElementById('view-schedule').textContent.includes('Thêm ca huấn luyện'));
 
 const quanSo = doc.querySelector('#dt-schedule-tbody tr td:nth-child(9)');
 check('cột quân số chỉ hiện sĩ số chuẩn, không kèm dấu gạch chéo',
@@ -882,6 +875,35 @@ if (logDetailBtn) {
 
 check('đã bỏ hộp ảnh bằng chứng cũ', doc.getElementById('evidence-modal') === null);
 
+console.log('\n[7d4] Nhật ký: danh sách quân nhân dạng gạch đầu dòng');
+
+window.switchNavTab('logs');
+await sleep(1000);
+const namedRow = [...doc.querySelectorAll('#attendance-logs-tbody tr')]
+    .find(tr => (tr.querySelector('td:nth-child(10)') || {}).textContent
+                && tr.querySelector('td:nth-child(10)').textContent.trim() !== '-');
+if (namedRow) {
+    const cell = namedRow.querySelector('td:nth-child(10)');
+    check('cột quân nhân vắng liệt kê hàng dọc theo gạch đầu dòng',
+        cell.querySelectorAll('ul.absent-name-list li').length >= 2, cell.innerHTML.slice(0, 160));
+    check('không còn nối tên bằng dấu phẩy', !cell.textContent.includes(','), cell.textContent.trim());
+    check('vẫn tách riêng mốc đầu giờ và cuối giờ',
+        cell.textContent.includes('Đầu giờ') && cell.textContent.includes('Cuối giờ'), cell.textContent.trim());
+
+    namedRow.querySelector('td:last-child button').click();
+    await sleep(500);
+    const modalTh = [...doc.querySelectorAll('#log-modal-checks')].length
+        ? [...doc.getElementById('log-modal-checks').closest('table').querySelectorAll('th')].map(e => e.textContent.trim())
+        : [];
+    check('bảng đối chiếu trong hộp chi tiết có cột QUÂN NHÂN VẮNG',
+        modalTh.includes('QUÂN NHÂN VẮNG'), modalTh.join(' | '));
+    check('tên vắng trong hộp chi tiết cũng dạng gạch đầu dòng',
+        doc.querySelectorAll('#log-modal-checks ul.absent-name-list li').length >= 2);
+    window.closeLogModal();
+} else {
+    console.log('  BỎ QUA  chưa có biên bản nào có quân nhân vắng');
+}
+
 console.log('\n[7e] Lịch & Tiến độ hiển thị đủ như màn cấu hình');
 window.switchNavTab('schedule-progress');
 await sleep(1200);
@@ -934,7 +956,10 @@ if (sdDetailBtn) {
         doc.getElementById('sd-camera-box') && doc.getElementById('sd-camera-box').dataset.zoomable);
     check('bỏ nút Giám sát quân số', doc.getElementById('sd-btn-watch') === null);
     check('có bảng từng quân nhân trong ca', !!doc.getElementById('sd-attendance-tbody'));
-    check('có khu ảnh điểm danh do AI chụp', !!doc.getElementById('sd-evidence'));
+    check('bỏ khu ảnh điểm danh do AI chụp (bảng đối chiếu đã có bằng chứng)',
+        doc.getElementById('sd-evidence') === null);
+    check('bằng chứng vẫn còn ở cột BẰNG CHỨNG của bảng đối chiếu',
+        [...doc.querySelectorAll('#view-session-detail table th')].some(e => e.textContent.trim() === 'BẰNG CHỨNG'));
 }
 
 console.log('\n[7e2] Màn giám sát trực tiếp');
@@ -969,6 +994,46 @@ check('ảnh trong thẻ sự kiện bấm được để phóng to',
     pendingCard && pendingCard.querySelector('img')
         && pendingCard.querySelector('img').getAttribute('onclick'));
 if (pendingCard) pendingCard.remove();
+
+console.log('\n[7g2] Ca đã kết thúc mà không có biên bản');
+
+window.switchNavTab('schedule-progress');
+await sleep(800);
+doc.getElementById('dt-date-from').value = '2020-01-06';
+doc.getElementById('dt-date-to').value = '2020-01-06';
+await window.loadTrainingSchedule();
+await sleep(300);
+
+const pastRow = doc.querySelector('#dt-schedule-tbody tr');
+check('dòng ca đã qua không có biên bản được đánh dấu ngay trong bảng',
+    !!pastRow && pastRow.textContent.includes('Không có biên bản'),
+    pastRow && pastRow.textContent.replace(/\s+/g, ' ').slice(0, 160));
+
+if (pastRow && pastRow.querySelector('button')) {
+    pastRow.querySelector('button').click();
+    await sleep(1400);
+    const emptyMsg = doc.getElementById('sd-checks-tbody').textContent;
+    check('không báo "chưa diễn ra" cho ca đã kết thúc', !emptyMsg.includes('chưa diễn ra'), emptyMsg);
+    check('báo rõ ca đã kết thúc nhưng không có biên bản',
+        emptyMsg.includes('không có biên bản'), emptyMsg);
+    check('nêu nguyên nhân: camera không chạy trong cửa sổ điểm danh',
+        emptyMsg.includes('camera không chạy'), emptyMsg);
+
+    const kv = {};
+    doc.querySelectorAll('#sd-info .detail-item').forEach(it => {
+        kv[it.querySelector('.detail-key').textContent.trim()] = it.querySelector('.detail-val').textContent.trim();
+    });
+    check('sĩ số đầu buổi ghi "Không ghi nhận" thay vì "Chưa chốt"',
+        kv['Sĩ số đầu buổi'] === 'Không ghi nhận', kv['Sĩ số đầu buổi']);
+    check('trạng thái là của ngày đó, không phải của hôm nay',
+        kv['Trạng thái'] === 'Đã kết thúc', kv['Trạng thái']);
+    check('ca của ngày cũ không gắn luồng camera trực tiếp',
+        !doc.getElementById('sd-stream').getAttribute('src'));
+}
+
+const todayIso = new Date().toISOString().slice(0, 10);
+doc.getElementById('dt-date-from').value = todayIso;
+doc.getElementById('dt-date-to').value = todayIso;
 
 console.log('\n[7f] Hộp xem ảnh phóng to dùng chung');
 
@@ -1039,6 +1104,50 @@ if (schRow && !schRow.querySelector('.empty-row')) {
         window.closeScheduleModal();
     }
 }
+
+console.log('\n[7f2] Zoom tại vị trí chuột và kéo để xem vùng khác');
+
+// jsdom không dựng layout: gán kích thước giả cho khung 400x300 và ảnh lấp đầy khung
+const zbox = doc.createElement('div');
+const zimg = doc.createElement('img');
+zbox.appendChild(zimg);
+doc.body.appendChild(zbox);
+const def = (el, k, v) => Object.defineProperty(el, k, { configurable: true, get: () => v });
+def(zbox, 'clientWidth', 400); def(zbox, 'clientHeight', 300);
+zbox.getBoundingClientRect = () => ({ left: 0, top: 0, right: 400, bottom: 300, width: 400, height: 300 });
+def(zimg, 'offsetLeft', 0); def(zimg, 'offsetTop', 0);
+def(zimg, 'offsetWidth', 400); def(zimg, 'offsetHeight', 300);
+window.makeZoomable(zbox);
+
+const tf = () => zimg.style.transform.replace(/\s+/g, '');
+zbox.dispatchEvent(new window.WheelEvent('wheel', { deltaY: -100, clientX: 100, clientY: 75, bubbles: true, cancelable: true }));
+check('lăn chuột zoom quanh đúng điểm con trỏ, không phải giữa khung',
+    tf() === 'translate(-25px,-18.75px)scale(1.25)', tf());
+
+const ptr = (type, x, y) => zbox.dispatchEvent(
+    new window.MouseEvent(type, { clientX: x, clientY: y, bubbles: true, cancelable: true }));
+ptr('pointerdown', 200, 150); ptr('pointermove', 220, 160); ptr('pointerup', 220, 160);
+check('kéo khi đang zoom thì di chuyển vùng xem', tf() === 'translate(-5px,-8.75px)scale(1.25)', tf());
+
+ptr('pointerdown', 200, 150); ptr('pointermove', 1200, 1150); ptr('pointerup', 1200, 1150);
+check('kéo quá tay thì ảnh không trôi ra khỏi khung', tf() === 'translate(0px,0px)scale(1.25)', tf());
+
+const drag = new window.Event('dragstart', { bubbles: true, cancelable: true });
+zimg.dispatchEvent(drag);
+check('chặn kéo-thả ảnh mặc định của trình duyệt (thứ cắt ngang thao tác kéo)',
+    drag.defaultPrevented && zimg.draggable === false);
+
+zbox.dispatchEvent(new window.MouseEvent('dblclick', { bubbles: true }));
+check('bấm đúp đưa về vừa khung', tf() === 'translate(0px,0px)scale(1)', tf());
+
+console.log('\n[7f3] Sidebar đứng yên khi cuộn trang');
+
+// jsdom không tải stylesheet ngoài nên kiểm thẳng luật CSS của .sidebar
+const sidebarRule = (styleCss.match(/^\.sidebar\s*\{([^}]*)\}/m) || [, ''])[1];
+check('sidebar bám dính khi cuộn trang', /position:\s*sticky/.test(sidebarRule), sidebarRule.trim());
+check('sidebar neo ở mép trên', /top:\s*0/.test(sidebarRule), sidebarRule.trim());
+check('sidebar cao đúng một màn hình, không dài theo trang', /height:\s*100vh/.test(sidebarRule), sidebarRule.trim());
+check('menu dài hơn màn hình thì cuộn riêng trong sidebar', /overflow-y:\s*auto/.test(sidebarRule), sidebarRule.trim());
 
 console.log('\n[8] Màn vẽ vùng chịu được canvas không dùng được');
 check('không sập khi trình duyệt không cấp ngữ cảnh vẽ',

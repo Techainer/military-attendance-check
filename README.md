@@ -34,6 +34,7 @@ giao diện. Xem `docs/api/README.md` để biết endpoint nào đã chạy đ�
 python tests/test_ai.py           # vi phạm giờ giấc, xâm nhập, kho sự kiện
 python tests/test_api.py          # sự kiện, kết quả điểm danh, kênh SSE
 python tests/test_auth_api.py     # đăng nhập, đổi mật khẩu, thông tin cá nhân
+python tests/test_fix_overnight.py # script vá biên bản ca đêm
 python tests/test_zones_stream.py # vùng giám sát, luồng MJPEG
 python tests/test_config_api.py   # camera, thời khoá biểu, đối chiếu hợp đồng
 python tests/test_smoke_routes.py # gọi thử MỌI route, bắt lỗi chỉ lộ lúc chạy
@@ -62,6 +63,35 @@ giao diện: bấm vào avatar ở góc trái dưới cùng → Thông tin cá n
 **Đây không phải bảo mật thật.** Không có phiên, không có token, và các endpoint
 khác không kiểm quyền — gọi thẳng API vẫn làm được mọi thứ. Vai trò chỉ để giao
 diện hiện đúng menu.
+
+## Luồng xem trực tiếp qua mạng chậm
+
+Luồng MJPEG gửi bản **thu nhỏ** để xem mượt qua tunnel; ảnh chụp, ảnh bằng chứng
+điểm danh và ảnh vi phạm vẫn giữ bản gốc full HD.
+
+| Biến môi trường | Mặc định | Ý nghĩa |
+|---|---|---|
+| `STREAM_MAX_WIDTH` | `960` | Bề ngang tối đa của luồng (px). `0` = không thu nhỏ |
+| `STREAM_JPEG_QUALITY` | `65` | Chất lượng JPEG của luồng |
+
+Đo trên máy triển khai: khung full HD 318 KB, qua tunnel ~150 KB/s chỉ đạt
+~0.6 fps. Bản 960×540 còn ~60 KB/khung, qua cùng tunnel ~2.5 fps.
+
+## Vá biên bản ca đêm (chạy một lần khi cập nhật)
+
+Bản cũ ghi mốc cuối giờ của ca đêm (VD 21:00 → 05:00) vào biên bản **ngày hôm
+sau**, nên dòng đối chiếu ghép đầu giờ đêm này với cuối giờ đêm trước. Bản mới đã
+ghi đúng; dữ liệu cũ thì vá bằng:
+
+```bash
+python scripts/fix_overnight_logs.py            # chạy thử, chỉ in báo cáo
+# dừng máy chủ, rồi:
+python scripts/fix_overnight_logs.py --apply    # ghi thật, tự sao lưu attendance_logs.json
+# khởi động lại máy chủ
+```
+
+Chạy lại nhiều lần vẫn an toàn. Chưa vá thì máy chủ vẫn không bỏ sót mốc nào,
+chỉ có các dòng ca đêm cũ vẫn hiển thị ghép nhầm.
 
 ## Dữ liệu chạy thử
 

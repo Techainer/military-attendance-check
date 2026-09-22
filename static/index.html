@@ -541,8 +541,6 @@
                                 <h2>TỔNG HỢP LỊCH VÀ TIẾN ĐỘ HUẤN LUYỆN</h2>
                                 <p class="card-subtitle">LỊCH HUẤN LUYỆN TOÀN ĐƠN VỊ VÀ TIẾN ĐỘ THỰC HIỆN THEO THỜI GIAN THỰC</p>
                             </div>
-                            <button class="btn-primary-green role-only" data-role="qtht"
-                                    id="dt-btn-add" onclick="openScheduleModal()">➕ Thêm ca huấn luyện</button>
                         </div>
 
                         <div class="training-filter" id="tt-filter-schedule">
@@ -631,20 +629,14 @@
 
                         <div class="detail-grid" id="sd-info"></div>
 
-                        <!-- Camera của chính ca này, thay cho nút "Giám sát quân số" -->
-                        <div class="attendance-detail-grid" style="margin-top: 20px;">
-                            <div class="surveillance-screen-card">
-                                <div class="video-container camera-tile-video" id="sd-camera-box">
-                                    <img id="sd-stream" alt="Camera giám sát lớp">
-                                    <div class="camera-tile-idle" id="sd-camera-idle">Camera của ca này chưa chạy</div>
-                                </div>
-                                <p class="camera-caption" id="sd-camera-caption"></p>
+                        <!-- Camera của chính ca này. Ảnh bằng chứng nằm ở cột BẰNG CHỨNG
+                             của bảng đối chiếu bên dưới, không lặp lại ở đây. -->
+                        <div class="surveillance-screen-card" style="margin-top: 20px;">
+                            <div class="video-container camera-tile-video" id="sd-camera-box">
+                                <img id="sd-stream" alt="Camera giám sát lớp">
+                                <div class="camera-tile-idle" id="sd-camera-idle">Camera của ca này chưa chạy</div>
                             </div>
-
-                            <div class="evidence-column">
-                                <h3 class="evidence-title">ẢNH ĐIỂM DANH DO AI CHỤP</h3>
-                                <div id="sd-evidence" class="evidence-thumbs"></div>
-                            </div>
+                            <p class="camera-caption" id="sd-camera-caption"></p>
                         </div>
 
                         <div class="card-header" style="margin-top: 20px;">
@@ -1234,7 +1226,7 @@
             <div class="table-responsive">
                 <table class="personnel-table">
                     <thead>
-                        <tr><th>MỐC</th><th>GIỜ CHỐT</th><th>CÓ MẶT</th><th>VẮNG</th><th>SỐ LƯỢT QUÉT</th></tr>
+                        <tr><th>MỐC</th><th>GIỜ CHỐT</th><th>CÓ MẶT</th><th>VẮNG</th><th>QUÂN NHÂN VẮNG</th><th>SỐ LƯỢT QUÉT</th></tr>
                     </thead>
                     <tbody id="log-modal-checks"></tbody>
                 </table>

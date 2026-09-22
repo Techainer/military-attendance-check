@@ -43,10 +43,31 @@ def _state(camera_id: str) -> dict:
     })
 
 
-def publish_frame(camera_id: str, overlay_jpeg: bytes, clean_jpeg: Optional[bytes]) -> None:
+# Luồng xem trực tiếp đi qua tunnel ~150 KB/s, trong khi một khung full HD chất
+# lượng 85 nặng ~300 KB: 5 fps cần ~1.5 MB/s mỗi camera nên người xem chỉ nhận
+# được chưa tới 1 fps. Bản thu nhỏ chỉ dùng cho luồng; ảnh chụp, bằng chứng điểm
+# danh và ảnh vi phạm vẫn lấy bản gốc. Đặt STREAM_MAX_WIDTH=0 để tắt thu nhỏ.
+STREAM_MAX_WIDTH = int(os.environ.get("STREAM_MAX_WIDTH", "960"))
+STREAM_JPEG_QUALITY = int(os.environ.get("STREAM_JPEG_QUALITY", "65"))
+
+
+def encode_stream_jpeg(frame) -> bytes:
+    """JPEG nhẹ cho luồng xem trực tiếp. Khung vốn đã nhỏ thì không phóng to."""
+    h, w = frame.shape[:2]
+    if STREAM_MAX_WIDTH > 0 and w > STREAM_MAX_WIDTH:
+        frame = cv2.resize(frame, (STREAM_MAX_WIDTH, round(h * STREAM_MAX_WIDTH / w)),
+                           interpolation=cv2.INTER_AREA)
+    return cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, STREAM_JPEG_QUALITY])[1].tobytes()
+
+
+def publish_frame(camera_id: str, overlay_jpeg: bytes, clean_jpeg: Optional[bytes],
+                  stream_overlay: Optional[bytes] = None,
+                  stream_clean: Optional[bytes] = None) -> None:
     st = _state(camera_id)
     st["overlay"] = overlay_jpeg
     st["clean"] = clean_jpeg
+    st["stream_overlay"] = stream_overlay
+    st["stream_clean"] = stream_clean
     st["revision"] += 1
 
 
@@ -55,11 +76,21 @@ def clear_frames(camera_id: str) -> None:
     st = _state(camera_id)
     st["overlay"] = None
     st["clean"] = None
+    st["stream_overlay"] = None
+    st["stream_clean"] = None
 
 
-def get_frame(camera_id: str, overlay: bool) -> Optional[bytes]:
-    """Khung hình mới nhất của camera. Không có bản gốc thì trả bản có lớp phủ."""
+def get_frame(camera_id: str, overlay: bool, stream: bool = False) -> Optional[bytes]:
+    """Khung hình mới nhất của camera. Không có bản gốc thì trả bản có lớp phủ.
+
+    ``stream=True`` lấy bản thu nhỏ dành cho luồng xem trực tiếp, chưa có thì
+    rơi về bản gốc.
+    """
     st = _state(camera_id)
+    if stream:
+        small = (st.get("stream_overlay") if overlay else st.get("stream_clean")) or st.get("stream_overlay")
+        if small:
+            return small
     return (st["overlay"] if overlay else st["clean"]) or st["overlay"]
 
 
@@ -663,7 +694,9 @@ class VideoProcessor:
 
                 # Khung hình cho luồng MJPEG: bản có lớp phủ và bản gốc
                 _, clean_buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                publish_frame(self.camera_id, buffer.tobytes(), clean_buffer.tobytes())
+                publish_frame(self.camera_id, buffer.tobytes(), clean_buffer.tobytes(),
+                              stream_overlay=encode_stream_jpeg(display_frame),
+                              stream_clean=encode_stream_jpeg(frame))
 
                 # Store into global 10-second rolling clip buffer
                 push_clip_frame(self.camera_id, frame_b64)

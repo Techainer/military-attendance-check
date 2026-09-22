@@ -46,6 +46,33 @@ STATE_LABELS = {
 }
 
 
+def summarize_log(log: dict) -> dict:
+    """Cập nhật phần tổng hợp của bản ghi từ các mốc đã chốt.
+
+    Tách ra khỏi AttendanceManager để script vá dữ liệu dùng lại được, không
+    phải dựng cả bộ quản lý điểm danh chỉ để tính mấy con số tổng hợp.
+    """
+    checks = log.get("checks", {})
+    ordered = [checks[p] for p in (PHASE_START, PHASE_END, PHASE_MANUAL) if p in checks]
+    if not ordered:
+        return log
+
+    latest = ordered[-1]
+    absent_union = []
+    for chk in ordered:
+        for name in chk.get("absent_personnel", []):
+            if name not in absent_union:
+                absent_union.append(name)
+
+    log["time"] = latest["time"]
+    log["present"] = latest["present"]
+    log["absent"] = len(absent_union)
+    log["absent_personnel"] = absent_union
+    log["status"] = "Đủ quân số" if not absent_union else f"Thiếu {len(absent_union)} quân nhân"
+    log["status_type"] = "success" if not absent_union else "warning"
+    return log
+
+
 def person_label(person: dict) -> str:
     """Chuỗi hiển thị 'cấp bậc + họ tên' của một quân nhân."""
     return f"{person.get('rank', '')} {person.get('name', '')}".strip() or person.get("military_id", "?")
@@ -140,6 +167,26 @@ def _end_datetime(schedule: dict, now: datetime) -> Optional[datetime]:
     return _occurrence(schedule, now)[1]
 
 
+# Biên bản và khoá "mốc đã chốt" gắn với NGÀY CA BẮT ĐẦU, không phải ngày chốt
+# mốc. Ca đêm 21:00 → 05:00 chốt cuối giờ lúc 05:00 sáng hôm sau; lấy ngày chốt
+# thì mốc cuối của đêm 21 rơi vào biên bản ngày 22 và mọi dòng đối chiếu ghép
+# nhầm hai đêm với nhau.
+DATE_BASIS = "occurrence"
+
+
+def _occurrence_date(schedule: dict, at: datetime) -> str:
+    """Ngày bắt đầu của lần diễn ra chứa thời điểm ``at``."""
+    start = _start_datetime(schedule, at)
+    return (start or at).date().isoformat()
+
+
+def is_overnight(schedule: dict) -> bool:
+    """Ca vắt qua nửa đêm: giờ kết thúc không sau giờ bắt đầu."""
+    start = str(schedule.get("start_time") or "")
+    end = str(schedule.get("end_time") or "")
+    return bool(start and end) and end <= start
+
+
 def schedule_windows(schedule: dict, now: datetime) -> List[Tuple[str, datetime, datetime]]:
     """Các cửa sổ điểm danh của ca trong ngày: đầu giờ và cuối giờ."""
     start = _start_datetime(schedule, now)
@@ -210,7 +257,8 @@ class AttendanceSession:
 
     @property
     def key(self) -> str:
-        return f"{self.schedule.get('id', 'manual')}:{self.started_at.date().isoformat()}:{self.phase}"
+        day = _occurrence_date(self.schedule, self.started_at)
+        return f"{self.schedule.get('id', 'manual')}:{day}:{self.phase}"
 
     @property
     def phase_label(self) -> str:
@@ -309,17 +357,28 @@ class AttendanceManager:
         return self._schedules_cache
 
     def _load_completed_keys(self) -> set:
-        """Mốc nào đã điểm danh trong ngày rồi thì không chạy lại."""
+        """Mốc nào đã điểm danh trong ngày rồi thì không chạy lại.
+
+        Biên bản ghi trước khi đổi sang ngày ca bắt đầu (không có ``date_basis``)
+        cất mốc cuối của ca đêm ở biên bản ngày hôm sau. Đọc thẳng ngày của nó thì
+        "cuối giờ đêm D-1" thành "cuối giờ đêm D đã xong", và sáng D+1 hệ thống
+        bỏ qua mốc cuối. Nên lùi lại một ngày cho đúng loại biên bản đó.
+        """
+        overnight = {s.get("id") for s in read_json_list(self.schedules_file) if is_overnight(s)}
         keys = set()
         for log in read_json_list(self.logs_file):
             sch_id = log.get("schedule_id")
             if not sch_id:
                 continue
             day = log.get("date_iso") or str(log.get("started_at", ""))[:10]
+            legacy_overnight = sch_id in overnight and log.get("date_basis") != DATE_BASIS
             checks = log.get("checks")
             if isinstance(checks, dict) and checks:
                 for phase in checks:
-                    keys.add(f"{sch_id}:{day}:{phase}")
+                    phase_day = day
+                    if legacy_overnight and phase == PHASE_END and day:
+                        phase_day = (datetime.fromisoformat(day) - timedelta(days=1)).date().isoformat()
+                    keys.add(f"{sch_id}:{phase_day}:{phase}")
             elif day:
                 # Bản ghi theo định dạng cũ chỉ có một mốc đầu giờ
                 keys.add(f"{sch_id}:{day}:{PHASE_START}")
@@ -338,32 +397,13 @@ class AttendanceManager:
         return f"/data/attendance_evidence/{filename}"
 
     def _summarize(self, log: dict) -> dict:
-        """Cập nhật phần tổng hợp của bản ghi từ các mốc đã chốt."""
-        checks = log.get("checks", {})
-        ordered = [checks[p] for p in (PHASE_START, PHASE_END, PHASE_MANUAL) if p in checks]
-        if not ordered:
-            return log
-
-        latest = ordered[-1]
-        absent_union = []
-        for chk in ordered:
-            for name in chk.get("absent_personnel", []):
-                if name not in absent_union:
-                    absent_union.append(name)
-
-        log["time"] = latest["time"]
-        log["present"] = latest["present"]
-        log["absent"] = len(absent_union)
-        log["absent_personnel"] = absent_union
-        log["status"] = "Đủ quân số" if not absent_union else f"Thiếu {len(absent_union)} quân nhân"
-        log["status_type"] = "success" if not absent_union else "warning"
-        return log
+        return summarize_log(log)
 
     def _write_check(self, session: AttendanceSession, check: dict, closed_at: datetime) -> dict:
         """Ghi kết quả một mốc vào nhật ký, gộp chung dòng của ca trong ngày."""
         logs = read_json_list(self.logs_file)
         schedule_id = session.schedule.get("id", "manual")
-        date_iso = session.started_at.date().isoformat()
+        date_iso = _occurrence_date(session.schedule, session.started_at)
 
         target = None
         if session.phase != PHASE_MANUAL:
@@ -378,8 +418,11 @@ class AttendanceManager:
             target = {
                 "id": f"log_{int(closed_at.timestamp() * 1000)}",
                 "schedule_id": schedule_id,
-                "date": session.started_at.strftime("%d/%m/%Y"),
+                "date": datetime.fromisoformat(date_iso).strftime("%d/%m/%Y"),
                 "date_iso": date_iso,
+                # Biên bản cũ không có dấu này: mốc cuối ca đêm của chúng nằm ở
+                # biên bản ngày hôm sau (xem _load_completed_keys)
+                "date_basis": DATE_BASIS,
                 "shift": session.schedule.get("shift", "Điểm danh"),
                 "schedule_name": session.schedule.get("name", ""),
                 "unit": session.schedule.get("unit", "Tất cả đơn vị"),
@@ -600,7 +643,7 @@ class AttendanceManager:
                     # Hệ thống vào quá muộn: không chốt biên bản nửa vời, cũng không
                     # đánh dấu mốc này đã xong để còn chạy lại nếu mở sớm hơn
                     continue
-                key = f"{schedule.get('id')}:{win_start.date().isoformat()}:{phase}"
+                key = f"{schedule.get('id')}:{_occurrence_date(schedule, win_start)}:{phase}"
                 if key in self.completed_keys:
                     continue
                 # Phiên tính từ đầu cửa sổ và luôn chốt đúng cuối cửa sổ, kể cả
@@ -663,7 +706,7 @@ class AttendanceManager:
             row.update(schedule_runtime_state(schedule, now))
             done = {}
             for phase, win_start, _win_end in schedule_windows(schedule, now):
-                key = f"{schedule.get('id')}:{win_start.date().isoformat()}:{phase}"
+                key = f"{schedule.get('id')}:{_occurrence_date(schedule, win_start)}:{phase}"
                 done[phase] = key in self.completed_keys
             row["checked_today"] = done
             rows.append(row)

@@ -629,6 +629,29 @@ r = client.get("/api/attendance-logs?q=khong-co-gi").json()["data"]
 check("từ khoá không khớp thì trả rỗng", r == [], str(r)[:120])
 
 write_json_list(logs_file, logs_goc)
+# ============================== ca đã kết thúc mà không có biên bản
+print("\n[12] Dòng lịch cho biết ca đó có biên bản hay không")
+
+reset()
+logs_file = api.data_path / "attendance_logs.json"
+logs_goc = read_json_list(logs_file)
+write_json_list(api.schedules_file, [
+    {"id": "sch_sang", "name": "Huấn luyện điều lệnh", "start_time": "06:00",
+     "end_time": "11:30", "unit": "Đại đội 1", "shift": "Ca sáng", "required_count": 45},
+])
+write_json_list(logs_file, [
+    {"id": "log_co", "schedule_id": "sch_sang", "date": "20/09/2026", "date_iso": "2026-09-20",
+     "shift": "Ca sáng", "unit": "Đại đội 1", "required": 45,
+     "checks": {"start": {"phase": "start", "time": "06:15", "present": 0, "absent": 0}}},
+])
+rows = client.get("/api/v1/summary/training?date_from=2026-09-20&date_to=2026-09-21").json()["sessions"]
+by_day = {r["day"]: r for r in rows}
+check("ngày có biên bản -> has_record = true", by_day["2026-09-20"].get("has_record") is True,
+      str(by_day["2026-09-20"].get("has_record")))
+check("ngày không có biên bản -> has_record = false", by_day["2026-09-21"].get("has_record") is False,
+      str(by_day["2026-09-21"].get("has_record")))
+write_json_list(logs_file, logs_goc)
+
 reset()
 
 print()

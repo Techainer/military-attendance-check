@@ -1858,18 +1858,19 @@ function renderEvidenceCell(check, log, phaseLabel) {
         + ` onclick="openEvidenceModal('${check.evidence}', '${phaseLabel}', '${caption.replace(/'/g, "\\'")}')">`;
 }
 
+// Tên quân nhân xếp hàng dọc, mỗi người một gạch đầu dòng: đọc nhanh hơn một
+// chuỗi dài nối bằng dấu phẩy, nhất là khi vắng nhiều người
+function absentNameList(names) {
+    return `<ul class="absent-name-list">${(names || []).map(n => `<li>${esc(n)}</li>`).join('')}</ul>`;
+}
+
 function renderAbsentList(log) {
-    const startCheck = getCheck(log, 'start');
-    const endCheck = getCheck(log, 'end');
-    const parts = [];
-    if (startCheck && (startCheck.absent_personnel || []).length > 0) {
-        parts.push(`<div><span class="phase-tag">Đầu giờ</span> ${startCheck.absent_personnel.join(', ')}</div>`);
-    }
-    if (endCheck && (endCheck.absent_personnel || []).length > 0) {
-        parts.push(`<div><span class="phase-tag">Cuối giờ</span> ${endCheck.absent_personnel.join(', ')}</div>`);
-    }
+    const parts = [['start', 'Đầu giờ'], ['end', 'Cuối giờ']]
+        .map(([phase, label]) => [label, (getCheck(log, phase) || {}).absent_personnel || []])
+        .filter(([, names]) => names.length)
+        .map(([label, names]) => `<div><span class="phase-tag">${label}</span>${absentNameList(names)}</div>`);
     if (parts.length === 0) return '<span style="color: #64748b;">-</span>';
-    return `<span style="color: #d97706; font-weight: 500;">${parts.join('')}</span>`;
+    return parts.join('');
 }
 
 function renderAttendanceLogsTable(logs) {
@@ -1953,10 +1954,12 @@ function openLogModal(logId) {
                 <td class="font-mono">${esc(c.time || '—')}</td>
                 <td class="text-green"><strong>${c.present}</strong></td>
                 <td class="${c.absent > 0 ? 'text-amber' : ''}">${c.absent}</td>
+                <td>${(c.absent_personnel || []).length
+                    ? absentNameList(c.absent_personnel) : '<span class="muted">Không vắng ai</span>'}</td>
                 <td>${c.scans != null ? c.scans : '—'}</td>
             </tr>`;
         }).join('')
-        : '<tr><td colspan="5" class="empty-row">Buổi chưa diễn ra — cả hai mốc đều bằng 0</td></tr>';
+        : '<tr><td colspan="6" class="empty-row">Biên bản chưa có mốc điểm danh nào</td></tr>';
 
     const photos = rows.filter(ph => checks[ph].evidence);
     document.getElementById('log-modal-evidence').innerHTML = photos.length
@@ -1991,7 +1994,7 @@ function openLogModal(logId) {
                  </tr>`;
              }).join('')}</tbody></table></div>`
         : (log.absent_personnel || []).length
-            ? `<p class="muted">Danh sách vắng: ${esc((log.absent_personnel || []).join(', '))}</p>`
+            ? `<p class="muted">Danh sách vắng:</p>${absentNameList(log.absent_personnel)}`
             : '<p class="empty-hint">Không có vi phạm giờ giấc trong ca này</p>';
 
     document.getElementById('log-modal').style.display = 'flex';
@@ -2041,46 +2044,84 @@ function makeZoomable(container) {
     container.appendChild(btn);
 
     let scale = 1, x = 0, y = 0, drag = null;
+    const img = () => container.querySelector('img');
+
+    // Giữ ảnh trong khung: phóng to hơn khung thì không cho kéo lộ khoảng trống,
+    // nhỏ hơn khung thì căn giữa. Không có cái này thì kéo quá tay là mất ảnh.
+    const clamp = () => {
+        const el = img();
+        if (!el) return;
+        const cw = container.clientWidth, ch = container.clientHeight;
+        const w = el.offsetWidth * scale, h = el.offsetHeight * scale;
+        const ox = el.offsetLeft, oy = el.offsetTop;
+        x = w >= cw ? Math.min(-ox, Math.max(cw - ox - w, x)) : (cw - w) / 2 - ox;
+        y = h >= ch ? Math.min(-oy, Math.max(ch - oy - h, y)) : (ch - h) / 2 - oy;
+    };
 
     const apply = () => {
-        const img = container.querySelector('img');
-        if (img) img.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+        const el = img();
+        if (el) {
+            el.draggable = false;
+            // Gốc biến đổi ở góc trên-trái để tự tính điểm neo theo con trỏ
+            el.style.transformOrigin = '0 0';
+            el.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+        }
         container.classList.toggle('is-zoomed', scale > 1);
         const label = container.querySelector('.zoom-level')
             || document.getElementById(container.dataset.zoomLevelId || '');
         if (label) label.textContent = `${Math.round(scale * 100)}%`;
     };
 
-    const zoomBy = (delta) => {
-        scale = Math.min(6, Math.max(1, Math.round((scale + delta) * 100) / 100));
+    // Phóng quanh điểm (mx, my) tính trong khung: điểm ảnh đang nằm dưới con trỏ
+    // vẫn nằm dưới con trỏ sau khi phóng, thay vì luôn phóng vào giữa khung.
+    const zoomAt = (delta, mx, my) => {
+        const next = Math.min(6, Math.max(1, Math.round((scale + delta) * 100) / 100));
+        if (next === scale) return;
+        const el = img();
+        const ox = el ? el.offsetLeft : 0, oy = el ? el.offsetTop : 0;
+        x = mx - ox - (mx - ox - x) * next / scale;
+        y = my - oy - (my - oy - y) * next / scale;
+        scale = next;
         if (scale === 1) { x = 0; y = 0; }
+        clamp();
         apply();
     };
+
+    const zoomBy = (delta) => zoomAt(delta, container.clientWidth / 2, container.clientHeight / 2);
 
     const reset = () => { scale = 1; x = 0; y = 0; apply(); };
 
     container.addEventListener('wheel', (e) => {
         e.preventDefault();
-        zoomBy(e.deltaY < 0 ? 0.25 : -0.25);
+        const r = container.getBoundingClientRect();
+        zoomAt(e.deltaY < 0 ? 0.25 : -0.25, e.clientX - r.left, e.clientY - r.top);
     }, { passive: false });
 
+    // Trình duyệt tự bắt đầu kéo-thả khi nhấn giữ trên ảnh, cắt ngang thao tác kéo
+    container.addEventListener('dragstart', (e) => e.preventDefault());
+
     container.addEventListener('pointerdown', (e) => {
-        if (scale === 1) return;
+        if (scale === 1 || (e.target.closest && e.target.closest('button'))) return;
+        e.preventDefault();
         drag = { sx: e.clientX - x, sy: e.clientY - y };
         container.classList.add('is-panning');
-        if (container.setPointerCapture) container.setPointerCapture(e.pointerId);
+        if (container.setPointerCapture && e.pointerId !== undefined) container.setPointerCapture(e.pointerId);
     });
     container.addEventListener('pointermove', (e) => {
         if (!drag) return;
         x = e.clientX - drag.sx;
         y = e.clientY - drag.sy;
+        clamp();
         apply();
     });
     const endDrag = (e) => {
         if (!drag) return;
         drag = null;
         container.classList.remove('is-panning');
-        if (container.releasePointerCapture) container.releasePointerCapture(e.pointerId);
+        if (container.releasePointerCapture && e.pointerId !== undefined
+            && container.hasPointerCapture && container.hasPointerCapture(e.pointerId)) {
+            container.releasePointerCapture(e.pointerId);
+        }
     };
     container.addEventListener('pointerup', endDrag);
     container.addEventListener('pointercancel', endDrag);
@@ -2366,6 +2407,10 @@ async function getJson(url) {
 
 // ----------------- MÀN 1.1: LỊCH & TIẾN ĐỘ -----------------
 
+// Dòng lịch đang hiển thị, theo id. Màn chi tiết cần trạng thái của ĐÚNG NGÀY
+// được bấm; /schedules/{id} chỉ trả trạng thái của hôm nay.
+let trainingRowsById = {};
+
 async function loadTrainingSchedule() {
     const tbody = document.getElementById('dt-schedule-tbody');
     if (!tbody) return;
@@ -2393,7 +2438,9 @@ async function loadTrainingSchedule() {
         tbody.innerHTML = data.sessions.length ? '' :
             `<tr><td colspan="10" class="empty-row">Không có lịch huấn luyện nào khớp bộ lọc</td></tr>`;
 
+        trainingRowsById = {};
         data.sessions.forEach(s => {
+            trainingRowsById[s.id] = s;
             // Tiến độ ở đây là tiến độ theo đồng hồ: lớp đã học bao lâu trong
             // khung giờ của nó, còn bao lâu nữa thì tan. Không phải số phút
             // camera quan sát được.
@@ -2413,7 +2460,9 @@ async function loadTrainingSchedule() {
                 <td>${esc(s.unit || '—')}
                     ${s.instructor ? `<div class="cell-subtext">${esc(s.instructor)}</div>` : ''}</td>
                 <td class="font-mono">${esc(s.start_time || '--:--')} – ${esc(s.end_time || '--:--')}</td>
-                <td><span class="status-tag ${STATE_CLASS[s.state] || 'status-neutral'}">${esc(s.state_label)}</span></td>
+                <td><span class="status-tag ${STATE_CLASS[s.state] || 'status-neutral'}">${esc(s.state_label)}</span>
+                    ${s.state === 'finished' && !s.has_record
+                        ? '<div class="cell-subtext no-record">Không có biên bản</div>' : ''}</td>
                 <td>
                     <div class="progress-track"><div class="progress-fill" style="width:${prog}%"></div></div>
                     <span class="progress-text">${prog}% · ${conLai}</span>
@@ -2446,17 +2495,23 @@ async function openSessionDetail(sessionId, scheduleId) {
     } catch (e) {
         checks = [];
     }
+    const row = trainingRowsById[sessionId] || {};
     const phaseOf = (ph) => checks.find(c => c.phase === ph);
+    let state = row.state;
     const headcount = (ph) => {
         const c = phaseOf(ph);
-        return c ? `${c.present} có mặt · ${c.absent} vắng` : 'Chưa chốt';
+        if (c) return `${c.present} có mặt · ${c.absent} vắng`;
+        return state === 'finished' ? 'Không ghi nhận' : 'Chưa chốt';
     };
 
     try {
         const sch = await getJson(`/api/v1/schedules/${scheduleId}`);
+        state = row.state || sch.state;
+        const stateLabel = row.state_label || sch.state_label;
         document.getElementById('sd-title').textContent = (sch.name || '').toUpperCase();
         document.getElementById('sd-subtitle').textContent =
-            `${sch.shift || ''} · ${sch.start_time}–${sch.end_time} · ${sch.unit || 'Toàn đơn vị'}`;
+            [row.day, sch.shift, `${sch.start_time}–${sch.end_time}`, sch.unit || 'Toàn đơn vị']
+                .filter(Boolean).join(' · ');
 
         // Trường giáo viên / thao trường / bài học do hệ thống quản lý gửi kèm khi
         // tạo ca; service AI giữ nguyên và trả lại, ở đây chỉ hiển thị.
@@ -2470,19 +2525,19 @@ async function openSessionDetail(sessionId, scheduleId) {
             ['Sĩ số đầu buổi', headcount('start')],
             ['Sĩ số cuối buổi', headcount('end')],
             ['Sĩ số chuẩn', sch.required_count || '—'],
-            ['Trạng thái', sch.state_label]
+            ['Trạng thái', stateLabel]
         ];
         document.getElementById('sd-info').innerHTML = info.map(([k, v]) =>
             `<div class="detail-item"><span class="detail-key">${k}</span>
              <span class="detail-val">${esc(v || '—')}</span></div>`).join('');
 
-        attachSessionCamera(sch);
+        attachSessionCamera({ ...sch, state });
+        renderSessionChecks(checks, { ...sch, state });
     } catch (e) {
         document.getElementById('sd-subtitle').textContent = `Lỗi tải ca: ${e.message}`;
+        renderSessionChecks(checks, { state });
     }
 
-    renderSessionChecks(checks);
-    renderSessionEvidence(checks);
     await loadSessionAttendance(sessionDetailId);
 }
 window.openSessionDetail = openSessionDetail;
@@ -2518,12 +2573,27 @@ function attachSessionCamera(sch) {
     });
 }
 
-function renderSessionChecks(checks) {
+// Bảng đối chiếu trống vì nhiều lý do khác nhau; nói "chưa diễn ra" cho một ca
+// đã kết thúc khiến người xem tưởng hệ thống lúc có lúc không.
+function emptyChecksMessage(sch) {
+    const win = sch.check_window_mins || 5;
+    if (sch.state === 'finished') {
+        const windows = sch.start_time && sch.end_time
+            ? ` đầu giờ (${sch.start_time}–${addMinutesToClock(sch.start_time, win)})`
+              + ` và cuối giờ (${addMinutesToClock(sch.end_time, -win)}–${sch.end_time})`
+            : '';
+        return `Ca đã kết thúc nhưng không có biên bản điểm danh — camera không chạy trong cửa sổ điểm danh${windows}.`;
+    }
+    if (sch.state === 'upcoming') return 'Ca chưa diễn ra.';
+    return 'Ca đang diễn ra, chưa tới mốc chốt điểm danh nào.';
+}
+
+function renderSessionChecks(checks, sch) {
     const tbody = document.getElementById('sd-checks-tbody');
     if (!tbody) return;
 
     tbody.innerHTML = checks.length ? '' :
-        `<tr><td colspan="6" class="empty-row">Buổi chưa diễn ra — cả hai mốc đều bằng 0</td></tr>`;
+        `<tr><td colspan="6" class="empty-row">${esc(emptyChecksMessage(sch || {}))}</td></tr>`;
 
     checks.forEach(c => {
         const names = c.absent_personnel || [];
@@ -2534,7 +2604,7 @@ function renderSessionChecks(checks) {
             <td class="text-green"><strong>${c.present}</strong></td>
             <td class="${c.absent > 0 ? 'text-amber' : ''}">${c.absent}</td>
             <td>${names.length
-                ? `<ul class="absent-name-list">${names.map(n => `<li>${esc(n)}</li>`).join('')}</ul>`
+                ? absentNameList(names)
                 : '<span class="muted">Không vắng ai</span>'}</td>
             <td>${c.evidence_url
                 ? `<img class="evidence-thumb" src="${c.evidence_url}"
@@ -2544,29 +2614,6 @@ function renderSessionChecks(checks) {
         tbody.appendChild(tr);
     });
 }
-
-function renderSessionEvidence(checks) {
-    const box = document.getElementById('sd-evidence');
-    if (!box) return;
-    const withPhoto = checks.filter(c => c.evidence_url);
-    box.innerHTML = withPhoto.length ? '' :
-        '<p class="empty-hint">Chưa có ảnh điểm danh nào được chụp</p>';
-
-    withPhoto.forEach(c => {
-        box.insertAdjacentHTML('beforeend', `
-            <figure class="evidence-figure">
-                <img src="${c.evidence_url}" alt="Ảnh điểm danh ${esc(c.phase_label)}"
-                     onclick="openEvidence('${c.evidence_url}','Điểm danh ${esc(c.phase_label)} — ${c.present} có mặt')">
-                <figcaption>
-                    <strong>${esc(c.phase_label)}</strong> · ${esc(c.time || '')} · ${c.present} có mặt
-                    <a class="btn-download" href="${c.evidence_url}" download>⬇ Tải ảnh</a>
-                </figcaption>
-            </figure>`);
-    });
-}
-
-function backFromSessionDetail() { switchNavTab(sessionDetailFrom); }
-window.backFromSessionDetail = backFromSessionDetail;
 
 let sessionAttendanceData = { items: [], summary: {} };
 

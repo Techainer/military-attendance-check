@@ -1121,6 +1121,9 @@ async def v1_training_summary(training_type: Optional[str] = None,
                 "scheduled_minutes": log.get("scheduled_minutes", 0),
                 "progress_pct": log.get("progress_pct", 0.0),
                 "violation_count": violation_count,
+                # Ca đã qua mà không có biên bản: camera không chạy trong cửa sổ
+                # điểm danh. Giao diện cần biết để báo đúng, không nói "chưa diễn ra".
+                "has_record": bool(log),
                 **_time_progress(row, day, now),
             })
 
@@ -1229,9 +1232,9 @@ async def v1_delete_zone(zone_id: str):
 
 # ----------------- API v1: luồng hình -----------------
 
-def _current_jpeg(camera_id: str, overlay: int) -> Optional[bytes]:
+def _current_jpeg(camera_id: str, overlay: int, stream: bool = False) -> Optional[bytes]:
     from app.video_processor import get_frame
-    return get_frame(camera_id, bool(overlay))
+    return get_frame(camera_id, bool(overlay), stream=stream)
 
 
 @app.get("/api/v1/cameras/{camera_id}/stream.mjpg")
@@ -1254,7 +1257,7 @@ async def v1_camera_stream(camera_id: str, overlay: int = 1, fps: int = 5):
             # Chỉ gửi khi có khung hình mới, không bơm lại cùng một khung
             revision = vp.get_revision(camera_id)
             if revision != last_revision:
-                frame = _current_jpeg(camera_id, overlay)
+                frame = _current_jpeg(camera_id, overlay, stream=True)
                 if frame is None:
                     break
                 last_revision = revision

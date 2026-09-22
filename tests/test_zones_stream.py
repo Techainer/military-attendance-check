@@ -288,6 +288,55 @@ payload_clean = b"".join(m.get("body", b"") for m in sent_clean
 check("luồng overlay=0 mang bản gốc, không phải bản có lớp phủ",
       clean_jpeg in payload_clean and overlay_jpeg not in payload_clean)
 
+# ==================================================== luồng nhẹ qua mạng chậm
+print("\n[6b] Luồng xem trực tiếp dùng bản nhỏ, ảnh chụp giữ bản gốc")
+
+big = np.random.default_rng(1).integers(0, 255, (1080, 1920, 3), dtype=np.uint8)
+full_jpeg = cv2.imencode(".jpg", big, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tobytes()
+small_jpeg = vp.encode_stream_jpeg(big)
+small_img = cv2.imdecode(np.frombuffer(small_jpeg, np.uint8), cv2.IMREAD_COLOR)
+
+check("bản cho luồng thu về bề ngang mặc định 960px",
+      small_img is not None and small_img.shape[1] == vp.STREAM_MAX_WIDTH == 960,
+      str(None if small_img is None else small_img.shape))
+check("bản cho luồng giữ đúng tỉ lệ khung hình",
+      small_img is not None and small_img.shape[0] == 540, str(None if small_img is None else small_img.shape))
+check("bản cho luồng nhẹ hơn hẳn bản gốc",
+      len(small_jpeg) * 3 < len(full_jpeg), f"{len(small_jpeg)} vs {len(full_jpeg)}")
+
+narrow = np.zeros((360, 640, 3), np.uint8)
+narrow_out = cv2.imdecode(np.frombuffer(vp.encode_stream_jpeg(narrow), np.uint8), cv2.IMREAD_COLOR)
+check("khung vốn đã nhỏ thì không phóng to lên", narrow_out.shape[1] == 640, str(narrow_out.shape))
+
+stream_overlay = cv2.imencode(".jpg", np.full((54, 96, 3), 200, np.uint8))[1].tobytes()
+stream_clean = cv2.imencode(".jpg", np.full((54, 96, 3), 20, np.uint8))[1].tobytes()
+overlay_jpeg, clean_jpeg = full_jpeg, cv2.imencode(".jpg", big[::-1])[1].tobytes()
+
+
+def publish_all():
+    vp.publish_frame(CAMERA_ID, overlay_jpeg, clean_jpeg,
+                     stream_overlay=stream_overlay, stream_clean=stream_clean)
+
+
+publish_all()
+_orig_publish = vp.publish_frame
+vp.publish_frame = lambda *a, **k: _orig_publish(CAMERA_ID, overlay_jpeg, clean_jpeg,
+                                                  stream_overlay=stream_overlay,
+                                                  stream_clean=stream_clean)
+try:
+    sent_small = asyncio.run(pull_mjpeg(overlay=1, want_frames=1))
+    sent_small_clean = asyncio.run(pull_mjpeg(overlay=0, want_frames=1))
+finally:
+    vp.publish_frame = _orig_publish
+body = b"".join(m.get("body", b"") for m in sent_small if m["type"] == "http.response.body")
+body_clean = b"".join(m.get("body", b"") for m in sent_small_clean if m["type"] == "http.response.body")
+check("luồng MJPEG gửi bản nhỏ, không gửi bản full HD",
+      stream_overlay in body and full_jpeg not in body, f"{len(body)} byte")
+check("luồng không lớp phủ cũng dùng bản nhỏ", stream_clean in body_clean)
+
+r = client.get(f"/api/v1/cameras/{CAMERA_ID}/snapshot?overlay=1")
+check("ảnh chụp vẫn là bản gốc full HD", r.content == full_jpeg, f"{len(r.content)} byte")
+
 # ================================================================ hợp đồng
 print("\n[7] Đối chiếu với openapi.yaml")
 
