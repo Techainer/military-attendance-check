@@ -1717,7 +1717,7 @@ function renderSchedulesTable(schedules) {
     schedulesTbody.innerHTML = '';
 
     if (schedules.length === 0) {
-        schedulesTbody.innerHTML = `<tr><td colspan="11" style="text-align: center; color: #94a3b8; padding: 24px;">Chưa có ca thời khóa biểu nào được thiết lập</td></tr>`;
+        schedulesTbody.innerHTML = `<tr><td colspan="7" class="empty-row">Chưa có ca thời khóa biểu nào được thiết lập</td></tr>`;
         return;
     }
 
@@ -1726,20 +1726,30 @@ function renderSchedulesTable(schedules) {
         const done = sch.checked_today || {};
         const stateClass = SCHEDULE_STATE_CLASS[sch.state] || 'status-neutral';
         const row = document.createElement('tr');
+        // Gom 12 cột xuống 7: mỗi ô mang một nhóm thông tin, phần phụ xuống dòng
+        // nhỏ bên dưới. Trước đây bảng quá rộng nên cột bị bóp và chữ vỡ dòng.
         row.innerHTML = `
-            <td><span class="status-tag status-active">${sch.shift}</span></td>
-            <td><strong>${sch.name}</strong></td>
-            <td>${sch.unit}</td>
-            <td class="font-mono">${sch.start_time} - ${sch.end_time}</td>
+            <td>
+                <strong>${esc(sch.name)}</strong>
+                <div class="cell-subtext">${esc(sch.shift || '')}</div>
+            </td>
+            <td>
+                ${esc(sch.unit || '—')}
+                <div class="cell-subtext">${sch.required_count || 45} quân nhân</div>
+            </td>
+            <td>
+                <span class="font-mono">${esc(sch.start_time)} – ${esc(sch.end_time)}</span>
+                <div class="cell-subtext font-mono">Điểm danh ${esc(sch.start_time)}–${addMinutesToClock(sch.start_time, win)}
+                    · ${addMinutesToClock(sch.end_time, -win)}–${esc(sch.end_time)}</div>
+            </td>
             <td>${scheduleDateScope(sch)}</td>
             <td>${esc(scheduleCameraName(sch.camera_id))}</td>
-            <td class="font-mono" style="color: #059669; font-weight: 700;">${sch.start_time} → ${addMinutesToClock(sch.start_time, win)}</td>
-            <td class="font-mono" style="color: #0369a1; font-weight: 700;">${addMinutesToClock(sch.end_time, -win)} → ${sch.end_time}</td>
-            <td><strong>${sch.required_count || 45}</strong> quân nhân</td>
-            <td><span class="status-tag ${stateClass}">${sch.state_label || sch.status || 'Active'}</span></td>
-            <td class="check-badges">
-                ${checkedBadge(done.start, 'Đầu giờ')}
-                ${checkedBadge(done.end, 'Cuối giờ')}
+            <td>
+                <span class="status-tag ${stateClass}">${esc(sch.state_label || sch.status || 'Active')}</span>
+                <div class="check-badges">
+                    ${checkedBadge(done.start, 'Đầu giờ')}
+                    ${checkedBadge(done.end, 'Cuối giờ')}
+                </div>
             </td>
             <td>
                 <button class="icon-btn icon-btn-edit" title="Sửa ca" onclick="editSchedule('${sch.id}')">✏️</button>

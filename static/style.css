@@ -1169,6 +1169,10 @@ input:checked + .slider:before {
 .modal-content {
     width: 480px;
     max-width: 90vw;
+    /* Form dài (ca huấn luyện có cả ngày áp dụng và thứ) không được đẩy nút Lưu
+       ra ngoài màn hình: cuộn ngay trong hộp thoại */
+    max-height: 90vh;
+    overflow-y: auto;
     background: #ffffff;
     border-radius: 12px;
     padding: 24px;
@@ -2495,3 +2499,10 @@ a.btn-clip-ctrl {
     border-color: var(--primary-green);
     color: var(--primary-green-text);
 }
+
+
+/* Bảng thời khoá biểu: các ô gộp nhiều thông tin nên cần thở và không vỡ dòng bậy */
+#schedules-tbody td { vertical-align: top; }
+#schedules-tbody .check-badges { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
+#schedules-tbody .cell-subtext { margin-top: 3px; }
+#view-schedule .personnel-table td:first-child { min-width: 180px; }
