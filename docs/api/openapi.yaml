@@ -172,6 +172,18 @@ paths:
               schema: { $ref: '#/components/schemas/Camera' }
         '409':
           $ref: '#/components/responses/Conflict'
+        '422':
+          description: Camera chưa khai nguồn, hoặc tệp video không tồn tại
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '502':
+          description: |
+            Không kết nối được tới nguồn (không có đường mạng tới camera, sai tài
+            khoản, hoặc sai đường dẫn luồng). Mật khẩu trong địa chỉ được che.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
 
   /cameras/{camera_id}/stop:
     parameters:
@@ -1147,6 +1159,27 @@ components:
           example: Đại đội 1
         shift: { type: string, maxLength: 60, example: Ca sáng }
         training_type: { $ref: '#/components/schemas/TrainingType' }
+        date_from:
+          type: string
+          format: date
+          description: |
+            Ngày bắt đầu áp dụng ca. Bỏ trống thì không giới hạn phía trước.
+          example: '2026-09-22'
+        date_to:
+          type: string
+          format: date
+          description: Ngày cuối áp dụng ca. Không được trước `date_from`.
+          example: '2026-09-25'
+        weekdays:
+          type: array
+          description: |
+            Thứ trong tuần ca diễn ra, 0 = thứ Hai … 6 = Chủ nhật. Bỏ trống hoặc
+            để rỗng thì ca diễn ra mọi thứ.
+
+            Ba trường `date_from`, `date_to`, `weekdays` đều tuỳ chọn; không khai
+            gì thì ca lặp mọi ngày như thời khoá biểu vốn có.
+          items: { type: integer, minimum: 0, maximum: 6 }
+          example: [0, 2, 4]
         check_window_mins:
           type: integer
           description: Độ dài cửa sổ điểm danh ở mỗi mốc đầu giờ và cuối giờ.

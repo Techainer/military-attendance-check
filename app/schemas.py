@@ -157,6 +157,8 @@ class AckInput(BaseModel):
 SOURCE_TYPES = {"rtsp", "file", "webcam"}
 TRAINING_TYPES = {"dao_tao", "chien_dau"}
 HHMM = r"^([01]\d|2[0-3]):([0-5]\d)$"
+# Ngày dạng YYYY-MM-DD cho phạm vi áp dụng của ca huấn luyện
+ISO_DATE = r"^\d{4}-\d{2}-\d{2}$"
 
 
 class CameraInput(BaseModel):
@@ -223,6 +225,23 @@ class ScheduleInput(BaseModel):
     required_count: Optional[int] = Field(default=None, ge=0, le=100000)
     camera_id: Optional[str] = Field(default=None, max_length=60)
     enabled: bool = True
+    # Phạm vi áp dụng. Bỏ trống hết thì ca lặp mọi ngày như thời khoá biểu cũ.
+    date_from: Optional[str] = Field(default=None, pattern=ISO_DATE, examples=["2026-09-22"])
+    date_to: Optional[str] = Field(default=None, pattern=ISO_DATE, examples=["2026-09-25"])
+    weekdays: Optional[List[int]] = Field(default=None, description="0 = thứ Hai … 6 = Chủ nhật")
+
+    @field_validator("weekdays")
+    @classmethod
+    def _check_weekdays(cls, v):
+        if v is not None and any(d < 0 or d > 6 for d in v):
+            raise ValueError("weekdays chỉ nhận số 0..6 (0 = thứ Hai)")
+        return v
+
+    @model_validator(mode="after")
+    def _check_date_range(self):
+        if self.date_from and self.date_to and self.date_to < self.date_from:
+            raise ValueError("date_to không được trước date_from")
+        return self
 
     @field_validator("training_type")
     @classmethod
@@ -264,6 +283,9 @@ class SchedulePatch(BaseModel):
     required_count: Optional[int] = Field(default=None, ge=0, le=100000)
     camera_id: Optional[str] = Field(default=None, max_length=60)
     enabled: Optional[bool] = None
+    date_from: Optional[str] = Field(default=None, pattern=ISO_DATE)
+    date_to: Optional[str] = Field(default=None, pattern=ISO_DATE)
+    weekdays: Optional[List[int]] = None
 
     def apply_to(self, existing: dict) -> dict:
         merged = {**existing, **self.model_dump(exclude_unset=True, exclude_none=True)}

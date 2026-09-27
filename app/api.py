@@ -24,7 +24,7 @@ from app.video_processor import VideoProcessor
 from app.monitor import AttendanceMonitor
 from app.face_engine import FaceEngine
 from app.attendance import (STATE_LABELS, AttendanceManager, normalize_schedule,
-                            person_label)
+                            person_label, schedule_runs_on)
 from app.events import CAMERA_ID, CAMERA_NAME, EventStore
 from app.safety import RULE_ATTENDANCE, ZoneStore
 from app.auth import authenticate, change_password, update_profile
@@ -1062,6 +1062,9 @@ async def v1_training_summary(training_type: Optional[str] = None,
     active_cameras = set()
     for day in days:
         for row in rows:
+            # Ca chỉ hiện vào ngày nó thật sự diễn ra; khai trống thì lặp mọi ngày
+            if not schedule_runs_on(row, date_cls.fromisoformat(day)):
+                continue
             if training_type and row.get("training_type") != training_type:
                 continue
             if shift and row.get("shift") != shift:
@@ -1432,6 +1435,19 @@ async def v1_start_camera(camera_id: str, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=422, detail="Camera chưa khai nguồn (source_uri)")
     if "://" not in source and not os.path.exists(source):
         raise HTTPException(status_code=422, detail=f"Không tìm thấy nguồn video: {source}")
+
+    # Thử kết nối trước khi nhận việc. Trước đây route trả 202 rồi luồng nền chết
+    # âm thầm: thông báo lỗi chỉ đi qua WebSocket mà giao diện không hề mở, nên
+    # người trực chỉ thấy camera tự quay về offline không rõ vì sao.
+    if "://" in source:
+        from app.video_processor import probe_stream
+        reason = probe_stream(source)
+        if reason:
+            events.emit("SYSTEM", f"Không bật được camera {camera.get('name', camera_id)}: {reason}",
+                        severity="warning", camera_id=camera_id,
+                        camera_name=camera.get("name"),
+                        detail={"code": "camera_start_failed"})
+            raise HTTPException(status_code=502, detail=reason)
 
     runtime = CameraRuntime(camera)
     runtimes[camera_id] = runtime

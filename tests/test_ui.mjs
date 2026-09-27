@@ -1149,6 +1149,68 @@ check('sidebar neo ở mép trên', /top:\s*0/.test(sidebarRule), sidebarRule.tr
 check('sidebar cao đúng một màn hình, không dài theo trang', /height:\s*100vh/.test(sidebarRule), sidebarRule.trim());
 check('menu dài hơn màn hình thì cuộn riêng trong sidebar', /overflow-y:\s*auto/.test(sidebarRule), sidebarRule.trim());
 
+console.log('\n[7h2] Thời khoá biểu: khai ngày áp dụng cho ca');
+
+window.switchNavTab('schedule');
+await sleep(1200);
+window.openScheduleModal();
+await sleep(400);
+
+check('form ca có ô Từ ngày', !!doc.getElementById('sch-date-from'));
+check('form ca có ô Đến ngày', !!doc.getElementById('sch-date-to'));
+check('form ca có chọn thứ trong tuần',
+    doc.querySelectorAll('#sch-weekdays input[type="checkbox"]').length === 7,
+    String(doc.querySelectorAll('#sch-weekdays input[type="checkbox"]').length));
+check('mặc định không chọn thứ nào (nghĩa là lặp mọi ngày)',
+    [...doc.querySelectorAll('#sch-weekdays input')].every(i => !i.checked));
+check('có ghi chú giải thích bỏ trống là lặp mọi ngày',
+    doc.getElementById('view-schedule').textContent.includes('lặp mọi ngày')
+    || doc.getElementById('schedule-modal').textContent.includes('lặp mọi ngày'));
+window.closeScheduleModal();
+
+// Tạo ca có phạm vi ngày rồi kiểm bảng hiển thị
+await fetch(BASE + '/api/v1/schedules', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Ca có đợt (fixture ngày)', start_time: '08:00', end_time: '10:00',
+                           unit: 'Đại đội 1', shift: 'Ca sáng', training_type: 'dao_tao',
+                           date_from: '2026-09-22', date_to: '2026-09-25', weekdays: [1, 3] })
+});
+await window.loadSchedules();
+await sleep(600);
+
+const th = [...doc.querySelectorAll('#view-schedule thead th')].map(e => e.textContent.trim());
+check('bảng thời khoá biểu có cột ngày áp dụng', th.includes('NGÀY ÁP DỤNG'), th.join(' | '));
+
+const dotRow = [...doc.querySelectorAll('#schedules-tbody tr')]
+    .find(tr => tr.textContent.includes('Ca có đợt (fixture ngày)'));
+check('dòng ca hiện khoảng ngày đã khai',
+    !!dotRow && dotRow.textContent.includes('22/09/2026') && dotRow.textContent.includes('25/09/2026'),
+    dotRow && dotRow.textContent.replace(/\s+/g, ' ').slice(0, 200));
+check('dòng ca hiện thứ đã khai', !!dotRow && dotRow.textContent.includes('T3'),
+    dotRow && dotRow.textContent.replace(/\s+/g, ' ').slice(0, 200));
+
+const everyRow = [...doc.querySelectorAll('#schedules-tbody tr')]
+    .find(tr => tr.textContent.includes('Huấn luyện bắn súng (fixture)'));
+check('ca không khai ngày ghi rõ là lặp hằng ngày',
+    !!everyRow && everyRow.textContent.includes('Hằng ngày'),
+    everyRow && everyRow.textContent.replace(/\s+/g, ' ').slice(0, 200));
+
+// Sửa ca: form phải điền sẵn ngày và thứ đã lưu
+if (dotRow) {
+    dotRow.querySelector('.icon-btn-edit').click();
+    await sleep(700);
+    check('mở sửa thì điền sẵn khoảng ngày',
+        doc.getElementById('sch-date-from').value === '2026-09-22'
+        && doc.getElementById('sch-date-to').value === '2026-09-25',
+        doc.getElementById('sch-date-from').value + ' → ' + doc.getElementById('sch-date-to').value);
+    check('mở sửa thì tích sẵn đúng thứ',
+        [...doc.querySelectorAll('#sch-weekdays input')].map(i => i.checked).join(',') === 'false,true,false,true,false,false,false',
+        [...doc.querySelectorAll('#sch-weekdays input')].map(i => i.checked).join(','));
+    window.closeScheduleModal();
+    const id = dotRow.querySelector('.icon-btn-edit').getAttribute('onclick').match(/'([^']+)'/)[1];
+    await fetch(BASE + '/api/v1/schedules/' + id, { method: 'DELETE' });
+}
+
 console.log('\n[8] Màn vẽ vùng chịu được canvas không dùng được');
 check('không sập khi trình duyệt không cấp ngữ cảnh vẽ',
     appJs.includes("if (!ctx) return;"));

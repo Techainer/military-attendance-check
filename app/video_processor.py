@@ -2,6 +2,7 @@
 
 import cv2
 import base64
+import re
 import asyncio
 import os
 import threading
@@ -128,12 +129,70 @@ def _bbox_center(bbox) -> Tuple[float, float]:
     return ((float(x1) + float(x2)) / 2.0, (float(y1) + float(y2)) / 2.0)
 
 
+# Mở luồng mạng phải chỉ đích danh backend FFMPEG. Để OpenCV tự chọn thì khi
+# FFMPEG hỏng nó rơi tiếp xuống backend đọc dãy ảnh (CAP_IMAGES) và ném ra thông
+# báo lạc đề "expected '0?[1-9][du]' pattern", che mất nguyên nhân thật
+# (thường là không có đường tới camera, sai mật khẩu hoặc sai đường dẫn luồng).
+STREAM_OPEN_TIMEOUT_S = float(os.environ.get("STREAM_OPEN_TIMEOUT", "8"))
+# TCP đáng tin hơn UDP khi đi qua VPN hoặc mạng nhiều tầng; đổi được nếu camera
+# chỉ hỗ trợ UDP.
+STREAM_RTSP_TRANSPORT = os.environ.get("STREAM_RTSP_TRANSPORT", "tcp")
+
+
+def mask_credentials(uri) -> str:
+    """Giấu mật khẩu trong địa chỉ luồng trước khi in ra log hay trả cho người dùng."""
+    return re.sub(r"://([^:/@]+):[^@]*@", r"://\1:***@", str(uri or ""))
+
+
+def open_stream_capture(uri: str):
+    """VideoCapture cho nguồn mạng, ép dùng FFMPEG và truyền tải RTSP theo cấu hình."""
+    if STREAM_RTSP_TRANSPORT:
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = f"rtsp_transport;{STREAM_RTSP_TRANSPORT}"
+    return cv2.VideoCapture(uri, cv2.CAP_FFMPEG)
+
+
+def probe_stream(uri: str) -> Optional[str]:
+    """Thử mở luồng. Trả ``None`` nếu được, ngược lại trả lý do đọc được cho người trực.
+
+    Mở trong luồng phụ để một camera treo không giữ cả yêu cầu HTTP: OpenCV không
+    có tham số hết giờ dùng chung cho mọi phiên bản FFMPEG.
+    """
+    ket_qua = {}
+
+    def _thu():
+        cap = None
+        try:
+            cap = open_stream_capture(uri)
+            ket_qua["mo_duoc"] = bool(cap.isOpened())
+        except Exception as e:                      # nguồn lạ khiến FFMPEG ném lỗi
+            ket_qua["loi"] = str(e).splitlines()[0][:200]
+        finally:
+            if cap is not None:
+                cap.release()
+
+    worker = threading.Thread(target=_thu, daemon=True)
+    worker.start()
+    worker.join(STREAM_OPEN_TIMEOUT_S)
+
+    dia_chi = mask_credentials(uri)
+    if worker.is_alive():
+        return (f"Quá {STREAM_OPEN_TIMEOUT_S:.0f} giây vẫn chưa mở được luồng {dia_chi}. "
+                f"Kiểm tra máy chủ có đường tới camera không.")
+    if ket_qua.get("loi"):
+        return f"Lỗi mở luồng {dia_chi}: {ket_qua['loi']}"
+    if not ket_qua.get("mo_duoc"):
+        return (f"Không mở được luồng {dia_chi}. Thường do máy chủ không có đường tới "
+                f"camera (khác dải mạng / chưa mở VPN), sai tài khoản hoặc sai đường dẫn luồng.")
+    return None
+
+
 class RTSPStreamReader:
     """Continuously reads frames from an RTSP / network stream in a background thread."""
 
     def __init__(self, rtsp_url: str):
         self.rtsp_url = rtsp_url
-        self.cap = cv2.VideoCapture(rtsp_url)
+        self.error = None
+        self.cap = open_stream_capture(rtsp_url)
         # Giữ hàng đợi giải mã ở mức tối thiểu để khung hình luôn là mới nhất,
         # nếu không hình trên màn hình sẽ trễ dần so với thời gian thực.
         try:
@@ -150,7 +209,9 @@ class RTSPStreamReader:
         if self.started:
             return self
         if not self.cap.isOpened():
-            print(f"Error: Unable to open RTSP stream source: {self.rtsp_url}")
+            self.error = (f"Không mở được luồng {mask_credentials(self.rtsp_url)}. "
+                          f"Kiểm tra đường mạng tới camera, tài khoản và đường dẫn luồng.")
+            print(f"[Camera] {self.error}")
             return self
         self.started = True
         self.thread = threading.Thread(target=self.update, args=())
@@ -351,13 +412,13 @@ class VideoProcessor:
         self.track_identity.clear()
 
         if is_rtsp:
-            print(f"Connecting to RTSP/Network stream: {video_path}")
+            print(f"[Camera] Kết nối luồng mạng: {mask_credentials(video_path)}")
             reader = RTSPStreamReader(video_path)
             reader.start()
             if not reader.started:
                 await on_update({
                     'type': 'error',
-                    'message': 'Không thể kết nối tới luồng camera RTSP'
+                    'message': reader.error or 'Không thể kết nối tới luồng camera RTSP'
                 })
                 return
         else:

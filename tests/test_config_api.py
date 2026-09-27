@@ -105,6 +105,23 @@ check("xoá camera không tồn tại -> 404",
 r = client.post(f"/api/v1/cameras/{CAMERA_ID}/start")
 check("bật camera chưa khai nguồn -> 422", r.status_code == 422, r.text[:200])
 
+# Nguồn khai đúng dạng nhưng không kết nối được: phải báo ngay cho người bấm,
+# đừng nhận 202 rồi chết âm thầm ở luồng nền.
+client.patch(f"/api/v1/cameras/{CAMERA_ID}",
+             json={"source_type": "rtsp", "source_uri": "rtsp://admin:matkhau@127.0.0.1:1/none"})
+r = client.post(f"/api/v1/cameras/{CAMERA_ID}/start")
+check("bật camera không kết nối được -> 502", r.status_code == 502, r.text[:200])
+check("báo lỗi nêu địa chỉ hỏng", "127.0.0.1:1" in r.text, r.text[:250])
+check("báo lỗi không lộ mật khẩu", "matkhau" not in r.text, r.text[:250])
+check("bật hụt thì camera không kẹt ở trạng thái online",
+      client.get(f"/api/v1/cameras/{CAMERA_ID}").json()["status"] != "online",
+      client.get(f"/api/v1/cameras/{CAMERA_ID}").json()["status"])
+su_kien, _ = api.events.list_events(types=["SYSTEM"], limit=5)
+check("ghi lại sự kiện để người trực thấy trong dòng sự kiện",
+      any("127.0.0.1:1" in (e.get("message") or "") for e in su_kien),
+      str([e.get("message") for e in su_kien][:3]))
+client.patch(f"/api/v1/cameras/{CAMERA_ID}", json={"source_uri": ""})
+
 # ================================================================ thời khoá biểu
 print("\n[2] Thời khoá biểu")
 
@@ -651,6 +668,40 @@ check("ngày có biên bản -> has_record = true", by_day["2026-09-20"].get("ha
 check("ngày không có biên bản -> has_record = false", by_day["2026-09-21"].get("has_record") is False,
       str(by_day["2026-09-21"].get("has_record")))
 write_json_list(logs_file, logs_goc)
+
+# ================================ phạm vi ngày của ca huấn luyện
+print("\n[13] Ca chỉ hiện vào ngày đã khai")
+
+reset()
+r = client.post("/api/v1/schedules", json={
+    "name": "Đợt huấn luyện tháng 9", "start_time": "07:00", "end_time": "11:30",
+    "unit": "Đại đội 1", "shift": "Ca sáng", "training_type": "dao_tao",
+    "date_from": "2026-09-22", "date_to": "2026-09-25", "weekdays": [1, 3],
+})
+check("tạo ca có khoảng ngày và thứ -> 201", r.status_code == 201, r.text[:200])
+check("giữ lại đúng khoảng ngày và thứ đã khai",
+      r.json().get("date_from") == "2026-09-22" and r.json().get("weekdays") == [1, 3], r.text[:250])
+
+r = client.post("/api/v1/schedules", json={
+    "name": "Ngày sai", "start_time": "07:00", "end_time": "11:30",
+    "date_from": "2026-09-25", "date_to": "2026-09-22"})
+check("đến ngày trước từ ngày -> 422", r.status_code == 422, str(r.status_code))
+r = client.post("/api/v1/schedules", json={
+    "name": "Thứ sai", "start_time": "07:00", "end_time": "11:30", "weekdays": [9]})
+check("thứ ngoài 0..6 -> 422", r.status_code == 422, str(r.status_code))
+
+# 21/09 là thứ Hai: đợt chạy thứ Ba (22) và thứ Năm (24), nằm trong 22..25
+ngay = client.get("/api/v1/summary/training?date_from=2026-09-21&date_to=2026-09-27").json()
+co = sorted(s["day"] for s in ngay["sessions"])
+check("chỉ hiện đúng những ngày ca thật sự diễn ra",
+      co == ["2026-09-22", "2026-09-24"], str(co))
+
+r = client.post("/api/v1/schedules", json={
+    "name": "Ca lặp hằng ngày", "start_time": "13:00", "end_time": "16:00"})
+ngay2 = client.get("/api/v1/summary/training?date_from=2026-09-21&date_to=2026-09-23").json()
+lap = sorted(s["day"] for s in ngay2["sessions"] if s["name"] == "Ca lặp hằng ngày")
+check("ca không khai ngày vẫn lặp mọi ngày",
+      lap == ["2026-09-21", "2026-09-22", "2026-09-23"], str(lap))
 
 reset()
 

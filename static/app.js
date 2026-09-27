@@ -1613,6 +1613,12 @@ function openScheduleModal(schedule) {
     set('sch-class-name', sch.class_name || '');
     set('sch-start-time', sch.start_time || '07:00');
     set('sch-end-time', sch.end_time || '11:30');
+    set('sch-date-from', sch.date_from || '');
+    set('sch-date-to', sch.date_to || '');
+    const chonThu = new Set((sch.weekdays || []).map(Number));
+    document.querySelectorAll('#sch-weekdays input').forEach(cb => {
+        cb.checked = chonThu.has(Number(cb.value));
+    });
     set('sch-lesson-name', sch.lesson_name || '');
     set('sch-instructor', sch.instructor || '');
     set('sch-field', sch.field || '');
@@ -1686,6 +1692,25 @@ function scheduleCameraName(cameraId) {
 // Danh sách ca đang hiển thị, để nút sửa lấy lại đúng bản ghi
 let scheduleRows = [];
 
+const WEEKDAY_LABELS = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
+
+// Phạm vi áp dụng của ca. Không khai gì thì ca lặp mọi ngày như thời khoá biểu cũ.
+function scheduleDateScope(sch) {
+    const ngay = (iso) => {
+        const [y, m, d] = String(iso).split('-');
+        return d ? `${d}/${m}/${y}` : iso;
+    };
+    const phan = [];
+    if (sch.date_from && sch.date_to) phan.push(`${ngay(sch.date_from)} – ${ngay(sch.date_to)}`);
+    else if (sch.date_from) phan.push(`Từ ${ngay(sch.date_from)}`);
+    else if (sch.date_to) phan.push(`Đến ${ngay(sch.date_to)}`);
+
+    const thu = (sch.weekdays || []).map(Number).sort((a, b) => a - b).map(d => WEEKDAY_LABELS[d]);
+    if (thu.length) phan.push(thu.join(', '));
+    if (!phan.length) return '<span class="muted">Hằng ngày</span>';
+    return phan.map(t => `<div>${esc(t)}</div>`).join('');
+}
+
 function renderSchedulesTable(schedules) {
     if (!schedulesTbody) return;
     scheduleRows = schedules;
@@ -1706,6 +1731,7 @@ function renderSchedulesTable(schedules) {
             <td><strong>${sch.name}</strong></td>
             <td>${sch.unit}</td>
             <td class="font-mono">${sch.start_time} - ${sch.end_time}</td>
+            <td>${scheduleDateScope(sch)}</td>
             <td>${esc(scheduleCameraName(sch.camera_id))}</td>
             <td class="font-mono" style="color: #059669; font-weight: 700;">${sch.start_time} → ${addMinutesToClock(sch.start_time, win)}</td>
             <td class="font-mono" style="color: #0369a1; font-weight: 700;">${addMinutesToClock(sch.end_time, -win)} → ${sch.end_time}</td>
@@ -1754,6 +1780,9 @@ async function handleCreateSchedule(e) {
         instructor: (val('sch-instructor') || '').trim(),
         field: (val('sch-field') || '').trim(),
         camera_id: val('sch-camera-select') || null,
+        date_from: val('sch-date-from') || null,
+        date_to: val('sch-date-to') || null,
+        weekdays: [...document.querySelectorAll('#sch-weekdays input:checked')].map(cb => Number(cb.value)),
         check_window_mins: num('sch-window-input', 5),
         required_count: num('sch-count-input', 45),
         late_tolerance_mins: num('sch-late-tol', 5),

@@ -2473,3 +2473,25 @@ a.btn-clip-ctrl {
 .icon-btn-edit:hover { background: var(--primary-green-light); }
 
 .no-record { color: var(--warning-orange); font-weight: 600; }
+
+
+/* Chọn thứ trong tuần cho ca huấn luyện */
+.weekday-picker { display: flex; flex-wrap: wrap; gap: 6px; }
+.weekday-box {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 10px;
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #435b4f;
+    cursor: pointer;
+    user-select: none;
+}
+.weekday-box:has(input:checked) {
+    background: var(--primary-green-light);
+    border-color: var(--primary-green);
+    color: var(--primary-green-text);
+}
