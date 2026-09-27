@@ -1433,6 +1433,19 @@ async def v1_start_camera(camera_id: str, background_tasks: BackgroundTasks):
     if "://" not in source and not os.path.exists(source):
         raise HTTPException(status_code=422, detail=f"Không tìm thấy nguồn video: {source}")
 
+    # Thử kết nối trước khi nhận việc. Trước đây route trả 202 rồi luồng nền chết
+    # âm thầm: thông báo lỗi chỉ đi qua WebSocket mà giao diện không hề mở, nên
+    # người trực chỉ thấy camera tự quay về offline không rõ vì sao.
+    if "://" in source:
+        from app.video_processor import probe_stream
+        reason = probe_stream(source)
+        if reason:
+            events.emit("SYSTEM", f"Không bật được camera {camera.get('name', camera_id)}: {reason}",
+                        severity="warning", camera_id=camera_id,
+                        camera_name=camera.get("name"),
+                        detail={"code": "camera_start_failed"})
+            raise HTTPException(status_code=502, detail=reason)
+
     runtime = CameraRuntime(camera)
     runtimes[camera_id] = runtime
     background_tasks.add_task(_run_camera, runtime)

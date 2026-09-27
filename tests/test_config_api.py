@@ -105,6 +105,23 @@ check("xoá camera không tồn tại -> 404",
 r = client.post(f"/api/v1/cameras/{CAMERA_ID}/start")
 check("bật camera chưa khai nguồn -> 422", r.status_code == 422, r.text[:200])
 
+# Nguồn khai đúng dạng nhưng không kết nối được: phải báo ngay cho người bấm,
+# đừng nhận 202 rồi chết âm thầm ở luồng nền.
+client.patch(f"/api/v1/cameras/{CAMERA_ID}",
+             json={"source_type": "rtsp", "source_uri": "rtsp://admin:matkhau@127.0.0.1:1/none"})
+r = client.post(f"/api/v1/cameras/{CAMERA_ID}/start")
+check("bật camera không kết nối được -> 502", r.status_code == 502, r.text[:200])
+check("báo lỗi nêu địa chỉ hỏng", "127.0.0.1:1" in r.text, r.text[:250])
+check("báo lỗi không lộ mật khẩu", "matkhau" not in r.text, r.text[:250])
+check("bật hụt thì camera không kẹt ở trạng thái online",
+      client.get(f"/api/v1/cameras/{CAMERA_ID}").json()["status"] != "online",
+      client.get(f"/api/v1/cameras/{CAMERA_ID}").json()["status"])
+su_kien, _ = api.events.list_events(types=["SYSTEM"], limit=5)
+check("ghi lại sự kiện để người trực thấy trong dòng sự kiện",
+      any("127.0.0.1:1" in (e.get("message") or "") for e in su_kien),
+      str([e.get("message") for e in su_kien][:3]))
+client.patch(f"/api/v1/cameras/{CAMERA_ID}", json={"source_uri": ""})
+
 # ================================================================ thời khoá biểu
 print("\n[2] Thời khoá biểu")
 

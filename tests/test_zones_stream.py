@@ -337,6 +337,40 @@ check("luồng không lớp phủ cũng dùng bản nhỏ", stream_clean in body
 r = client.get(f"/api/v1/cameras/{CAMERA_ID}/snapshot?overlay=1")
 check("ảnh chụp vẫn là bản gốc full HD", r.content == full_jpeg, f"{len(r.content)} byte")
 
+# ============================================ mở luồng camera mạng
+print("\n[6c] Mở luồng camera mạng: báo đúng lỗi, không lộ mật khẩu")
+
+import time as _time
+
+URL = "rtsp://admin:Techainer123%40@192.168.1.231:554/MediaInput/stream_1"
+check("che mật khẩu khi in ra log và thông báo",
+      vp.mask_credentials(URL) == "rtsp://admin:***@192.168.1.231:554/MediaInput/stream_1",
+      vp.mask_credentials(URL))
+check("giữ nguyên địa chỉ không có tài khoản",
+      vp.mask_credentials("rtsp://1.2.3.4:554/stream") == "rtsp://1.2.3.4:554/stream")
+check("chuỗi rỗng không làm vỡ hàm", vp.mask_credentials(None) == "")
+
+goi = []
+_that = vp.cv2.VideoCapture
+vp.cv2.VideoCapture = lambda *a, **k: (goi.append(a), _that(*a, **k))[1]
+try:
+    cap = vp.open_stream_capture("rtsp://127.0.0.1:1/none")
+    cap.release()
+finally:
+    vp.cv2.VideoCapture = _that
+check("chỉ định thẳng backend FFMPEG (không để rơi xuống backend đọc dãy ảnh)",
+      goi and len(goi[0]) == 2 and goi[0][1] == cv2.CAP_FFMPEG, str(goi))
+
+t0 = _time.time()
+ly_do = vp.probe_stream("rtsp://admin:matkhau@127.0.0.1:1/none")
+mat = _time.time() - t0
+check("nguồn không kết nối được -> trả lý do, không ném lỗi", isinstance(ly_do, str) and ly_do,
+      repr(ly_do))
+check("không bắt người dùng chờ lâu", mat < vp.STREAM_OPEN_TIMEOUT_S + 8, f"{mat:.1f}s")
+check("lý do không lộ mật khẩu", "matkhau" not in (ly_do or ""), ly_do)
+check("lý do có nêu địa chỉ để người trực biết đang hỏng ở đâu",
+      "127.0.0.1:1" in (ly_do or ""), ly_do)
+
 # ================================================================ hợp đồng
 print("\n[7] Đối chiếu với openapi.yaml")
 
