@@ -1211,6 +1211,42 @@ if (dotRow) {
     await fetch(BASE + '/api/v1/schedules/' + id, { method: 'DELETE' });
 }
 
+console.log('\n[7h3] Bảng thời khoá biểu gọn lại, không tràn ngang');
+
+window.switchNavTab('schedule');
+await sleep(1200);
+
+const schTh = [...doc.querySelectorAll('#view-schedule thead th')].map(e => e.textContent.trim());
+check('bảng gom còn 7 cột thay vì 12', schTh.length === 7, `${schTh.length}: ${schTh.join(' | ')}`);
+check('bảng vẫn nằm trong khung cuộn ngang dự phòng',
+    !!doc.querySelector('#view-schedule .table-responsive table'));
+
+const row = [...doc.querySelectorAll('#schedules-tbody tr')]
+    .find(tr => tr.textContent.includes('Huấn luyện bắn súng (fixture)'));
+if (row) {
+    const cells = [...row.querySelectorAll('td')].map(td => td.textContent.replace(/\s+/g, ' ').trim());
+    check('mỗi dòng cũng có đúng 7 ô', cells.length === 7, String(cells.length));
+    // Gộp cột nhưng không được mất thông tin nào
+    const all = cells.join(' § ');
+    check('giữ ca trực', all.includes('Ca sáng'), all);
+    check('giữ tên nhiệm vụ', all.includes('Huấn luyện bắn súng (fixture)'), all);
+    check('giữ đơn vị và sĩ số chuẩn',
+        all.includes('Đại đội 1') && /\b40\b/.test(all), all);
+    check('giữ khung giờ ca', all.includes('07:00') && all.includes('11:30'), all);
+    check('giữ cả hai cửa sổ điểm danh',
+        all.includes('07:05') && all.includes('11:25'), all);
+    check('giữ tên camera', all.includes('Sân tập trung'), all);
+    check('giữ ngày áp dụng', all.includes('Hằng ngày'), all);
+    check('giữ trạng thái và mốc đã điểm danh hôm nay',
+        /Đã kết thúc|Đang|Chưa tới giờ/.test(all) && all.includes('Đầu giờ') && all.includes('Cuối giờ'), all);
+    check('giữ nút sửa và xoá',
+        !!row.querySelector('.icon-btn-edit') && !!row.querySelector('.icon-btn-delete'));
+}
+
+const modalRule = (styleCss.match(/^\.modal-content\s*\{([^}]*)\}/m) || [, ''])[1];
+check('hộp thoại cao quá màn hình thì cuộn trong hộp, không đẩy nút Lưu ra ngoài',
+    /max-height:\s*9\dvh/.test(modalRule) && /overflow-y:\s*auto/.test(modalRule), modalRule.trim());
+
 console.log('\n[8] Màn vẽ vùng chịu được canvas không dùng được');
 check('không sập khi trình duyệt không cấp ngữ cảnh vẽ',
     appJs.includes("if (!ctx) return;"));
