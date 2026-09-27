@@ -24,7 +24,7 @@ from app.video_processor import VideoProcessor
 from app.monitor import AttendanceMonitor
 from app.face_engine import FaceEngine
 from app.attendance import (STATE_LABELS, AttendanceManager, normalize_schedule,
-                            person_label)
+                            person_label, schedule_runs_on)
 from app.events import CAMERA_ID, CAMERA_NAME, EventStore
 from app.safety import RULE_ATTENDANCE, ZoneStore
 from app.auth import authenticate, change_password, update_profile
@@ -1062,6 +1062,9 @@ async def v1_training_summary(training_type: Optional[str] = None,
     active_cameras = set()
     for day in days:
         for row in rows:
+            # Ca chỉ hiện vào ngày nó thật sự diễn ra; khai trống thì lặp mọi ngày
+            if not schedule_runs_on(row, date_cls.fromisoformat(day)):
+                continue
             if training_type and row.get("training_type") != training_type:
                 continue
             if shift and row.get("shift") != shift:

@@ -64,6 +64,18 @@ giao diện: bấm vào avatar ở góc trái dưới cùng → Thông tin cá n
 khác không kiểm quyền — gọi thẳng API vẫn làm được mọi thứ. Vai trò chỉ để giao
 diện hiện đúng menu.
 
+## Phạm vi ngày của ca huấn luyện
+
+Mỗi ca có thể khai `date_from`, `date_to` và `weekdays` (0 = thứ Hai … 6 = Chủ
+nhật). Cả ba đều tuỳ chọn:
+
+- Không khai gì → ca **lặp mọi ngày**, đúng như thời khoá biểu vốn có.
+- Khai khoảng ngày → ca chỉ chạy trong đợt đó.
+- Khai thứ → ca chỉ chạy vào những thứ đã chọn.
+
+Ngoài phạm vi đã khai, hệ thống không mở cửa sổ điểm danh và ca không hiện
+trong màn Lịch & Tiến độ.
+
 ## Luồng xem trực tiếp qua mạng chậm
 
 Luồng MJPEG gửi bản **thu nhỏ** để xem mượt qua tunnel; ảnh chụp, ảnh bằng chứng

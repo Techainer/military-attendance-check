@@ -669,6 +669,40 @@ check("ngày không có biên bản -> has_record = false", by_day["2026-09-21"]
       str(by_day["2026-09-21"].get("has_record")))
 write_json_list(logs_file, logs_goc)
 
+# ================================ phạm vi ngày của ca huấn luyện
+print("\n[13] Ca chỉ hiện vào ngày đã khai")
+
+reset()
+r = client.post("/api/v1/schedules", json={
+    "name": "Đợt huấn luyện tháng 9", "start_time": "07:00", "end_time": "11:30",
+    "unit": "Đại đội 1", "shift": "Ca sáng", "training_type": "dao_tao",
+    "date_from": "2026-09-22", "date_to": "2026-09-25", "weekdays": [1, 3],
+})
+check("tạo ca có khoảng ngày và thứ -> 201", r.status_code == 201, r.text[:200])
+check("giữ lại đúng khoảng ngày và thứ đã khai",
+      r.json().get("date_from") == "2026-09-22" and r.json().get("weekdays") == [1, 3], r.text[:250])
+
+r = client.post("/api/v1/schedules", json={
+    "name": "Ngày sai", "start_time": "07:00", "end_time": "11:30",
+    "date_from": "2026-09-25", "date_to": "2026-09-22"})
+check("đến ngày trước từ ngày -> 422", r.status_code == 422, str(r.status_code))
+r = client.post("/api/v1/schedules", json={
+    "name": "Thứ sai", "start_time": "07:00", "end_time": "11:30", "weekdays": [9]})
+check("thứ ngoài 0..6 -> 422", r.status_code == 422, str(r.status_code))
+
+# 21/09 là thứ Hai: đợt chạy thứ Ba (22) và thứ Năm (24), nằm trong 22..25
+ngay = client.get("/api/v1/summary/training?date_from=2026-09-21&date_to=2026-09-27").json()
+co = sorted(s["day"] for s in ngay["sessions"])
+check("chỉ hiện đúng những ngày ca thật sự diễn ra",
+      co == ["2026-09-22", "2026-09-24"], str(co))
+
+r = client.post("/api/v1/schedules", json={
+    "name": "Ca lặp hằng ngày", "start_time": "13:00", "end_time": "16:00"})
+ngay2 = client.get("/api/v1/summary/training?date_from=2026-09-21&date_to=2026-09-23").json()
+lap = sorted(s["day"] for s in ngay2["sessions"] if s["name"] == "Ca lặp hằng ngày")
+check("ca không khai ngày vẫn lặp mọi ngày",
+      lap == ["2026-09-21", "2026-09-22", "2026-09-23"], str(lap))
+
 reset()
 
 print()

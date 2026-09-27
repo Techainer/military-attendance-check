@@ -2,7 +2,7 @@
 
 import sys
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import numpy as np
 
@@ -314,6 +314,47 @@ mgr3 = AttendanceManager(data_dir=str(d_cu), face_engine=_KhongCoQuanNhan(), cam
 check("biên bản cũ chưa vá không làm bỏ qua mốc cuối của đêm kế tiếp",
       mgr3.maybe_open_scheduled(datetime(2026, 9, 23, 4, 55, 30)) is not None)
 mgr3.cancel_session()
+
+# ------------------------------------------- phạm vi ngày của ca
+print("\n[10] Ca chỉ diễn ra trong khoảng ngày và thứ đã khai")
+
+from app.attendance import schedule_runs_on
+
+MON, TUE, SAT = date(2026, 9, 21), date(2026, 9, 22), date(2026, 9, 26)
+
+check("không khai gì thì lặp mọi ngày",
+      all(schedule_runs_on({"start_time": "07:00", "end_time": "11:30"}, d)
+          for d in (MON, TUE, SAT)))
+
+trong_dot = {"start_time": "07:00", "end_time": "11:30",
+             "date_from": "2026-09-22", "date_to": "2026-09-25"}
+check("trước đợt thì không chạy", not schedule_runs_on(trong_dot, MON))
+check("trong đợt thì chạy", schedule_runs_on(trong_dot, TUE))
+check("sau đợt thì không chạy", not schedule_runs_on(trong_dot, SAT))
+
+chi_thu_hai = {"start_time": "07:00", "end_time": "11:30", "weekdays": [0]}
+check("đúng thứ đã khai thì chạy", schedule_runs_on(chi_thu_hai, MON))
+check("thứ khác thì không chạy", not schedule_runs_on(chi_thu_hai, TUE))
+
+check("khai mỗi 'từ ngày' thì từ đó trở đi chạy mãi",
+      schedule_runs_on({"start_time": "07:00", "end_time": "11:30",
+                        "date_from": "2026-09-22"}, SAT))
+check("danh sách thứ rỗng coi như mọi thứ",
+      schedule_runs_on({"start_time": "07:00", "end_time": "11:30", "weekdays": []}, TUE))
+
+# Phiên điểm danh không được mở vào ngày ca không diễn ra
+d_ngay = Path(tempfile.mkdtemp())
+(d_ngay / "schedules.json").write_text(json.dumps([{
+    "id": "sch_thu_hai", "name": "Chỉ học thứ Hai", "start_time": "07:00", "end_time": "11:30",
+    "unit": "Đại đội 1", "check_window_mins": 5, "required_count": 10, "weekdays": [0],
+}], ensure_ascii=False), encoding="utf-8")
+mgr_ngay = AttendanceManager(data_dir=str(d_ngay), face_engine=_KhongCoQuanNhan(), camera_id=None)
+check("không mở phiên điểm danh vào ngày ca không diễn ra",
+      mgr_ngay.maybe_open_scheduled(datetime(2026, 9, 22, 7, 0, 30)) is None)
+phien = mgr_ngay.maybe_open_scheduled(datetime(2026, 9, 21, 7, 0, 30))
+check("vẫn mở phiên bình thường vào đúng thứ", phien is not None)
+if phien:
+    mgr_ngay.cancel_session()
 
 # ---------------------------------------------------------------- kết luận
 print()

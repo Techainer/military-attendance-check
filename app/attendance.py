@@ -1,6 +1,6 @@
 """Roll-call session logic: điểm danh N phút đầu giờ và N phút cuối giờ học."""
 
-from datetime import datetime, timedelta
+from datetime import date as date_cls, datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -130,6 +130,35 @@ def _time_on(day: datetime, raw_time) -> Optional[datetime]:
         return day.replace(hour=int(parts[0]), minute=int(parts[1]), second=0, microsecond=0)
     except ValueError:
         return None
+
+
+def schedule_runs_on(schedule: dict, day) -> bool:
+    """Ca có diễn ra trong ngày ``day`` không.
+
+    Ba trường đều tuỳ chọn: ``date_from``, ``date_to`` giới hạn đợt huấn luyện,
+    ``weekdays`` giới hạn thứ trong tuần (0 = thứ Hai). Bỏ trống hết thì ca lặp
+    mọi ngày như thời khoá biểu vốn có.
+    """
+    if isinstance(day, datetime):
+        day = day.date()
+
+    for field, ok in (("date_from", lambda m: day >= m), ("date_to", lambda m: day <= m)):
+        raw = schedule.get(field)
+        if raw:
+            try:
+                if not ok(date_cls.fromisoformat(str(raw))):
+                    return False
+            except ValueError:
+                pass            # ngày khai sai định dạng thì bỏ qua, không chặn ca
+
+    weekdays = schedule.get("weekdays")
+    if weekdays:
+        try:
+            if day.weekday() not in {int(w) for w in weekdays}:
+                return False
+        except (TypeError, ValueError):
+            pass
+    return True
 
 
 def _occurrence(schedule: dict, now: datetime) -> Tuple[Optional[datetime], Optional[datetime]]:
@@ -638,6 +667,8 @@ class AttendanceManager:
         for schedule in self._load_schedules():
             for phase, win_start, win_end in schedule_windows(schedule, now):
                 if not (win_start <= now < win_end):
+                    continue
+                if not schedule_runs_on(schedule, _start_datetime(schedule, win_start) or win_start):
                     continue
                 if (win_end - now).total_seconds() < MIN_OPEN_REMAINING_SECONDS:
                     # Hệ thống vào quá muộn: không chốt biên bản nửa vời, cũng không

@@ -516,6 +516,7 @@
                                         <th>TÊN NHIỆM VỤ / NỘI DUNG</th>
                                         <th>ĐƠN VỊ ÁP DỤNG</th>
                                         <th>KHUNG GIỜ CA</th>
+                                        <th>NGÀY ÁP DỤNG</th>
                                         <th>CAMERA</th>
                                         <th>CỬA SỔ ĐẦU GIỜ</th>
                                         <th>CỬA SỔ CUỐI GIỜ</th>
@@ -1076,6 +1077,31 @@
                         <label>Giờ kết thúc</label>
                         <input type="time" id="sch-end-time" value="11:30" required class="form-input">
                     </div>
+                </div>
+
+                <div class="form-row-two">
+                    <div class="form-group">
+                        <label>Từ ngày</label>
+                        <input type="date" id="sch-date-from" class="form-input">
+                    </div>
+                    <div class="form-group">
+                        <label>Đến ngày</label>
+                        <input type="date" id="sch-date-to" class="form-input">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Thứ trong tuần</label>
+                    <div class="weekday-picker" id="sch-weekdays">
+                        <label class="weekday-box"><input type="checkbox" value="0"><span>T2</span></label>
+                        <label class="weekday-box"><input type="checkbox" value="1"><span>T3</span></label>
+                        <label class="weekday-box"><input type="checkbox" value="2"><span>T4</span></label>
+                        <label class="weekday-box"><input type="checkbox" value="3"><span>T5</span></label>
+                        <label class="weekday-box"><input type="checkbox" value="4"><span>T6</span></label>
+                        <label class="weekday-box"><input type="checkbox" value="5"><span>T7</span></label>
+                        <label class="weekday-box"><input type="checkbox" value="6"><span>CN</span></label>
+                    </div>
+                    <p class="form-hint">Bỏ trống ngày và thứ thì ca lặp mọi ngày.</p>
                 </div>
 
                 <div class="form-row-two">
