@@ -1,5 +1,30 @@
-services: 
+services:
+  horus-ai:
+    build:
+      context: .
+      args:
+        TORCH_VARIANT: cpu
+    image: horus-ai:${HORUS_VERSION:-latest}
+    restart: unless-stopped
+    ports:
+      - "${HORUS_PORT:-8199}:8199"
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./data:/app/data        # cấu hình, khuôn mặt, biên bản, ảnh bằng chứng
+      - ./alerts:/app/alerts    # ảnh cảnh báo
+      - ./uploads:/app/uploads  # video tải lên để chạy thử
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # Tunnel ra ngoài cho demo. Không dùng ở bản triển khai thực tế.
+  # Bật: docker compose --profile tunnel up -d frpc
   frpc:
+    profiles: ["tunnel"]
     image: snowdreamtech/frpc:0.49.0
     restart: unless-stopped
     network_mode: host

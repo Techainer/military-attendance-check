@@ -1,0 +1,16 @@
+# Chỉ dùng khi máy có GPU NVIDIA + NVIDIA Container Toolkit:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+# YOLO chạy GPU; InsightFace vẫn chạy CPU (onnxruntime bản CPU).
+services:
+  horus-ai:
+    build:
+      args:
+        TORCH_VARIANT: cu128
+    image: horus-ai:${HORUS_VERSION:-latest}-gpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
