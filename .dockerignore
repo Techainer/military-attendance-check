@@ -1,0 +1,12 @@
+.git
+.venv
+node_modules
+__pycache__
+*.pt
+data
+alerts
+uploads
+tests
+docs
+frpc.ini
+.env
