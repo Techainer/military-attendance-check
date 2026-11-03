@@ -150,21 +150,30 @@ check("polygon điểm danh vẫn lấy được (hành vi cũ không đổi)",
       store.attendance_polygon(W, H) is not None)
 
 outside = [100, 100, 200, 400]      # trong vùng điểm danh, không phải vùng cấm
-inside = [700, 100, 800, 400]       # trong vùng cấm
+inside = [700, 100, 800, 400]       # trong vùng cấm, cách mép > biên độ hysteresis
 
 v = det.check([outside], [1], W, H, now)
 check("người trong vùng điểm danh -> không có vi phạm", v == [])
 
+# Vào vùng cấm KHÔNG được bắn ngay ở khung đầu tiên nữa (đây chính là lỗi cũ
+# gây 157 cảnh báo giả/buổi) — phải đủ dwell (khung + thời gian) mới xác nhận.
 v = det.check([outside, inside], [1, 2], W, H, now)
-check("người trong vùng cấm -> sinh vi phạm", len(v) == 1 and v[0]["indices"] == [1], str(v))
+check("mới vào vùng cấm 1 khung -> CHƯA đủ dwell, chưa vi phạm", v == [], str(v))
+
+v = det.check([outside, inside], [1, 2], W, H, now + timedelta(milliseconds=500))
+check("đủ khung nhưng CHƯA đủ thời gian đứng -> vẫn chưa vi phạm", v == [], str(v))
+
+v = det.check([outside, inside], [1, 2], W, H, now + timedelta(seconds=1, milliseconds=100))
+check("đủ khung VÀ đủ thời gian đứng -> xác nhận vi phạm đúng một lần",
+      len(v) == 1 and v[0]["indices"] == [1], str(v))
 check("vi phạm gắn đúng vùng", v[0]["zone"]["id"] == "z_cam")
 
-v = det.check([inside], [2], W, H, now + timedelta(seconds=5))
-check("còn trong thời gian chờ -> không bắn lại", v == [])
+v = det.check([outside, inside], [1, 2], W, H, now + timedelta(seconds=3))
+check("vẫn đứng trong vùng, track đã xác nhận -> không bắn lặp lại mỗi khung",
+      v == [], str(v))
 
-v = det.check([inside], [2], W, H, now + timedelta(seconds=25))
-check("quá thời gian chờ -> bắn lại", len(v) == 1)
-check("dwell_seconds cộng dồn từ lúc vào vùng", v[0]["dwell_seconds"] == 25, str(v[0]))
+v = det.check([outside], [1], W, H, now + timedelta(seconds=4))
+check("rời khỏi vùng cấm -> không còn vi phạm", v == [])
 
 # vạch an toàn
 (tmp / "zone_rules.json").write_text(json.dumps({
@@ -179,9 +188,14 @@ below = [400, 600, 500, 800]   # chân ở y=798, phía dưới vạch
 
 det2.check([above], [7], W, H, now)
 v = det2.check([above], [7], W, H, now + timedelta(seconds=1))
-check("đứng yên một phía -> không vi phạm", v == [])
+check("đứng yên một phía đủ lâu -> chỉ xác lập mốc, không vi phạm", v == [])
+
 v = det2.check([below], [7], W, H, now + timedelta(seconds=2))
-check("cắt qua vạch -> sinh vi phạm", len(v) == 1 and v[0]["indices"] == [0], str(v))
+check("mới sang phía kia 1 khung -> CHƯA đủ dwell để tính cắt qua", v == [], str(v))
+
+v = det2.check([below], [7], W, H, now + timedelta(seconds=3))
+check("đứng ổn định ở phía kia đủ khung + đủ giây -> xác nhận cắt qua vạch",
+      len(v) == 1 and v[0]["indices"] == [0], str(v))
 
 # ---------------------------------------------------------------- events
 print("\n[3] Kho sự kiện: ghi, lọc, xác nhận xử lý")

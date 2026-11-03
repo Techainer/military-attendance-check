@@ -6,6 +6,7 @@ Hai mốc điểm danh đầu/cuối giờ chỉ cho biết có mặt hay vắng
 đầu tiên và cuối cùng của mỗi người trong cả buổi, rồi mới suy ra trạng thái.
 """
 
+import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
@@ -13,6 +14,9 @@ from app import clock
 
 # Số lượt quét tối thiểu để coi là thật sự có mặt, chống một lần nhận nhầm
 MIN_SIGHTINGS = 3
+# Các lượt quét phải trải dài ít nhất ngần này — 3 khung dính liền hoặc 3 lần
+# nhận nhầm trong chớp mắt vẫn đủ MIN_SIGHTINGS nhưng không phải "có mặt thật"
+MIN_PRESENCE_SPAN_S = float(os.environ.get("MIN_PRESENCE_SPAN_S", "2.0"))
 
 STATUS_PRESENT = "present"
 STATUS_VIOLATION = "violation"
@@ -42,19 +46,34 @@ class SessionPresence:
         # Người đã bắn sự kiện đi chậm rồi thì không bắn lại
         self.late_reported: set = set()
 
-    def record(self, person_ids: List[str], now: datetime) -> None:
+    def record(self, person_ids: List[str], now: datetime, frame_seq: Optional[int] = None) -> None:
+        """Ghi một lượt quét. ``frame_seq`` (tuỳ chọn) là số thứ tự khung hình
+        gốc — truyền vào thì mới đòi hỏi các lượt quét đến từ các khung hình
+        KHÁC NHAU, không chỉ khác nhau về thời điểm ghi nhận."""
         for pid in set(person_ids):
             entry = self.seen.get(pid)
             if entry is None:
-                self.seen[pid] = {"first": now, "last": now, "sightings": 1}
+                entry = {"first": now, "last": now, "sightings": 1, "frame_seqs": None}
+                self.seen[pid] = entry
             else:
                 entry["last"] = now
                 entry["sightings"] += 1
+            if frame_seq is not None:
+                if entry["frame_seqs"] is None:
+                    entry["frame_seqs"] = set()
+                entry["frame_seqs"].add(frame_seq)
 
     def _confirmed(self, pid: str) -> Optional[dict]:
-        """Dấu vết của một người, chỉ tính khi đủ số lượt quét tối thiểu."""
+        """Dấu vết của một người, chỉ tính khi đủ số lượt quét tối thiểu VÀ các
+        lượt đó trải dài đủ lâu — chặn cả khung trùng/lỗi lẫn nhận nhầm dồn dập.
+        """
         entry = self.seen.get(pid)
         if entry is None or entry["sightings"] < MIN_SIGHTINGS:
+            return None
+        if (entry["last"] - entry["first"]).total_seconds() < MIN_PRESENCE_SPAN_S:
+            return None
+        frame_seqs = entry.get("frame_seqs")
+        if frame_seqs is not None and len(frame_seqs) < MIN_SIGHTINGS:
             return None
         return entry
 
