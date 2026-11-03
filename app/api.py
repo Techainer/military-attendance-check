@@ -20,7 +20,7 @@ from typing import Dict, List, Optional
 from pydantic import ValidationError
 
 from app import clock
-from app.video_processor import VideoProcessor
+from app.video_processor import VideoProcessor, mask_credentials
 from app.monitor import AttendanceMonitor
 from app.face_engine import FaceEngine
 from app.attendance import (STATE_LABELS, AttendanceManager, normalize_schedule,
@@ -673,7 +673,7 @@ async def set_baseline(count: int):
 @app.get("/api/time")
 async def get_server_time():
     """Giờ máy chủ để giao diện hiển thị trùng với dấu thời gian trên khung hình."""
-    return {"status": "success", "server_time": clock.now().isoformat(), "timezone": clock.TZ_NAME}
+    return {"status": "success", "server_time": clock.iso(), "timezone": clock.TZ_NAME}
 
 
 @app.get("/api/status")
@@ -1341,14 +1341,17 @@ def _live_count(camera_id: str) -> int:
 
 
 def _camera_out(camera: dict) -> dict:
-    """Bản ghi trả về giao diện, kèm trạng thái và đường dẫn dựng sẵn."""
-    return {
+    """Bản ghi trả về giao diện, kèm trạng thái và đường dẫn dựng sẵn. Giấu mật khẩu."""
+    out = {
         **camera,
         "status": _camera_status(camera),
         "live_count": _live_count(camera["id"]),
         "stream_url": f"/api/v1/cameras/{camera['id']}/stream.mjpg?overlay=1",
         "snapshot_url": f"/api/v1/cameras/{camera['id']}/snapshot?overlay=0",
     }
+    if "source_uri" in out:
+        out["source_uri"] = mask_credentials(out["source_uri"])
+    return out
 
 
 def _camera_or_404(camera_id: str) -> tuple:
@@ -1395,6 +1398,19 @@ async def v1_update_camera(camera_id: str, payload: CameraPatch):
         raise HTTPException(status_code=422,
                             detail=e.errors(include_url=False, include_context=False,
                                             include_input=False))
+    # Nếu source_uri chứa :***@ (mật khẩu bị che), lấy mật khẩu cũ để không mất
+    if merged.get("source_uri", "").count(":***@") > 0:
+        old_uri = cameras[index].get("source_uri", "")
+        if old_uri and "://" in old_uri:
+            # Trích xuất mật khẩu từ URI cũ (định dạng scheme://user:pass@host/path)
+            match = re.match(r"(.*://[^:/@]+:)([^@]*)(@.*)", old_uri)
+            if match:
+                old_password = match.group(2)
+                merged["source_uri"] = re.sub(
+                    r"(.*://[^:/@]+:)\*{3}(@.*)",
+                    rf"\1{old_password}\2",
+                    merged["source_uri"]
+                )
     merged["id"] = camera_id
     cameras[index] = merged
     write_json_list(cameras_file, cameras)
