@@ -18,7 +18,11 @@ COPY pyproject.toml uv.lock ./
 # bản trong uv.lock. Bỏ torch và gói CUDA khỏi danh sách để bản CPU không kéo
 # theo vài GB thư viện nvidia. lap cài thêm vì ultralytics tự cài nó lúc chạy
 # tracker lần đầu, máy không có internet sẽ hỏng.
-RUN uv export --frozen --no-dev --no-hashes --no-emit-project -o req.txt \
+# Mạng máy build chậm: gói CUDA vài trăm MB hay quá timeout mặc định 30 s của uv.
+# Cache mount giữ phần đã tải để build lại không phải tải lại từ đầu.
+ENV UV_HTTP_TIMEOUT=600 UV_CONCURRENT_DOWNLOADS=2 UV_LINK_MODE=copy UV_CACHE_DIR=/root/.cache/uv
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv export --frozen --no-dev --no-hashes --no-emit-project -o req.txt \
  && grep -vE '^(torch|torchvision|triton|nvidia-)' req.txt > req-app.txt \
  && python -m venv /opt/venv \
  && uv pip install --python /opt/venv/bin/python \
