@@ -30,6 +30,8 @@ from fastapi.responses import Response
 import websockets
 from websockets.exceptions import ConnectionClosed
 
+from app import auth
+
 # Tắt được bằng GO2RTC_ENABLED=0 để quay về MJPEG hoàn toàn (máy không chạy
 # được go2rtc, hoặc đang gỡ lỗi).
 GO2RTC_ENABLED = os.environ.get("GO2RTC_ENABLED", "1").strip().lower() not in ("0", "false", "")
@@ -192,7 +194,17 @@ async def proxy_ws(websocket: WebSocket) -> None:
     Một kết nối này mang CẢ đàm phán WebRTC (SDP qua JSON) và dữ liệu MSE nhị
     phân — xem video-rtc.js vendor — nên chỉ cần proxy đúng một đường WS, không
     cần route riêng cho WebRTC.
+
+    Middleware kiểm phiên trong app/api.py chỉ bắt scope ``http``, không bắt
+    ``websocket`` — tự kiểm cookie ở đây, đọc từ handshake qua
+    ``websocket.cookies``. Thiếu cookie/hết hạn thì đóng trước khi accept,
+    không để lộ stream camera cho người chưa đăng nhập.
     """
+    if auth.AUTH_REQUIRED and auth.verify_session_token(
+            websocket.cookies.get(auth.SESSION_COOKIE)) is None:
+        await websocket.close(code=1008)
+        return
+
     if not GO2RTC_ENABLED:
         await websocket.close(code=1013)
         return

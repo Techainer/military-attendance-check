@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from starlette.routing import Mount
 
 import app.api as api
+from auth_helper import login_as
 
 failures = []
 
@@ -29,6 +30,9 @@ def check(name, cond, extra=""):
 
 
 client = TestClient(api.app, raise_server_exceptions=False)
+# Đăng nhập QTHT để route chạy tới thân hàm thật (bắt được NameError sâu bên
+# trong) thay vì luôn dừng ở 401 của middleware kiểm phiên.
+login_as(client)
 
 # Bài này gọi cả POST/PATCH/DELETE nên có sửa dữ liệu. Chụp lại các file cấu
 # hình trước khi chạy và trả về nguyên trạng sau khi xong, nếu không bộ test
