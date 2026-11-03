@@ -1015,7 +1015,8 @@ class VideoProcessor:
 
                 # 3. Giám sát an toàn: ai vào vùng cấm hoặc vượt vạch an toàn
                 now = clock.now()
-                intrusions = self.intrusion.check(person_boxes, track_ids, w_img, h_img, now)
+                intrusions = self.intrusion.check(person_boxes, track_ids, w_img, h_img, now,
+                                                  occluded=occluded_flags)
                 intrusion_indices = {idx for v in intrusions for idx in v["indices"]}
 
                 # 4. Gắn khuôn mặt đã quét được vào người trong vùng
@@ -1191,7 +1192,8 @@ class VideoProcessor:
                         [p["id"] for p in present_personnel],
                         now,
                         frame=display_frame,
-                        quality=quality
+                        quality=quality,
+                        frame_seq=seq,
                     )
                     closed_log = self.attendance.close_if_due(now)
                     if closed_log:
