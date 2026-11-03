@@ -133,7 +133,13 @@ def any_camera_running() -> bool:
 
 
 async def broadcast_update(data: dict):
-    """Broadcast update to all connected WebSocket clients."""
+    """Broadcast update to all connected WebSocket clients.
+
+    ``frame_update`` không còn kèm ảnh base64 (video_processor.py đã bỏ field
+    ``frame`` để không chặn vòng xử lý) — ``last_frame_data`` giờ chỉ có số
+    liệu, không dùng được làm nguồn ảnh cho /api/snapshot hay /api/events/clip
+    nữa; hai route đó đã chuyển sang lấy trực tiếp từ video_processor.get_frame.
+    """
     runtime = runtimes.get(data.get("camera_id"))
     if runtime is not None and data.get("type") == "frame_update":
         runtime.last_frame_data = data
@@ -335,16 +341,23 @@ async def save_zone_rules(config: dict):
 
 @app.get("/api/snapshot")
 async def get_current_snapshot():
-    """Retrieve current/latest frame from active stream or video file for ROI drawing background."""
-    runtime = _first_runtime()
-    last_frame_data = runtime.last_frame_data if runtime else None
+    """Retrieve current/latest frame from active stream or video file for ROI drawing background.
 
-    if last_frame_data and "frame" in last_frame_data:
-        return {
-            "status": "success",
-            "frame": last_frame_data["frame"],
-            "source": "live_stream"
-        }
+    Trước đây lấy ảnh base64 kèm trong ``last_frame_data["frame"]`` — field đó
+    đã bị bỏ (video_processor.py không còn mã hoá base64 mỗi khung hình nữa).
+    Giờ lấy thẳng từ ``video_processor.get_frame``: có cache thì dùng cache,
+    không thì mã hoá lười từ khung gốc, không tốn gì khi route này không được gọi.
+    """
+    runtime = _first_runtime()
+    if runtime is not None:
+        from app.video_processor import get_frame
+        jpeg = get_frame(runtime.camera_id, overlay=True)
+        if jpeg is not None:
+            return {
+                "status": "success",
+                "frame": base64.b64encode(jpeg).decode("utf-8"),
+                "source": "live_stream"
+            }
 
     if current_video_path and os.path.exists(current_video_path):
         try:
@@ -369,18 +382,25 @@ async def get_current_snapshot():
 
 @app.get("/api/events/clip")
 async def get_event_clip(clip_id: Optional[str] = None):
-    """Đoạn phát lại của một sự kiện. Bộ đệm nay theo từng camera."""
-    from app.video_processor import latest_event_clips
+    """Đoạn phát lại của một sự kiện. Bộ đệm nay theo từng camera.
 
-    frames = []
+    Bộ đệm giờ giữ JPEG bytes (không phải base64) ở độ phân giải luồng — nhẹ
+    hơn hẳn bản full-res base64 trước đây. Trả về base64 ở đây để không đổi
+    hợp đồng JSON của route cũ này.
+    """
+    from app.video_processor import get_frame, latest_event_clips
+
+    frames_bytes: List[bytes] = []
     if clip_id and clip_id in latest_event_clips:
-        frames = latest_event_clips[clip_id]
+        frames_bytes = latest_event_clips[clip_id]
     else:
         # Không nêu clip_id thì lấy tạm khung hình mới nhất của camera đang chạy
         runtime = _first_runtime()
-        latest = runtime.last_frame_data if runtime else None
-        if latest and "frame" in latest:
-            frames = [latest["frame"]]
+        jpeg = get_frame(runtime.camera_id, overlay=True) if runtime is not None else None
+        if jpeg is not None:
+            frames_bytes = [jpeg]
+
+    frames = [base64.b64encode(f).decode("utf-8") for f in frames_bytes]
 
     return {
         "status": "success",
@@ -549,7 +569,9 @@ async def start_processing(
         "id": CAMERA_ID, "name": CAMERA_NAME, "target_fps": 5}
     camera = {**camera, "source_uri": current_video_path}
 
-    runtime = CameraRuntime(camera)
+    # CameraRuntime() nạp model YOLO — việc chặn, đẩy sang luồng khác để không
+    # treo cả server trong lúc nạp (xem v1_start_camera).
+    runtime = await asyncio.to_thread(CameraRuntime, camera)
     runtimes[CAMERA_ID] = runtime
     background_tasks.add_task(_run_camera, runtime)
 
@@ -1240,33 +1262,54 @@ def _current_jpeg(camera_id: str, overlay: int, stream: bool = False) -> Optiona
     return get_frame(camera_id, bool(overlay), stream=stream)
 
 
+MJPEG_KEEPALIVE_S = 5.0
+
+
 @app.get("/api/v1/cameras/{camera_id}/stream.mjpg")
 async def v1_camera_stream(camera_id: str, overlay: int = 1, fps: int = 5):
     """Luồng hình trực tiếp dạng MJPEG, dùng thẳng trong thẻ <img>.
 
     Không cần WebSocket, không cần canvas, trình duyệt tự nối lại khi đứt.
+
+    Trước đây mỗi client hỏi lại mỗi ``1/fps`` giây dù chưa chắc có khung mới —
+    giờ chờ trên một ``asyncio.Event`` được vòng render đánh thức mỗi lần
+    publish, chỉ còn phải "hỏi" khi quá ``MJPEG_KEEPALIVE_S`` mà không có gì mới
+    (gửi lại khung cũ để proxy giữa đường không tưởng kết nối đã chết mà đóng).
     """
     _camera_or_404(camera_id)
     if _current_jpeg(camera_id, overlay) is None:
         raise HTTPException(status_code=409, detail="Camera chưa được bật xử lý")
 
-    interval = 1.0 / max(1, min(25, fps))
+    min_interval = 1.0 / max(1, min(25, fps))
     boundary = b"--frame\r\n"
 
     async def generator():
         from app import video_processor as vp
         last_revision = -1
+        last_sent_at = 0.0
         while True:
-            # Chỉ gửi khi có khung hình mới, không bơm lại cùng một khung
-            revision = vp.get_revision(camera_id)
-            if revision != last_revision:
-                frame = _current_jpeg(camera_id, overlay, stream=True)
-                if frame is None:
-                    break
-                last_revision = revision
-                yield (boundary + b"Content-Type: image/jpeg\r\n"
-                       + f"Content-Length: {len(frame)}\r\n\r\n".encode() + frame + b"\r\n")
-            await asyncio.sleep(interval)
+            # Giới hạn tốc độ gửi riêng cho client này (tham số fps), không ảnh
+            # hưởng tới nhịp publish thật của camera (STREAM_FPS)
+            wait_s = min_interval - (time.monotonic() - last_sent_at)
+            if wait_s > 0:
+                await asyncio.sleep(wait_s)
+
+            if vp.get_revision(camera_id) == last_revision:
+                # Chưa có gì mới: chờ được báo thức, hết hạn thì gửi lại khung
+                # cũ làm keepalive thay vì bơm lại đúng khung đã gửi mỗi 1/fps
+                try:
+                    await asyncio.wait_for(vp.frame_event(camera_id).wait(), timeout=MJPEG_KEEPALIVE_S)
+                except asyncio.TimeoutError:
+                    pass
+                vp.frame_event(camera_id).clear()
+
+            frame = _current_jpeg(camera_id, overlay, stream=True)
+            if frame is None:
+                break
+            last_revision = vp.get_revision(camera_id)
+            last_sent_at = time.monotonic()
+            yield (boundary + b"Content-Type: image/jpeg\r\n"
+                   + f"Content-Length: {len(frame)}\r\n\r\n".encode() + frame + b"\r\n")
 
     return StreamingResponse(
         generator(),
@@ -1439,9 +1482,13 @@ async def v1_start_camera(camera_id: str, background_tasks: BackgroundTasks):
     # Thử kết nối trước khi nhận việc. Trước đây route trả 202 rồi luồng nền chết
     # âm thầm: thông báo lỗi chỉ đi qua WebSocket mà giao diện không hề mở, nên
     # người trực chỉ thấy camera tự quay về offline không rõ vì sao.
+    # probe_stream() mở socket tới camera và join() thread tới 8s — chạy thẳng
+    # trên vòng lặp async thì cả server treo trong lúc đó, mọi request khác (kể
+    # cả health-check) phải đợi. Đẩy sang to_thread để vòng lặp vẫn phục vụ
+    # được request khác trong lúc chờ.
     if "://" in source:
         from app.video_processor import probe_stream
-        reason = probe_stream(source)
+        reason = await asyncio.to_thread(probe_stream, source)
         if reason:
             events.emit("SYSTEM", f"Không bật được camera {camera.get('name', camera_id)}: {reason}",
                         severity="warning", camera_id=camera_id,
@@ -1449,7 +1496,9 @@ async def v1_start_camera(camera_id: str, background_tasks: BackgroundTasks):
                         detail={"code": "camera_start_failed"})
             raise HTTPException(status_code=502, detail=reason)
 
-    runtime = CameraRuntime(camera)
+    # CameraRuntime() nạp model YOLO (đọc file + khởi tạo lên CPU/GPU) — cũng là
+    # việc chặn, tương tự probe_stream ở trên.
+    runtime = await asyncio.to_thread(CameraRuntime, camera)
     runtimes[camera_id] = runtime
     background_tasks.add_task(_run_camera, runtime)
     return _camera_out(camera)
@@ -1591,8 +1640,22 @@ async def v1_system_time():
 
 @app.get("/api/v1/system/health")
 async def v1_system_health():
+    """Tình trạng hệ thống, kèm chỉ số vận hành từng camera (fps, độ trễ, số
+    lần nối lại…) để theo dõi hiệu năng luồng xem sau khi tách AI/render.
+    """
     cameras = _load_cameras()
     running = sum(1 for c in cameras if _camera_status(c) == "online")
+
+    empty_metrics = {
+        "capture_fps": 0.0, "ai_fps": 0.0, "infer_ms_p50": 0.0, "infer_ms_p95": 0.0,
+        "publish_fps": 0.0, "frame_age_ms": None, "stale": False, "reconnects": 0,
+    }
+    cam_metrics = {}
+    for camera in cameras:
+        cam_id = camera["id"]
+        runtime = runtimes.get(cam_id)
+        cam_metrics[cam_id] = runtime.processor.get_metrics() if runtime is not None else dict(empty_metrics)
+
     return {
         "status": "ok",
         "cameras_running": running,
@@ -1600,4 +1663,5 @@ async def v1_system_health():
         "models_loaded": ["yolo-person", "insightface-buffalo_l"],
         "registered_personnel": len(face_engine.registered_faces),
         "pending_events": events.pending_count(),
+        "cameras": cam_metrics,
     }

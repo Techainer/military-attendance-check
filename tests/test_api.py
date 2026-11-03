@@ -130,15 +130,15 @@ check("buổi không tồn tại -> 404", r.status_code == 404, str(r.status_cod
 
 print("\n[2b] Đoạn video sự kiện")
 
-import base64
-
 import cv2
 import numpy as np
 
 import app.video_processor as vp
 
+# Bộ đệm clip giờ giữ JPEG bytes ở độ phân giải luồng (bản vòng render mã hoá
+# để phát), không còn base64 của ảnh full-res — xem app/video_processor.py.
 frame = np.zeros((120, 160, 3), np.uint8)
-encoded = base64.b64encode(cv2.imencode(".jpg", frame)[1]).decode()
+encoded = cv2.imencode(".jpg", frame)[1].tobytes()
 for _ in range(10):
     vp.push_clip_frame(CAMERA_ID, encoded)
 vp.keep_clip(CAMERA_ID, "clip_test")

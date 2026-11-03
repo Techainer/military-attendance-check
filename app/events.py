@@ -8,10 +8,10 @@ nhận xử lý cùng đọc một nguồn.
 """
 
 import asyncio
+import os
 from pathlib import Path
 from typing import List, Optional
 
-import base64
 import subprocess
 
 import cv2
@@ -35,8 +35,10 @@ TYPE_SYSTEM = "SYSTEM"
 # Giữ lại bấy nhiêu sự kiện gần nhất trong file JSON
 MAX_STORED_EVENTS = 500
 
-# Vòng xử lý chạy 5 khung/giây nên đoạn ghi phát lại cũng ở nhịp đó
-CLIP_FPS = 5
+# Đoạn ghi phát lại lấy khung từ vòng render (STREAM_FPS trong video_processor,
+# mặc định 12/giây) nên ở đây đọc chung biến môi trường để không bị lệch nhịp
+# (ffmpeg cần đúng framerate đầu vào, sai thì clip chạy nhanh/chậm hơn thật).
+CLIP_FPS = int(os.environ.get("STREAM_FPS", "12"))
 
 
 def normalize_box(box, width: int, height: int, confidence=None, label=None) -> dict:
@@ -104,8 +106,13 @@ class EventStore:
             return None
         return f"/data/events/{event_id}.jpg"
 
-    def save_clip(self, event_id: str, frames: List[str]) -> Optional[str]:
-        """Dựng đoạn mp4 từ các khung base64 và lưu cạnh ảnh bằng chứng.
+    def save_clip(self, event_id: str, frames: List[bytes]) -> Optional[str]:
+        """Dựng đoạn mp4 từ các khung JPEG (bytes) và lưu cạnh ảnh bằng chứng.
+
+        Trước đây khung truyền vào là base64 của ảnh ĐỘ PHÂN GIẢI GỐC — nặng,
+        và phải giải mã base64 trước khi ghép. Giờ bộ đệm clip giữ sẵn JPEG bytes
+        ở độ phân giải luồng (bản vòng render đã mã hoá để phát, dùng lại luôn),
+        nên ở đây chỉ còn việc ghép, khỏi base64-decode.
 
         Bộ đệm khung hình chỉ nằm trong RAM và bị dọn dần, nên khởi động lại máy
         chủ là mọi nút "Xem clip" trong nhật ký cũ đều chết. Ghi ra file ngay lúc
@@ -138,7 +145,7 @@ class EventStore:
             str(clip_file),
         ]
         try:
-            payload = b"".join(base64.b64decode(f) for f in frames)
+            payload = b"".join(frames)
             proc = subprocess.run(cmd, input=payload, capture_output=True, timeout=120)
             if proc.returncode != 0:
                 print(f"[Events] ffmpeg lỗi khi dựng đoạn ghi: "
@@ -151,18 +158,8 @@ class EventStore:
             return None
         return f"/api/v1/events/{event_id}/clip"
 
-    def emit(
-        self,
-        event_type: str,
-        message: str,
-        severity: str = "info",
-        frame=None,
-        boxes: Optional[List[dict]] = None,
-        detail: Optional[dict] = None,
-        acked: bool = False,
-        **fields
-    ) -> dict:
-        """Tạo một sự kiện, lưu xuống file và đẩy cho client. Trả về sự kiện đã tạo."""
+    def _build_event(self, event_type, message, severity, boxes, detail, acked, fields) -> dict:
+        """Dựng cấu trúc sự kiện. KHÔNG đụng tới đĩa — xem ``_persist``."""
         now = clock.now()
         self._seq += 1
         event_id = f"evt_{int(now.timestamp() * 1000)}_{self._seq}"
@@ -182,7 +179,7 @@ class EventStore:
             "person_id": fields.pop("person_id", None),
             "person_name": fields.pop("person_name", None),
             "message": message,
-            "snapshot_url": self._save_snapshot(frame, event_id),
+            "snapshot_url": None,
             "clip_id": fields.pop("clip_id", None),
             "clip_url": None,
             "boxes": boxes or [],
@@ -194,11 +191,63 @@ class EventStore:
         }
         if event["clip_id"]:
             event["clip_url"] = f"/api/v1/events/{event_id}/clip"
+        return event
+
+    def _persist(self, event: dict, frame=None) -> dict:
+        """Ghi ảnh bằng chứng + thêm vào events.json. CÓ I/O đĩa: gọi từ vòng xử
+        lý video phải bọc ``asyncio.to_thread`` (xem ``emit_async``), không thì
+        chặn cả vòng lặp trong lúc chờ ghi ảnh/JPEG + ghi lại toàn bộ file JSON.
+        """
+        event["snapshot_url"] = self._save_snapshot(frame, event["id"])
 
         events = read_json_list(self.events_file)
         events.insert(0, event)
         write_json_list(self.events_file, events[:MAX_STORED_EVENTS])
+        return event
 
+    def emit(
+        self,
+        event_type: str,
+        message: str,
+        severity: str = "info",
+        frame=None,
+        boxes: Optional[List[dict]] = None,
+        detail: Optional[dict] = None,
+        acked: bool = False,
+        **fields
+    ) -> dict:
+        """Tạo một sự kiện, lưu xuống file và đẩy cho client. Trả về sự kiện đã tạo.
+
+        Đồng bộ — dùng ở mọi nơi KHÔNG phải vòng xử lý video (điểm danh, API ack,
+        …). Vòng xử lý video dùng ``emit_async`` để không chặn vòng lặp khi ghi
+        ảnh bằng chứng xuống đĩa.
+        """
+        event = self._build_event(event_type, message, severity, boxes, detail, acked, fields)
+        self._persist(event, frame)
+        self._publish(event)
+        print(f"[Events] {event_type}: {message}")
+        return event
+
+    async def emit_async(
+        self,
+        event_type: str,
+        message: str,
+        severity: str = "info",
+        frame=None,
+        boxes: Optional[List[dict]] = None,
+        detail: Optional[dict] = None,
+        acked: bool = False,
+        **fields
+    ) -> dict:
+        """Bản không chặn vòng lặp sự kiện, dùng trong vòng xử lý video.
+
+        Ghi ảnh bằng chứng + file JSON (có I/O đĩa) ở một luồng khác; CHỈ
+        ``_publish`` (đẩy cho client SSE) mới chạy trên vòng lặp chính — bắt
+        buộc, nếu không client đang mở kênh sẽ không được đánh thức (xem docstring
+        của ``_publish``).
+        """
+        event = self._build_event(event_type, message, severity, boxes, detail, acked, fields)
+        await asyncio.to_thread(self._persist, event, frame)
         self._publish(event)
         print(f"[Events] {event_type}: {message}")
         return event
