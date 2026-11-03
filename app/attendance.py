@@ -8,7 +8,7 @@ import cv2
 
 from app import clock
 from app.events import TYPE_EARLY_LEAVE, TYPE_LATE
-from app.presence import PresenceTracker, VIOLATION_EARLY_LEAVE
+from app.presence import MIN_PRESENCE_SPAN_S, PresenceTracker, VIOLATION_EARLY_LEAVE
 from app.storage import read_json_list, write_json_list
 
 
@@ -277,8 +277,9 @@ class AttendanceSession:
         self.window_mins = window_mins
         self.phase = phase
         self.ends_at = ends_at or (started_at + timedelta(minutes=window_mins))
-        # person_id -> số lượt quét nhận ra người này
-        self.sightings: Dict[str, int] = {}
+        # person_id -> {"hits", "first", "last", "frame_seqs"} — thời điểm/số thứ
+        # tự khung hình để lọc nhận nhầm dồn dập, không chỉ đếm số lượt quét thô
+        self.sightings: Dict[str, dict] = {}
         self.scans = 0
         # Khung hình có nhiều quân nhân được định danh nhất, dùng làm bằng chứng
         self.evidence_frame = None
@@ -293,11 +294,28 @@ class AttendanceSession:
     def phase_label(self) -> str:
         return PHASE_LABELS.get(self.phase, PHASE_LABELS[PHASE_MANUAL])
 
-    def record(self, person_ids: List[str], frame=None, quality: int = 0) -> None:
-        """Ghi nhận một lượt quét và giữ lại khung hình tốt nhất làm bằng chứng."""
+    def record(self, person_ids: List[str], frame=None, quality: int = 0,
+               now: Optional[datetime] = None, frame_seq: Optional[int] = None) -> None:
+        """Ghi nhận một lượt quét và giữ lại khung hình tốt nhất làm bằng chứng.
+
+        ``now``/``frame_seq`` tuỳ chọn: không truyền thì giữ đúng hành vi cũ
+        (chỉ đếm số lượt). Có ``now`` thì thêm điều kiện các lượt phải trải dài
+        đủ ``MIN_PRESENCE_SPAN_S`` — chặn việc vài khung dính liền trong một
+        burst xử lý bị tính thành "có mặt".
+        """
         self.scans += 1
         for pid in set(person_ids):
-            self.sightings[pid] = self.sightings.get(pid, 0) + 1
+            entry = self.sightings.setdefault(
+                pid, {"hits": 0, "first": now, "last": now, "frame_seqs": None})
+            entry["hits"] += 1
+            if now is not None:
+                if entry["first"] is None:
+                    entry["first"] = now
+                entry["last"] = now
+            if frame_seq is not None:
+                if entry["frame_seqs"] is None:
+                    entry["frame_seqs"] = set()
+                entry["frame_seqs"].add(frame_seq)
 
         if frame is not None and quality > self.evidence_quality:
             self.evidence_quality = quality
@@ -310,7 +328,17 @@ class AttendanceSession:
         return now >= self.ends_at
 
     def present_ids(self) -> set:
-        return {pid for pid, hits in self.sightings.items() if hits >= MIN_SIGHTINGS}
+        present = set()
+        for pid, entry in self.sightings.items():
+            if entry["hits"] < MIN_SIGHTINGS:
+                continue
+            if entry["first"] is not None and entry["last"] is not None \
+                    and (entry["last"] - entry["first"]).total_seconds() < MIN_PRESENCE_SPAN_S:
+                continue
+            if entry["frame_seqs"] is not None and len(entry["frame_seqs"]) < MIN_SIGHTINGS:
+                continue
+            present.add(pid)
+        return present
 
     def present_count(self) -> int:
         return len(self.present_ids())
@@ -604,20 +632,25 @@ class AttendanceManager:
                 },
             )
 
-    def observe(self, person_ids: List[str], now: datetime, frame=None, quality: int = 0) -> None:
+    def observe(self, person_ids: List[str], now: datetime, frame=None, quality: int = 0,
+                frame_seq: Optional[int] = None) -> None:
         """Ghi nhận một lượt quét: vừa nuôi dấu vết cả buổi, vừa nuôi phiên đang mở.
 
         Khác với ``record``, hàm này chạy trên **mọi** khung hình chứ không chỉ
         trong hai cửa sổ điểm danh — có vậy mới biết ai đến muộn, ai về sớm.
+
+        ``frame_seq`` (tuỳ chọn): số thứ tự khung hình gốc (vd. biến đếm khung
+        hình của vòng xử lý video). Truyền vào thì "có mặt" còn đòi hỏi các
+        lượt quét đến từ các khung hình khác nhau, không chỉ khác thời điểm.
         """
         schedule = self._active_schedule(now)
         if schedule is not None:
             presence = self._presence_for(schedule, now, create=True)
             if presence is not None:
-                presence.record(person_ids, now)
+                presence.record(person_ids, now, frame_seq=frame_seq)
                 self._emit_late_events(schedule, presence, person_ids, frame)
 
-        self.record(person_ids, frame=frame, quality=quality)
+        self.record(person_ids, frame=frame, quality=quality, now=now, frame_seq=frame_seq)
 
     def attendance_table(self, schedule: dict, roster: List[dict], now: datetime) -> tuple:
         """Bảng trạng thái từng quân nhân của ca trong ngày, kèm phần tổng hợp."""
@@ -687,9 +720,11 @@ class AttendanceManager:
                 )
         return None
 
-    def record(self, present_person_ids: List[str], frame=None, quality: int = 0) -> None:
+    def record(self, present_person_ids: List[str], frame=None, quality: int = 0,
+               now: Optional[datetime] = None, frame_seq: Optional[int] = None) -> None:
         if self.session is not None:
-            self.session.record(present_person_ids, frame=frame, quality=quality)
+            self.session.record(present_person_ids, frame=frame, quality=quality,
+                                 now=now, frame_seq=frame_seq)
 
     def close_if_due(self, now: datetime, force: bool = False) -> Optional[dict]:
         """Hết cửa sổ (hoặc luồng video kết thúc) thì chốt biên bản."""

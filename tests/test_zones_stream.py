@@ -145,14 +145,17 @@ client.post(ZONES, json={"name": "Vùng cấm", "kind": "polygon", "rule": "rest
 
 from datetime import datetime, timedelta
 
-from app.safety import IntrusionDetector, ZoneStore
+from app.safety import INTRUSION_MIN_DWELL_S, IntrusionDetector, ZoneStore
 
 store = ZoneStore(str(api.data_path))
 det = IntrusionDetector(store)
 now = datetime(2026, 8, 30, 9, 0, 0)
 inside = [700, 100, 800, 400]
 
-v = det.check([inside], [1], 1000, 1000, now)
+# Cần đủ dwell (khung + thời gian) mới xác nhận xâm nhập, nên gọi check() hai
+# lần cách nhau hơn INTRUSION_MIN_DWELL_S trước khi kiểm vi phạm
+det.check([inside], [1], 1000, 1000, now)
+v = det.check([inside], [1], 1000, 1000, now + timedelta(seconds=INTRUSION_MIN_DWELL_S + 0.1))
 check("vùng cấm vừa tạo qua API sinh được vi phạm", len(v) == 1, str(v))
 
 zone_id = client.get(ZONES).json()[0]["id"]

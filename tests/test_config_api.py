@@ -295,7 +295,7 @@ print("\n[4d] Đa camera chạy song song")
 reset()
 import app.video_processor as vp
 from app.attendance import AttendanceManager
-from app.safety import IntrusionDetector, ZoneStore
+from app.safety import INTRUSION_MIN_DWELL_S, IntrusionDetector, ZoneStore
 
 # Khung hình tách theo camera, không dùng chung một biến
 vp.publish_frame("cam_A", b"anh-cua-A", b"goc-cua-A")
@@ -341,11 +341,17 @@ check("màn quản trị vẫn xem được vùng của mọi camera",
 inside_b = [700, 100, 800, 400]
 det_a = IntrusionDetector(ZoneStore(str(api.data_path), camera_id="cam_A"))
 from datetime import datetime as _dt
+from datetime import timedelta as _td
+_t0 = _dt(2026, 9, 3, 10, 0)
 check("camera A KHÔNG báo vi phạm theo vùng cấm của camera B",
-      det_a.check([inside_b], [1], 1000, 1000, _dt(2026, 9, 3, 10, 0)) == [])
+      det_a.check([inside_b], [1], 1000, 1000, _t0) == [])
+# Cần đủ dwell (khung + thời gian) mới xác nhận xâm nhập -> gọi check() hai
+# lần cách nhau hơn INTRUSION_MIN_DWELL_S rồi mới kiểm vi phạm
 det_b = IntrusionDetector(ZoneStore(str(api.data_path), camera_id="cam_B"))
+det_b.check([inside_b], [1], 1000, 1000, _t0)
 check("camera B vẫn báo đúng vùng cấm của mình",
-      len(det_b.check([inside_b], [1], 1000, 1000, _dt(2026, 9, 3, 10, 0))) == 1)
+      len(det_b.check([inside_b], [1], 1000, 1000,
+                       _t0 + _td(seconds=INTRUSION_MIN_DWELL_S + 0.1))) == 1)
 
 # Thời khoá biểu chia theo camera, hai camera không cùng điểm danh một lớp
 write_json_list(api.schedules_file, [
