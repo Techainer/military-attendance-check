@@ -14,6 +14,7 @@ import app.api as api
 from app.retention import cleanup
 from app.storage import write_json_list
 from app.events import CAMERA_ID
+from auth_helper import login_as
 
 failures = []
 
@@ -135,6 +136,8 @@ with tempfile.TemporaryDirectory() as tmpdir:
 print("\n[2] Che giấu mật khẩu trong API")
 
 client = TestClient(api.app)
+# Tạo/sửa camera qua API cần phiên QTHT.
+login_as(client)
 
 # Reset
 write_json_list(api.cameras_file, [])

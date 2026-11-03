@@ -70,13 +70,46 @@ async function toNodeBody(body) {
     return out;
 }
 
-window.fetch = async (url, opts) => {
-    const options = opts ? { ...opts, body: await toNodeBody(opts.body) } : opts;
-    return fetch(String(url).startsWith('http') ? url : BASE + url, options);
-};
+// Phiên đăng nhập giờ sống trong cookie HttpOnly — fetch của trình duyệt thật
+// tự quản cookie theo gốc, nhưng Node fetch() KHÔNG có cookie jar mặc định.
+// jarFetch() tự giữ cookie `horus_session` qua Set-Cookie của response rồi
+// gắn lại vào request sau, dùng CHUNG cho mọi lời gọi trong bài test này
+// (cả window.fetch của app.js lẫn các lời gọi "sau màn hình" bên dưới) để
+// trạng thái đăng nhập không bị lệch giữa hai phía.
+let sessionCookie = '';
+const realFetch = fetch;
+
+async function jarFetch(url, opts) {
+    const target = String(url).startsWith('http') ? url : BASE + url;
+    const headers = new Headers((opts && opts.headers) || {});
+    if (sessionCookie && !headers.has('cookie')) headers.set('cookie', sessionCookie);
+    const body = opts && opts.body !== undefined ? await toNodeBody(opts.body) : undefined;
+    const res = await realFetch(target, { ...opts, headers, body });
+    const setCookie = typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [];
+    for (const c of setCookie) {
+        if (c.startsWith('horus_session=')) sessionCookie = c.split(';')[0];
+    }
+    return res;
+}
+
+window.fetch = jarFetch;
 window.alert = (m) => { alerts.push(m); };
 window.confirm = () => true;
 const alerts = [];
+
+// Đổi "vai trò đang xem" trong bài test này: đăng nhập THẬT qua jarFetch (cập
+// nhật cookie phiên dùng chung) rồi mới gọi applyRole() để giao diện vẽ lại
+// menu — gọi applyRole() với một hồ sơ cũ mà không đăng nhập lại sẽ làm lệch
+// giữa "giao diện tưởng đang là ai" và "server thật sự cho phiên nào", mọi
+// hành động QTHT-only sau đó sẽ bị 403 dù giao diện tưởng đang là QTHT.
+async function loginAs(username, password) {
+    const user = await (await jarFetch(BASE + '/api/v1/auth/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+    })).json();
+    window.applyRole(user);
+    return user;
+}
 
 // Nạp app.js vào đúng ngữ cảnh trang
 const script = window.document.createElement('script');
@@ -92,8 +125,30 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // Test tự tạo dữ liệu nó cần, không dựa vào bộ test khác đã chạy trước hay
 // script seed — chạy độc lập theo thứ tự nào cũng ra kết quả như nhau.
+//
+// Tạo ca mẫu giờ cần phiên QTHT (route có kiểm quyền) — dùng cookie RIÊNG,
+// không phải ``sessionCookie`` dùng chung với window.fetch: nếu không, màn [0]
+// bên dưới (kiểm tra "chưa đăng nhập thì hiện màn đăng nhập") sẽ thất bại vì
+// trang tưởng đã có phiên từ trước.
 async function ensureFixtures() {
-    const existing = await (await fetch(BASE + '/api/v1/schedules')).json();
+    let fixtureCookie = '';
+    async function fFetch(url, opts) {
+        const headers = new Headers((opts && opts.headers) || {});
+        if (fixtureCookie) headers.set('cookie', fixtureCookie);
+        const res = await realFetch(url, { ...opts, headers });
+        const setCookie = typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [];
+        for (const c of setCookie) {
+            if (c.startsWith('horus_session=')) fixtureCookie = c.split(';')[0];
+        }
+        return res;
+    }
+
+    await fFetch(BASE + '/api/v1/auth/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'qtht', password: 'qtht@2026' }),
+    });
+
+    const existing = await (await fFetch(BASE + '/api/v1/schedules')).json();
     const have = new Set(existing.items.map(s => s.training_type));
 
     const fixtures = [
@@ -111,7 +166,7 @@ async function ensureFixtures() {
 
     for (const f of fixtures) {
         if (have.has(f.id)) continue;
-        await fetch(BASE + '/api/v1/schedules', {
+        await fFetch(BASE + '/api/v1/schedules', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(f.body)
         });
@@ -189,11 +244,7 @@ check('vào thẳng màn lịch và tiến độ',
 
 console.log('\n[2] Điều hướng qua đủ các màn');
 // Đăng nhập bằng QTHT để xem được mọi màn
-const qtht = await (await fetch(BASE + '/api/v1/auth/login', {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ username: 'qtht', password: 'qtht@2026' })
-})).json();
-window.applyRole(qtht);
+const qtht = await loginAs('qtht', 'qtht@2026');
 const tabs = ['schedule-progress', 'safety', 'logs',
               'monitoring', 'schedule', 'zones', 'cameras', 'registration'];
 for (const tab of tabs) {
@@ -230,12 +281,7 @@ check('đã bỏ hẳn tab giám sát quân số',
     && doc.getElementById('view-attendance-summary') === null);
 
 console.log('\n[3b] Hai tài khoản thấy hai bộ menu khác nhau');
-const cbqhUser = await (await fetch(BASE + '/api/v1/auth/login', {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ username: 'cbqh', password: 'cbqh@2026' })
-})).json();
-
-window.applyRole(cbqhUser);
+const cbqhUser = await loginAs('cbqh', 'cbqh@2026');
 await sleep(300);
 check('CBQH không thấy phân hệ III',
     [...doc.querySelectorAll('.role-only')].every(el => el.style.display === 'none'));
@@ -245,7 +291,7 @@ check('tài khoản CBQH hiện đúng vai trò',
     doc.getElementById('user-role').textContent === 'Cán bộ quản lý',
     doc.getElementById('user-role').textContent);
 
-window.applyRole(qtht);
+await loginAs('qtht', 'qtht@2026');
 await sleep(300);
 check('QTHT thấy thêm phân hệ III',
     [...doc.querySelectorAll('.role-only')].every(el => el.style.display !== 'none'));
@@ -337,7 +383,7 @@ check('có chỉ báo trạng thái an toàn',
     !!doc.getElementById('sf-state-label').textContent.trim(),
     doc.getElementById('sf-state-label').textContent);
 // Banner bám theo dữ liệu thật: có vi phạm chưa xử lý thì phải hiện, không thì ẩn
-const safety = await (await fetch(BASE + '/api/v1/summary/safety')).json();
+const safety = await (await jarFetch(BASE + '/api/v1/summary/safety')).json();
 const bannerShown = doc.getElementById('safety-alert-banner').style.display !== 'none';
 check('banner cảnh báo bám đúng trạng thái vi phạm chờ xử lý',
     bannerShown === (safety.active_intrusion !== null),
@@ -420,7 +466,7 @@ await sleep(1200);
 
 const wall = doc.getElementById('camera-wall');
 check('màn giám sát dựng lưới camera', wall !== null);
-const camList = await (await fetch(BASE + '/api/v1/cameras')).json();
+const camList = await (await jarFetch(BASE + '/api/v1/cameras')).json();
 check('mỗi camera có một ô riêng trên lưới',
     wall.querySelectorAll('.camera-tile').length === camList.total,
     `${wall.querySelectorAll('.camera-tile').length} ô / ${camList.total} camera`);
@@ -448,7 +494,7 @@ window.switchNavTab('monitoring');
 await sleep(900);
 
 // Dựng sẵn camera thứ hai để có cái mà chọn
-const extra = await (await fetch(BASE + '/api/v1/cameras', {
+const extra = await (await jarFetch(BASE + '/api/v1/cameras', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: 'Camera phụ (test nguồn)', source_type: 'file',
                            source_uri: '/tmp/khong-co.mp4' })
@@ -471,14 +517,14 @@ check('đổi camera thì hiện nguồn hiện tại của chính nó',
     doc.getElementById('source-camera-hint').textContent);
 
 // Gán RTSP cho camera phụ, KHÔNG được đụng camera mặc định
-const before = await (await fetch(BASE + '/api/v1/cameras/cam_01')).json();
+const before = await (await jarFetch(BASE + '/api/v1/cameras/cam_01')).json();
 doc.getElementById('source-autostart-cb').checked = false;
 doc.getElementById('rtsp-url').value = 'rtsp://10.9.9.9:554/test';
 await window.startRtspStream();
 await sleep(1200);
 
-const afterExtra = await (await fetch(BASE + `/api/v1/cameras/${extra.id}`)).json();
-const afterMain = await (await fetch(BASE + '/api/v1/cameras/cam_01')).json();
+const afterExtra = await (await jarFetch(BASE + `/api/v1/cameras/${extra.id}`)).json();
+const afterMain = await (await jarFetch(BASE + '/api/v1/cameras/cam_01')).json();
 check('nguồn được gán đúng camera đã chọn',
     afterExtra.source_uri === 'rtsp://10.9.9.9:554/test', afterExtra.source_uri);
 check('camera kia KHÔNG bị đổi nguồn theo',
@@ -491,7 +537,7 @@ check('camera kia KHÔNG bị đổi nguồn theo',
 check('form tải video có handler, không submit kiểu cũ làm tải lại trang',
     appJs.includes("uploadForm.addEventListener"));
 
-const mainBeforeUpload = await (await fetch(BASE + '/api/v1/cameras/cam_01')).json();
+const mainBeforeUpload = await (await jarFetch(BASE + '/api/v1/cameras/cam_01')).json();
 
 srcSelect.value = extra.id;
 window.onSourceCameraChange();
@@ -507,8 +553,8 @@ doc.getElementById('upload-form').dispatchEvent(
     new window.Event('submit', { bubbles: true, cancelable: true }));
 await sleep(2500);
 
-const extraAfterUpload = await (await fetch(BASE + `/api/v1/cameras/${extra.id}`)).json();
-const mainAfterUpload = await (await fetch(BASE + '/api/v1/cameras/cam_01')).json();
+const extraAfterUpload = await (await jarFetch(BASE + `/api/v1/cameras/${extra.id}`)).json();
+const mainAfterUpload = await (await jarFetch(BASE + '/api/v1/cameras/cam_01')).json();
 
 check('tải file lên thì camera phụ đổi sang nguồn tệp',
     extraAfterUpload.source_type === 'file'
@@ -534,7 +580,7 @@ check('ô chọn liệt kê đủ camera',
     zoneSelect ? String(zoneSelect.options.length) : 'không có');
 
 // Mỗi camera có danh sách vùng riêng
-await fetch(BASE + `/api/v1/cameras/${extra.id}/zones`, {
+await jarFetch(BASE + `/api/v1/cameras/${extra.id}/zones`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: 'Vùng riêng của camera phụ', kind: 'polygon',
         rule: 'restricted_area',
@@ -559,7 +605,7 @@ check('quay lại camera khác thì KHÔNG còn thấy vùng của camera kia',
 console.log('\n[4h] Màn an toàn với nhiều camera');
 window.switchNavTab('safety');
 await sleep(1200);
-const sfAll = await (await fetch(BASE + '/api/v1/summary/safety')).json();
+const sfAll = await (await jarFetch(BASE + '/api/v1/summary/safety')).json();
 const sfRows2 = [...doc.querySelectorAll('#sf-camera-tbody tr')];
 check('có 2 camera thì màn an toàn liệt kê cả 2',
     sfAll.cameras.length >= 2 && sfRows2.length === sfAll.cameras.length,
@@ -569,7 +615,7 @@ check('camera phụ có dòng riêng trên màn an toàn',
 check('bảng vẫn không mở luồng nào dù có nhiều camera',
     doc.querySelectorAll('#view-safety img[src]').length === 0);
 
-await fetch(BASE + `/api/v1/cameras/${extra.id}`, { method: 'DELETE' });
+await jarFetch(BASE + `/api/v1/cameras/${extra.id}`, { method: 'DELETE' });
 
 console.log('\n[5] Quản lý camera');
 window.switchNavTab('cameras');
@@ -619,7 +665,7 @@ check('rời màn thì luồng trường bắn bị ngắt',
 console.log('\n[6b] Trình phát đoạn ghi 10 giây');
 // Đây là luồng đã hỏng thật: nút trỏ vào bộ đệm chỉ nằm trong RAM máy chủ nên
 // modal mở ra là khung đen, không một dòng báo.
-const evPage = await (await fetch(BASE + '/api/v1/events?limit=200')).json();
+const evPage = await (await jarFetch(BASE + '/api/v1/events?limit=200')).json();
 const evWithClip = (evPage.items || []).find(e => e.clip_url);
 const clipVideo = doc.getElementById('clip-player-video');
 const clipHint = doc.getElementById('clip-empty-hint');
@@ -644,7 +690,7 @@ check('đang tải thì có báo cho người xem',
 
 // Endpoint phải nhận GET thật: bản đầu tôi dò bằng HEAD, máy chủ trả 405 nên
 // đoạn ghi nào cũng bị báo là hỏng.
-const clipRes = await fetch(BASE + evWithClip.clip_url);
+const clipRes = await jarFetch(BASE + evWithClip.clip_url);
 check('GET đoạn ghi không trả 405', clipRes.status !== 405, String(clipRes.status));
 
 // jsdom không tải video nên tự bắn sự kiện lỗi để kiểm nhánh báo lý do
@@ -672,7 +718,7 @@ check('ảnh nền vẽ vùng lấy khung hình GỐC, không lấy bản đã v
     src.includes('snapshot?overlay=0'));
 
 console.log('\n[7b] Vùng cấm bắn đạn thật tách khỏi vùng đếm quân số');
-window.applyRole(qtht);
+await loginAs('qtht', 'qtht@2026');
 window.switchNavTab('zones');
 await sleep(1200);
 
@@ -690,7 +736,7 @@ window.onZoneRuleChange();
 window.polygonPoints = undefined;   // dùng biến trong app.js
 const canvasZone = { name: 'Khối chắn tuyến bắn (test)', kind: 'polygon', rule: 'restricted_area',
     points: [{x:0.6,y:0.1},{x:0.95,y:0.1},{x:0.95,y:0.6},{x:0.6,y:0.6}] };
-const createRes = await fetch(BASE + '/api/v1/cameras/cam_01/zones', {
+const createRes = await jarFetch(BASE + '/api/v1/cameras/cam_01/zones', {
     method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(canvasZone) });
 check('tạo được vùng cấm riêng cho trường bắn', createRes.status === 201, String(createRes.status));
 const createdZone = createRes.status === 201 ? await createRes.json() : null;
@@ -753,7 +799,7 @@ const sfTh = [...doc.querySelectorAll('#view-safety thead th')].map(e => e.textC
 check('bảng camera có cột tên bài học', sfTh.includes('TÊN BÀI HỌC'), sfTh.join(' | '));
 check('bảng camera có cột loại', sfTh.includes('LOẠI'), sfTh.join(' | '));
 
-if (createdZone) await fetch(BASE + `/api/v1/zones/${createdZone.id}`, { method: 'DELETE' });
+if (createdZone) await jarFetch(BASE + `/api/v1/zones/${createdZone.id}`, { method: 'DELETE' });
 
 console.log('\n[7c3] Chi tiết camera an toàn');
 
@@ -785,7 +831,7 @@ if (sfDetailBtn2) {
 console.log('\n[7d] Dialog chi tiết quân nhân và ca điểm danh');
 window.switchNavTab('registration');
 await sleep(1000);
-const people = await (await fetch(BASE + '/api/faces')).json();
+const people = await (await jarFetch(BASE + '/api/faces')).json();
 if (people.data && people.data.length) {
     window.editPerson(people.data[0].id);
     await sleep(200);
@@ -912,7 +958,7 @@ check('cột khung giờ không còn rỗng',
     firstRow && /\d{2}:\d{2}\s*–\s*\d{2}:\d{2}/.test(firstRow.textContent),
     firstRow ? firstRow.textContent.replace(/\s+/g, ' ').slice(0, 120) : 'không có dòng nào');
 
-const summary = await (await fetch(BASE + '/api/v1/summary/training')).json();
+const summary = await (await jarFetch(BASE + '/api/v1/summary/training')).json();
 const one = summary.sessions[0] || {};
 check('API trả khung giờ cho màn lịch', !!one.start_time && !!one.end_time,
     JSON.stringify({ start: one.start_time, end: one.end_time }));
@@ -1169,7 +1215,7 @@ check('có ghi chú giải thích bỏ trống là lặp mọi ngày',
 window.closeScheduleModal();
 
 // Tạo ca có phạm vi ngày rồi kiểm bảng hiển thị
-await fetch(BASE + '/api/v1/schedules', {
+await jarFetch(BASE + '/api/v1/schedules', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: 'Ca có đợt (fixture ngày)', start_time: '08:00', end_time: '10:00',
                            unit: 'Đại đội 1', shift: 'Ca sáng', training_type: 'dao_tao',
@@ -1208,7 +1254,7 @@ if (dotRow) {
         [...doc.querySelectorAll('#sch-weekdays input')].map(i => i.checked).join(','));
     window.closeScheduleModal();
     const id = dotRow.querySelector('.icon-btn-edit').getAttribute('onclick').match(/'([^']+)'/)[1];
-    await fetch(BASE + '/api/v1/schedules/' + id, { method: 'DELETE' });
+    await jarFetch(BASE + '/api/v1/schedules/' + id, { method: 'DELETE' });
 }
 
 console.log('\n[7h3] Bảng thời khoá biểu gọn lại, không tràn ngang');

@@ -13,6 +13,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 import app.api as api
+from auth_helper import login_as
 from app.events import CAMERA_ID
 from app.storage import read_json_list, write_json_list
 
@@ -26,6 +27,9 @@ def check(name, cond, extra=""):
 
 
 client = TestClient(api.app)
+# Mọi route (trừ danh sách công khai) cần phiên — đăng nhập làm qtht để chạy
+# được hết thao tác tạo/sửa/xoá trong bài này.
+login_as(client)
 
 
 def reset():
@@ -253,11 +257,16 @@ r = client.post("/api/v1/auth/login", json={"username": "  CBQH  ", "password": 
 check("tên tài khoản không phân biệt hoa thường và khoảng trắng thừa",
       r.status_code == 200, str(r.status_code))
 
-# Vai trò chỉ để giao diện hiện menu; API không kiểm quyền, phải nói rõ chứ
-# không để người dùng tưởng đã có bảo mật.
+# Giờ có phiên thật: đọc camera (any-user) được với phiên cbqh vừa đăng nhập ở
+# trên, nhưng KHÔNG cookie nào thì bị middleware kiểm phiên chặn thẳng ở 401.
 r = client.get("/api/v1/cameras")
-check("API vẫn gọi được khi chưa đăng nhập (POC không có phiên)",
-      r.status_code == 200, str(r.status_code))
+check("đã đăng nhập (cbqh) thì đọc camera được", r.status_code == 200, str(r.status_code))
+
+r_anon = TestClient(api.app).get("/api/v1/cameras")
+check("chưa đăng nhập thì bị chặn -> 401", r_anon.status_code == 401, str(r_anon.status_code))
+
+# Các đoạn phía dưới cần tạo/sửa camera, ca, vùng -> trả phiên về QTHT.
+login_as(client, "qtht")
 
 print("\n[4c] Giao diện không bị trình duyệt giữ bản cũ")
 
@@ -427,7 +436,11 @@ for route in api.app.routes:
     if not path.startswith("/api/v1") or getattr(route, "endpoint", None) is None:
         continue
     names = set(inspect.signature(route.endpoint).parameters)
-    names -= {"background_tasks", "payload", "body", "request"}
+    # "request"/"response" là FastAPI tự bơm (đọc cookie, set cookie...), còn
+    # tên bắt đầu bằng "_" là Depends() nội bộ (ví dụ _qtht=Depends(require_qtht))
+    # — cả hai không phải bộ lọc query mà client gọi, không nằm trong hợp đồng.
+    names -= {"background_tasks", "payload", "body", "request", "response"}
+    names = {n for n in names if not n.startswith("_")}
     names -= {seg.strip("{}") for seg in path.split("/") if seg.startswith("{")}
     for method in getattr(route, "methods", set()):
         if method not in ("HEAD", "OPTIONS"):

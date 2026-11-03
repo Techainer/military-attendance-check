@@ -14,6 +14,7 @@ from jsonschema import Draft202012Validator
 
 import app.api as api
 from app.events import CAMERA_ID
+from auth_helper import login_as
 
 failures = []
 
@@ -25,6 +26,9 @@ def check(name, cond, extra=""):
 
 
 client = TestClient(api.app)
+# Mọi route (trừ danh sách công khai) giờ cần phiên đăng nhập — đăng nhập một
+# lần đầu bài, TestClient giữ cookie cho các lần gọi sau.
+login_as(client)
 schema_file = Path(__file__).resolve().parent.parent / "docs" / "api" / "events.schema.json"
 validator = Draft202012Validator(json.load(open(schema_file)))
 
@@ -233,9 +237,15 @@ import asyncio
 
 async def sse_roundtrip():
     sent = []
+    # Gọi thẳng ASGI, không qua TestClient nên không tự mang cookie — phải tự
+    # ký một token phiên hợp lệ và nhét vào header Cookie thủ công.
+    import app.auth as auth_mod
+    token = auth_mod.create_session_token("qtht", "qtht", auth_mod.token_version_of("qtht"))
+    cookie_header = f"{auth_mod.SESSION_COOKIE}={token}".encode()
     scope = {"type": "http", "http_version": "1.1", "method": "GET", "scheme": "http",
              "path": "/api/v1/events/stream", "raw_path": b"/api/v1/events/stream",
-             "query_string": b"", "root_path": "", "headers": [(b"host", b"test")],
+             "query_string": b"", "root_path": "",
+             "headers": [(b"host", b"test"), (b"cookie", cookie_header)],
              "client": ("127.0.0.1", 1234), "server": ("test", 80)}
 
     async def receive():

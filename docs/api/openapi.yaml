@@ -67,7 +67,12 @@ tags:
   - name: Sự kiện
     description: Dòng sự kiện AI, cảnh báo an toàn, xác nhận xử lý (đầu ra)
   - name: Đăng nhập
-    description: Xác thực tối thiểu cho bản POC — không phải ranh giới bảo mật
+    description: |
+      Phiên đăng nhập ký HMAC trong cookie HttpOnly `horus_session`. Mọi
+      route khác (trừ `/`, `/static/*`, `/favicon.ico`, `/auth/login`,
+      `/system/health`, `/system/time`, `/time`, `/system/config`) đòi cookie
+      này hợp lệ, 401 nếu không. Tạo/sửa/xoá (camera, vùng, ca, Face ID, bật
+      tắt camera, điểm danh thủ công) đòi vai trò `qtht`, 403 nếu không.
   - name: Hệ thống
 
 paths:
@@ -710,13 +715,15 @@ paths:
   /auth/login:
     post:
       tags: [Đăng nhập]
-      summary: Đăng nhập, trả về vai trò
+      summary: Đăng nhập, cấp phiên qua cookie
       description: |
-        Bản POC có hai tài khoản khai cứng trong `app/auth.py`, không cơ sở dữ liệu.
+        Hai tài khoản khai cứng trong `app/auth.py` (kho `data/users.json`,
+        mật khẩu băm PBKDF2). Đúng tài khoản thì set cookie HttpOnly
+        `horus_session` (ký HMAC, hết hạn theo `AUTH_SESSION_HOURS`, mặc định
+        12 giờ) — mọi endpoint khác (trừ danh sách công khai) đòi cookie này.
 
-        **Không phải ranh giới bảo mật.** Không tạo phiên, không cấp token, và
-        các endpoint khác **không kiểm quyền** — gọi thẳng API vẫn làm được mọi
-        thứ. Chỉ dùng để giao diện biết hiện menu nào.
+        Chặn dò mật khẩu: quá 10 lần sai trong 10 phút theo IP HOẶC theo tên
+        tài khoản thì trả 429.
       requestBody:
         required: true
         content:
@@ -724,7 +731,7 @@ paths:
             schema: { $ref: '#/components/schemas/LoginInput' }
       responses:
         '200':
-          description: Đúng tài khoản
+          description: Đúng tài khoản, cookie phiên đã được set
           content:
             application/json:
               schema: { $ref: '#/components/schemas/LoggedInUser' }
@@ -734,6 +741,45 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
         '422': { $ref: '#/components/responses/ValidationError' }
+        '429':
+          description: Thử sai quá nhiều lần, tạm khoá vài phút
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /auth/logout:
+    post:
+      tags: [Đăng nhập]
+      summary: Xoá phiên đăng nhập hiện tại
+      responses:
+        '200':
+          description: Đã đăng xuất
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: success }
+                  message: { type: string, example: Đã đăng xuất }
+
+  /auth/me:
+    get:
+      tags: [Đăng nhập]
+      summary: Hồ sơ của phiên đang đăng nhập
+      description: |
+        Giao diện gọi route này lúc nạp trang để biết có đăng nhập hay không
+        và vai trò là gì, thay vì tin `localStorage` (client tự sửa được).
+      responses:
+        '200':
+          description: Đang có phiên hợp lệ
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoggedInUser' }
+        '401':
+          description: Chưa đăng nhập hoặc phiên đã hết hạn
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
 
   /auth/password:
     post:
@@ -742,8 +788,11 @@ paths:
       description: |
         Kho tài khoản nằm ở `data/users.json`, mật khẩu băm PBKDF2.
 
-        POC không có phiên nên yêu cầu phải mang theo tên tài khoản và mật khẩu
-        hiện tại; mật khẩu cũ chính là thứ đứng thay cho phiên đăng nhập.
+        Vẫn yêu cầu mang theo tên tài khoản và mật khẩu hiện tại (không chỉ
+        dựa vào phiên) — phiên bị lộ không tự đổi được mật khẩu nếu không biết
+        mật khẩu hiện tại. Đổi mật khẩu tăng "token_version" của tài khoản lên
+        một, nên mọi phiên cũ (gồm phiên của chính người vừa đổi, được cấp lại
+        cookie mới ngay trong response này) đều mất hiệu lực.
       requestBody:
         required: true
         content:
@@ -764,12 +813,20 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: Phiên đang đăng nhập không khớp tài khoản trong thân yêu cầu
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         '422': { $ref: '#/components/responses/ValidationError' }
 
   /auth/profile:
     patch:
       tags: [Đăng nhập]
       summary: Đổi tên hiển thị của tài khoản
+      description: |
+        Chỉ sửa được hồ sơ của chính tài khoản đang đăng nhập (so khớp với
+        phiên) — không sửa được hồ sơ tài khoản khác dù biết tên tài khoản đó.
       requestBody:
         required: true
         content:
@@ -781,6 +838,11 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/LoggedInUser' }
+        '403':
+          description: Phiên đang đăng nhập không khớp tài khoản trong thân yêu cầu
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         '404':
           description: Không tìm thấy tài khoản
           content:
@@ -791,11 +853,12 @@ paths:
   /system/config:
     get:
       tags: [Hệ thống]
-      summary: Cấu hình cho player.js (go2rtc bật/tắt, ICE servers)
+      summary: Cấu hình công khai (go2rtc bật/tắt, ICE servers, tài khoản demo)
       description: |
         Giao diện chạy ở trình duyệt, không đọc được biến môi trường của máy
-        chủ (`GO2RTC_ENABLED`, `GO2RTC_ICE_SERVERS`) — phải hỏi qua đây để biết
-        có nên thử WebRTC/MSE qua go2rtc hay rơi thẳng về MJPEG.
+        chủ (`GO2RTC_ENABLED`, `GO2RTC_ICE_SERVERS`, `SHOW_DEMO_ACCOUNTS`) —
+        phải hỏi qua đây. Route này CÔNG KHAI (không cần phiên) vì màn đăng
+        nhập cần gọi trước khi có phiên; không trả gì nhạy cảm.
       responses:
         '200':
           description: OK
@@ -803,7 +866,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [go2rtc_enabled, go2rtc_proxy_base, ice_servers]
+                required: [go2rtc_enabled, go2rtc_proxy_base, ice_servers, show_demo_accounts]
                 properties:
                   go2rtc_enabled: { type: boolean }
                   go2rtc_proxy_base:
@@ -814,6 +877,11 @@ paths:
                     type: array
                     description: 'RTCIceServer[] tuỳ chọn (STUN/TURN) cho WebRTC qua tunnel.'
                     items: { type: object }
+                  show_demo_accounts:
+                    type: boolean
+                    description: |
+                      Có hiện khối "tài khoản demo" ở màn đăng nhập hay không
+                      (env `SHOW_DEMO_ACCOUNTS`, mặc định tắt).
 
   /system/time:
     get:

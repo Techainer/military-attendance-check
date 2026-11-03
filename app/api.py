@@ -1,8 +1,9 @@
 """FastAPI backend with routes, Face Registration endpoints, and WebSocket streaming."""
 
-from fastapi import FastAPI, WebSocket, UploadFile, File, Form, WebSocketDisconnect, BackgroundTasks, HTTPException, Query
+from fastapi import (FastAPI, WebSocket, UploadFile, File, Form, WebSocketDisconnect,
+                    BackgroundTasks, HTTPException, Query, Request, Response, Depends)
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, StreamingResponse
 import asyncio
 import shutil
 import time
@@ -28,7 +29,7 @@ from app.attendance import (STATE_LABELS, AttendanceManager, normalize_schedule,
                             person_label, schedule_runs_on)
 from app.events import CAMERA_ID, CAMERA_NAME, EventStore
 from app.safety import RULE_ATTENDANCE, ZoneStore
-from app.auth import authenticate, change_password, update_profile
+from app import auth
 from app.schemas import (AckInput, CameraInput, CameraPatch, LoginInput,
                          PasswordChangeInput, ProfilePatch, ScheduleInput,
                          SchedulePatch, ZoneInput, ZonePatch)
@@ -71,6 +72,88 @@ async def no_cache_for_ui(request, call_next):
     if path == "/" or path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
     return response
+
+
+# ----------------- Kiểm phiên đăng nhập -----------------
+# App này lộ ra ngoài qua Cloudflare tunnel — không có lớp này thì ai cũng gọi
+# thẳng được mọi API (bật/tắt camera, xoá Face ID, đọc ảnh/clip...). Chặn ở
+# middleware (không phải Depends từng route) vì còn phải bảo vệ cả StaticFiles
+# mount (/data/*, /alerts) — hai thứ đó không nhận Depends của FastAPI.
+#
+# Phân quyền QTHT-only vẫn khai riêng ở từng route bằng Depends(require_qtht)
+# (xem các route tạo/sửa/xoá); middleware ở đây chỉ bảo đảm "phải đăng nhập".
+
+PUBLIC_PATHS = {
+    "/", "/favicon.ico",
+    "/api/v1/auth/login",
+    "/api/v1/system/health",
+    "/api/time", "/api/v1/system/time",
+    # Không nằm trong danh sách công khai theo yêu cầu gốc, nhưng màn đăng
+    # nhập cần endpoint này để quyết định có hiện khối "tài khoản demo" hay
+    # không — trước khi đăng nhập thì chưa có phiên để hỏi qua đường khác.
+    "/api/v1/system/config",
+}
+
+
+def _public_path(path: str) -> bool:
+    return path in PUBLIC_PATHS or path.startswith("/static/")
+
+
+def _client_ip(request: Request) -> str:
+    """IP người gọi cho rate-limit đăng nhập. Sau Cloudflare tunnel thì
+    ``request.client.host`` là IP của tunnel, không phải người dùng thật."""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+@app.middleware("http")
+async def require_session(request: Request, call_next):
+    """Chặn mọi request không có phiên hợp lệ, trừ danh sách công khai.
+
+    ``AUTH_REQUIRED=0`` tắt hẳn kiểm tra này — chỉ để chạy máy phát triển cá
+    nhân, không bao giờ nên tắt khi máy lộ ra ngoài qua tunnel.
+    """
+    if not auth.AUTH_REQUIRED or _public_path(request.url.path):
+        return await call_next(request)
+
+    token = request.cookies.get(auth.SESSION_COOKIE)
+    user = auth.verify_session_token(token) if token else None
+    if user is None:
+        return JSONResponse({"detail": "Chưa đăng nhập hoặc phiên đã hết hạn"}, status_code=401)
+
+    request.state.user = user
+    return await call_next(request)
+
+
+def require_qtht(request: Request) -> Optional[dict]:
+    """Depends cho route chỉ QTHT được gọi: tạo/sửa/xoá camera, vùng, thời
+    khoá biểu, Face ID, bật/tắt camera, điểm danh thủ công...
+
+    Request đã qua ``require_session`` ở trên nên ở đây chỉ còn phải phân
+    biệt vai trò; AUTH_REQUIRED=0 thì bỏ qua luôn như middleware.
+    """
+    if not auth.AUTH_REQUIRED:
+        return None
+    user = getattr(request.state, "user", None)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Chưa đăng nhập hoặc phiên đã hết hạn")
+    if user["role"] != auth.ROLE_QTHT:
+        raise HTTPException(status_code=403,
+                            detail="Chỉ quản trị hệ thống (QTHT) mới được thực hiện thao tác này")
+    return user
+
+
+def _set_session_cookie(response: Response, request: Request, token: str) -> None:
+    """Secure khi request tới qua https. Sau Cloudflare tunnel TLS được dỡ ở
+    tunnel, tới FastAPI chỉ còn HTTP thường — phải đọc X-Forwarded-Proto mới
+    biết trình duyệt thật sự nói chuyện qua https hay không."""
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    response.set_cookie(
+        auth.SESSION_COOKIE, token, httponly=True, samesite="lax",
+        secure=(proto == "https"), max_age=int(auth.SESSION_HOURS * 3600), path="/",
+    )
 
 
 # Mount static files
@@ -310,7 +393,8 @@ async def register_face(
     unit: str = Form(...),
     status: str = Form("Active"),
     image: Optional[UploadFile] = File(None),
-    image_base64: Optional[str] = Form(None)
+    image_base64: Optional[str] = Form(None),
+    _qtht=Depends(require_qtht),
 ):
     """
     Register military personnel with biometric face embedding.
@@ -352,7 +436,7 @@ async def register_face(
 
 
 @app.delete("/api/faces/{person_id}")
-async def delete_registered_face(person_id: str):
+async def delete_registered_face(person_id: str, _qtht=Depends(require_qtht)):
     """Delete a registered person by ID or military ID."""
     success = face_engine.delete_person(person_id)
     if not success:
@@ -370,7 +454,8 @@ async def update_registered_face(
     military_id: Optional[str] = Form(None),
     rank: Optional[str] = Form(None),
     unit: Optional[str] = Form(None),
-    status: Optional[str] = Form(None)
+    status: Optional[str] = Form(None),
+    _qtht=Depends(require_qtht),
 ):
     """Update metadata for registered personnel."""
     updates = {}
@@ -419,7 +504,7 @@ async def get_zone_rules():
 
 
 @app.post("/api/zones")
-async def save_zone_rules(config: dict):
+async def save_zone_rules(config: dict, _qtht=Depends(require_qtht)):
     """Lưu cấu hình kiểu cũ. Các vùng cấm cấu hình qua API v1 được giữ nguyên."""
     try:
         zone_store.merge_legacy(config)
@@ -513,7 +598,7 @@ async def get_schedules():
 
 
 @app.post("/api/schedules")
-async def create_schedule(schedule_data: dict):
+async def create_schedule(schedule_data: dict, _qtht=Depends(require_qtht)):
     """Create a new military shift schedule."""
     sch_file = data_path / "schedules.json"
     schedules = read_json_list(sch_file)
@@ -527,7 +612,7 @@ async def create_schedule(schedule_data: dict):
 
 
 @app.delete("/api/schedules/{sch_id}")
-async def delete_schedule(sch_id: str):
+async def delete_schedule(sch_id: str, _qtht=Depends(require_qtht)):
     """Delete a schedule by ID."""
     sch_file = data_path / "schedules.json"
     if not sch_file.exists():
@@ -591,7 +676,8 @@ async def get_attendance_logs(unit: Optional[str] = None, shift: Optional[str] =
 # ----------------- Roll-call (Điểm danh) Endpoints -----------------
 
 @app.post("/api/attendance/start")
-async def start_attendance(schedule_id: Optional[str] = None, window_mins: Optional[int] = None):
+async def start_attendance(schedule_id: Optional[str] = None, window_mins: Optional[int] = None,
+                           _qtht=Depends(require_qtht)):
     """Mở phiên điểm danh ngay lập tức, không chờ tới giờ ca."""
     now = clock.now()
     runtime = _first_runtime()
@@ -614,7 +700,7 @@ async def start_attendance(schedule_id: Optional[str] = None, window_mins: Optio
 
 
 @app.post("/api/attendance/cancel")
-async def cancel_attendance():
+async def cancel_attendance(_qtht=Depends(require_qtht)):
     """Huỷ phiên điểm danh đang mở, không ghi biên bản."""
     runtime = _first_runtime()
     attendance = runtime.attendance if runtime else None
@@ -639,7 +725,8 @@ async def attendance_status():
 async def start_processing(
     background_tasks: BackgroundTasks,
     mode: str = "video",
-    rtsp_url: Optional[str] = None
+    rtsp_url: Optional[str] = None,
+    _qtht=Depends(require_qtht),
 ):
     """Route cũ: bật camera mặc định bằng nguồn vừa tải lên hoặc URL RTSP."""
     global current_video_path
@@ -677,7 +764,7 @@ async def start_processing(
 
 
 @app.post("/api/stop")
-async def stop_processing():
+async def stop_processing(_qtht=Depends(require_qtht)):
     """Route cũ: dừng mọi camera đang chạy."""
     if not runtimes:
         return {"status": "success", "message": "Not processing"}
@@ -687,7 +774,7 @@ async def stop_processing():
 
 
 @app.post("/api/upload")
-async def upload_video(file: UploadFile = File(...)):
+async def upload_video(file: UploadFile = File(...), _qtht=Depends(require_qtht)):
     """Upload a video file for processing."""
     global current_video_path
 
@@ -717,7 +804,8 @@ async def upload_chunk(
     chunk_index: int = Form(...),
     total_chunks: int = Form(...),
     upload_id: str = Form(...),
-    filename: str = Form(...)
+    filename: str = Form(...),
+    _qtht=Depends(require_qtht),
 ):
     """Handle chunked file upload for large video files."""
     global current_video_path
@@ -772,7 +860,7 @@ async def upload_chunk(
 
 
 @app.post("/api/set-baseline")
-async def set_baseline(count: int):
+async def set_baseline(count: int, _qtht=Depends(require_qtht)):
     """Set the expected baseline count."""
     runtime = _first_runtime()
     if runtime is None:
@@ -825,7 +913,17 @@ async def get_alerts(limit: int = 50):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket endpoint for live frames, recognitions, and alert events."""
+    """WebSocket endpoint for live frames, recognitions, and alert events.
+
+    Middleware ``require_session`` chỉ bắt scope ``http``, không bắt
+    ``websocket`` — phải tự kiểm cookie ở đây, đọc từ handshake qua
+    ``websocket.cookies`` (Starlette tự tách từ header ``Cookie``).
+    """
+    if auth.AUTH_REQUIRED and auth.verify_session_token(
+            websocket.cookies.get(auth.SESSION_COOKIE)) is None:
+        await websocket.close(code=1008)
+        return
+
     await websocket.accept()
     active_connections.append(websocket)
     print("WebSocket connection established")
@@ -1300,7 +1398,7 @@ async def v1_list_zones(camera_id: str):
 
 
 @app.post("/api/v1/cameras/{camera_id}/zones", status_code=201)
-async def v1_create_zone(camera_id: str, payload: ZoneInput):
+async def v1_create_zone(camera_id: str, payload: ZoneInput, _qtht=Depends(require_qtht)):
     """Thêm vùng cho camera. Vòng xử lý video áp dụng ngay, không cần khởi động lại."""
     zones = zone_store.all_zones()
     _reject_second_attendance_zone(
@@ -1314,7 +1412,7 @@ async def v1_create_zone(camera_id: str, payload: ZoneInput):
 
 
 @app.patch("/api/v1/zones/{zone_id}")
-async def v1_update_zone(zone_id: str, payload: ZonePatch):
+async def v1_update_zone(zone_id: str, payload: ZonePatch, _qtht=Depends(require_qtht)):
     """Cập nhật vùng. Toàn bộ bản ghi sau khi trộn được kiểm tra lại."""
     zones, index = _zone_or_404(zone_id)
     existing = zones[index]
@@ -1340,7 +1438,7 @@ async def v1_update_zone(zone_id: str, payload: ZonePatch):
 
 
 @app.delete("/api/v1/zones/{zone_id}", status_code=204)
-async def v1_delete_zone(zone_id: str):
+async def v1_delete_zone(zone_id: str, _qtht=Depends(require_qtht)):
     """Xoá vùng khỏi cấu hình."""
     zones, index = _zone_or_404(zone_id)
     zones.pop(index)
@@ -1544,7 +1642,7 @@ async def v1_get_camera(camera_id: str):
 
 
 @app.post("/api/v1/cameras", status_code=201)
-async def v1_create_camera(payload: CameraInput):
+async def v1_create_camera(payload: CameraInput, _qtht=Depends(require_qtht)):
     cameras = _load_cameras()
     camera = payload.model_dump()
     camera["id"] = f"cam_{int(time.time() * 1000)}"
@@ -1557,7 +1655,7 @@ async def v1_create_camera(payload: CameraInput):
 
 
 @app.patch("/api/v1/cameras/{camera_id}")
-async def v1_update_camera(camera_id: str, payload: CameraPatch):
+async def v1_update_camera(camera_id: str, payload: CameraPatch, _qtht=Depends(require_qtht)):
     cameras, index = _camera_or_404(camera_id)
     try:
         merged = payload.apply_to(cameras[index])
@@ -1586,7 +1684,7 @@ async def v1_update_camera(camera_id: str, payload: CameraPatch):
 
 
 @app.delete("/api/v1/cameras/{camera_id}", status_code=204)
-async def v1_delete_camera(camera_id: str):
+async def v1_delete_camera(camera_id: str, _qtht=Depends(require_qtht)):
     """Gỡ camera. Vùng giám sát của camera đó bị xoá theo, không để lại rác."""
     cameras, index = _camera_or_404(camera_id)
     if is_camera_running(camera_id):
@@ -1601,7 +1699,8 @@ async def v1_delete_camera(camera_id: str):
 
 
 @app.post("/api/v1/cameras/{camera_id}/start", status_code=202)
-async def v1_start_camera(camera_id: str, background_tasks: BackgroundTasks):
+async def v1_start_camera(camera_id: str, background_tasks: BackgroundTasks,
+                          _qtht=Depends(require_qtht)):
     """Bật xử lý AI cho camera, dùng nguồn đã khai trong hồ sơ camera.
 
     Các camera chạy song song, độc lập nhau: bật camera này không phải tắt
@@ -1647,7 +1746,7 @@ async def v1_start_camera(camera_id: str, background_tasks: BackgroundTasks):
 
 
 @app.post("/api/v1/cameras/{camera_id}/stop", status_code=202)
-async def v1_stop_camera(camera_id: str):
+async def v1_stop_camera(camera_id: str, _qtht=Depends(require_qtht)):
     """Dừng riêng camera này, các camera khác vẫn chạy tiếp."""
     cameras, index = _camera_or_404(camera_id)
     runtime = runtimes.get(camera_id)
@@ -1671,7 +1770,7 @@ async def v1_list_schedules(training_type: Optional[str] = None, unit: Optional[
 
 
 @app.post("/api/v1/schedules", status_code=201)
-async def v1_create_schedule(payload: ScheduleInput):
+async def v1_create_schedule(payload: ScheduleInput, _qtht=Depends(require_qtht)):
     schedules = read_json_list(schedules_file)
     schedule = payload.model_dump()
     schedule["id"] = f"sch_{int(time.time() * 1000)}"
@@ -1690,7 +1789,7 @@ async def v1_get_schedule(schedule_id: str):
 
 
 @app.patch("/api/v1/schedules/{schedule_id}")
-async def v1_update_schedule(schedule_id: str, payload: SchedulePatch):
+async def v1_update_schedule(schedule_id: str, payload: SchedulePatch, _qtht=Depends(require_qtht)):
     """Sửa ca. Buổi đang chạy không bị ảnh hưởng, cấu hình mới áp cho buổi sau."""
     schedules = read_json_list(schedules_file)
     index = next((i for i, s in enumerate(schedules) if s.get("id") == schedule_id), None)
@@ -1710,7 +1809,7 @@ async def v1_update_schedule(schedule_id: str, payload: SchedulePatch):
 
 
 @app.delete("/api/v1/schedules/{schedule_id}", status_code=204)
-async def v1_delete_schedule(schedule_id: str):
+async def v1_delete_schedule(schedule_id: str, _qtht=Depends(require_qtht)):
     schedules = read_json_list(schedules_file)
     remaining = [s for s in schedules if s.get("id") != schedule_id]
     if len(remaining) == len(schedules):
@@ -1738,35 +1837,89 @@ async def v1_session_checks(session_id: str):
 
 # ----------------- API v1: đăng nhập -----------------
 
-@app.post("/api/v1/auth/login")
-async def v1_login(body: LoginInput):
-    """Kiểm tra tài khoản và trả về vai trò để giao diện hiện đúng menu.
+SHOW_DEMO_ACCOUNTS = os.environ.get("SHOW_DEMO_ACCOUNTS", "0").strip().lower() not in ("0", "false", "")
 
-    Không tạo phiên và không cấp token: các endpoint khác **không** kiểm quyền.
-    Xem ghi chú trong ``app/auth.py``.
+
+@app.post("/api/v1/auth/login")
+async def v1_login(body: LoginInput, request: Request, response: Response):
+    """Kiểm tra tài khoản, cấp phiên qua cookie HttpOnly ``horus_session``.
+
+    Chặn dò mật khẩu: quá 10 lần sai trong 10 phút theo IP HOẶC theo tên tài
+    khoản thì tạm khoá (429) — không tiết lộ ai trong hai điều kiện bị chặn,
+    để không giúp kẻ dò biết nên đổi IP hay đổi tài khoản.
     """
-    user = authenticate(body.username, body.password)
+    ip_key = f"ip:{_client_ip(request)}"
+    user_key = f"user:{(body.username or '').strip().lower()}"
+    if auth.is_rate_limited(ip_key) or auth.is_rate_limited(user_key):
+        raise HTTPException(status_code=429,
+                            detail="Thử sai quá nhiều lần, vui lòng chờ vài phút rồi đăng nhập lại")
+
+    user = auth.authenticate(body.username, body.password)
     if user is None:
+        auth.record_failure(ip_key)
+        auth.record_failure(user_key)
         raise HTTPException(status_code=401, detail="Sai tài khoản hoặc mật khẩu")
+
+    auth.record_success(ip_key)
+    auth.record_success(user_key)
+    token = auth.create_session_token(user["username"], user["role"],
+                                      auth.token_version_of(user["username"]))
+    _set_session_cookie(response, request, token)
+    return user
+
+
+@app.post("/api/v1/auth/logout")
+async def v1_logout(response: Response):
+    """Xoá phiên đăng nhập hiện tại."""
+    response.delete_cookie(auth.SESSION_COOKIE, path="/")
+    return {"status": "success", "message": "Đã đăng xuất"}
+
+
+@app.get("/api/v1/auth/me")
+async def v1_me(request: Request):
+    """Hồ sơ của phiên đang đăng nhập.
+
+    Giao diện gọi route này lúc nạp trang để biết có đăng nhập hay không và
+    vai trò là gì — không còn tin ``localStorage`` (phía client tự sửa được,
+    không chứng minh được gì về quyền thật).
+    """
+    user = auth.verify_session_token(request.cookies.get(auth.SESSION_COOKIE))
+    if user is None:
+        raise HTTPException(status_code=401, detail="Chưa đăng nhập hoặc phiên đã hết hạn")
     return user
 
 
 @app.post("/api/v1/auth/password")
-async def v1_change_password(body: PasswordChangeInput):
+async def v1_change_password(body: PasswordChangeInput, request: Request, response: Response):
     """Đổi mật khẩu của chính tài khoản đó.
 
-    POC không có phiên nên phải gửi kèm tên tài khoản và mật khẩu cũ; mật khẩu
-    cũ chính là thứ đứng thay cho phiên đăng nhập ở đây.
+    Vẫn yêu cầu mật khẩu cũ (không chỉ dựa vào phiên) để một phiên bị lộ
+    không tự đổi được mật khẩu mà không biết mật khẩu hiện tại.
     """
-    if not change_password(body.username, body.old_password, body.new_password):
+    current = getattr(request.state, "user", None)
+    if current is not None and current["username"] != (body.username or "").strip().lower():
+        raise HTTPException(status_code=403, detail="Chỉ đổi được mật khẩu của chính tài khoản đang đăng nhập")
+
+    if not auth.change_password(body.username, body.old_password, body.new_password):
         raise HTTPException(status_code=400, detail="Sai tài khoản hoặc mật khẩu hiện tại")
+
+    # Đổi mật khẩu tăng token_version lên một — cấp lại cookie theo số mới
+    # ngay, không thì chính người vừa đổi mật khẩu bị đăng xuất tức thì.
+    if current is not None:
+        token = auth.create_session_token(current["username"], current["role"],
+                                          auth.token_version_of(current["username"]))
+        _set_session_cookie(response, request, token)
     return {"status": "success", "message": "Đã đổi mật khẩu"}
 
 
 @app.patch("/api/v1/auth/profile")
-async def v1_update_profile(body: ProfilePatch):
+async def v1_update_profile(body: ProfilePatch, request: Request):
     """Đổi tên hiển thị của tài khoản."""
-    profile = update_profile(body.username, body.display_name)
+    current = getattr(request.state, "user", None)
+    if current is not None and current["username"] != (body.username or "").strip().lower():
+        raise HTTPException(status_code=403, detail="Chỉ sửa được hồ sơ của chính tài khoản đang đăng nhập")
+
+    profile = auth.update_profile(body.username, body.display_name)
     if profile is None:
         raise HTTPException(status_code=404, detail="Không tìm thấy tài khoản")
     return profile
@@ -1782,13 +1935,17 @@ async def v1_system_time():
 
 @app.get("/api/v1/system/config")
 async def v1_system_config():
-    """Cấu hình để player.js quyết định dùng go2rtc (WebRTC/MSE) hay rơi hẳn về
-    MJPEG — giao diện không được tự đoán qua biến môi trường vì nó chạy ở
-    trình duyệt, không đọc được env của server."""
+    """Cấu hình công khai: player.js chọn go2rtc (WebRTC/MSE) hay rơi về MJPEG,
+    và màn đăng nhập có hiện khối "tài khoản demo" hay không.
+
+    Route này CÔNG KHAI (không cần phiên) vì màn đăng nhập cần gọi nó trước
+    khi có phiên. Không chứa gì nhạy cảm: không mật khẩu, không URI camera.
+    """
     return {
         "go2rtc_enabled": go2rtc.GO2RTC_ENABLED,
         "go2rtc_proxy_base": "/go2rtc",
         "ice_servers": go2rtc.ice_servers(),
+        "show_demo_accounts": SHOW_DEMO_ACCOUNTS,
     }
 
 

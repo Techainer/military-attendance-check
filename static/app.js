@@ -2458,9 +2458,38 @@ function fmtTime(iso) {
     return new Date(iso).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
 }
 
+// ----------------- Phiên đăng nhập & fetch tập trung -----------------
+// Server kiểm phiên qua cookie HttpOnly (gửi kèm tự động, cùng gốc) — ở đây
+// chỉ cần bắt 401 (phiên hết/mất) để quay lại màn đăng nhập, không phải tự
+// thêm header gì. Bọc quanh fetch gốc một lần, mọi lời gọi fetch() thường
+// (bare, không qua getJson) trong toàn trang đều tự được bắt luôn, không phải
+// sửa từng chỗ gọi.
+let _sessionExpired = false;
+const _rawFetch = window.fetch.bind(window);
+window.fetch = async function (input, init) {
+    const res = await _rawFetch(input, init);
+    // currentUser chỉ có giá trị SAU khi đã enterApp() — tránh phản ứng với
+    // 401 "bình thường" của /auth/login (sai mật khẩu) hay /auth/me lúc nạp
+    // trang (chưa đăng nhập, không phải phiên bị mất giữa chừng).
+    if (res.status === 401 && currentUser && !_sessionExpired) {
+        _sessionExpired = true;
+        currentUser = null;
+        try { localStorage.removeItem('horus_user'); } catch (e) { /* chế độ riêng tư */ }
+        alert('Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.');
+        // Nạp lại trang cho sạch: đóng kênh sự kiện, luồng hình, hẹn giờ...
+        // giống hệt lý do handleLogout() cũng reload.
+        window.location.reload();
+    }
+    return res;
+};
+
 async function getJson(url) {
     const res = await fetch(url);
-    if (!res.ok) throw new Error((await res.text()).slice(0, 200));
+    if (!res.ok) {
+        let message = (await res.text()).slice(0, 200);
+        try { message = describeApiError(JSON.parse(message)); } catch (e) { /* không phải JSON */ }
+        throw new Error(message);
+    }
     return res.json();
 }
 
@@ -3267,8 +3296,11 @@ async function handleLogin(event) {
         });
         if (!res.ok) throw new Error(describeApiError(await res.json()));
 
+        // Đăng nhập đúng là server đã set cookie phiên (HttpOnly, cùng gốc) —
+        // không cần tự giữ gì ở client, /auth/me lúc nạp lại trang sẽ hỏi lại
+        // server, không tin localStorage nữa (client tự sửa được, không chứng
+        // minh được gì về quyền thật).
         const user = await res.json();
-        try { localStorage.setItem('horus_user', JSON.stringify(user)); } catch (e) { /* chế độ riêng tư */ }
         enterApp(user);
     } catch (e) {
         err.textContent = `✗ ${e.message}`;
@@ -3288,7 +3320,8 @@ function enterApp(user) {
     switchNavTab(ROLES[user.role].home);
 }
 
-function handleLogout() {
+async function handleLogout() {
+    try { await fetch('/api/v1/auth/logout', { method: 'POST' }); } catch (e) { /* mất mạng: cookie hết hạn tự nhiên theo AUTH_SESSION_HOURS */ }
     try { localStorage.removeItem('horus_user'); } catch (e) { /* chế độ riêng tư */ }
     // Nạp lại trang cho sạch: đóng kênh sự kiện, luồng hình và các hẹn giờ
     window.location.reload();
@@ -3333,15 +3366,31 @@ async function startAppSession() {
     }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-    // Đã đăng nhập lần trước thì vào thẳng, khỏi gõ lại
-    let saved = null;
-    try { saved = JSON.parse(localStorage.getItem('horus_user') || 'null'); } catch (e) { saved = null; }
+document.addEventListener('DOMContentLoaded', async () => {
+    // Khối "tài khoản demo" ở màn đăng nhập: chỉ hiện khi server bật
+    // SHOW_DEMO_ACCOUNTS — route /system/config công khai, gọi được trước khi
+    // có phiên. Không chặn màn đăng nhập hiện ra nếu lời gọi này lỗi.
+    try {
+        const config = await getJson('/api/v1/system/config');
+        const demoHint = document.querySelector('.login-hint');
+        if (demoHint) demoHint.style.display = config.show_demo_accounts ? '' : 'none';
+    } catch (e) { /* không lấy được cấu hình thì cứ để mặc định của HTML */ }
 
-    if (saved && ROLES[saved.role]) {
-        enterApp(saved);
-    } else {
-        document.getElementById('login-screen').style.display = 'flex';
-        document.getElementById('app-layout').style.display = 'none';
-    }
+    // Phiên đăng nhập sống trong cookie HttpOnly (server quản) — hỏi /auth/me
+    // để biết có đang đăng nhập hay không, KHÔNG tin localStorage: giá trị đó
+    // phía client tự sửa được, không chứng minh được gì về quyền thật.
+    try {
+        const res = await fetch('/api/v1/auth/me');
+        if (res.ok) {
+            const user = await res.json();
+            if (ROLES[user.role]) {
+                enterApp(user);
+                return;
+            }
+        }
+    } catch (e) { /* lỗi mạng: coi như chưa đăng nhập, hiện màn đăng nhập */ }
+
+    try { localStorage.removeItem('horus_user'); } catch (e) { /* chế độ riêng tư */ }
+    document.getElementById('login-screen').style.display = 'flex';
+    document.getElementById('app-layout').style.display = 'none';
 });

@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 import app.api as api
 import app.video_processor as vp
 from app.events import CAMERA_ID
+from auth_helper import login_as
 
 failures = []
 
@@ -27,6 +28,8 @@ def check(name, cond, extra=""):
 
 
 client = TestClient(api.app)
+# Tạo/sửa vùng giám sát cần phiên QTHT; luồng MJPEG chỉ cần đăng nhập thường.
+login_as(client)
 ZONES = f"/api/v1/cameras/{CAMERA_ID}/zones"
 
 
@@ -236,10 +239,16 @@ import asyncio
 async def pull_mjpeg(overlay: int, want_frames: int):
     sent = []
     query = f"overlay={overlay}&fps=25".encode()
+    # Gọi thẳng ASGI nên không tự mang cookie của ``client`` — tự ký token
+    # phiên hợp lệ và nhét vào header Cookie thủ công.
+    import app.auth as auth_mod
+    token = auth_mod.create_session_token("qtht", "qtht", auth_mod.token_version_of("qtht"))
+    cookie_header = f"{auth_mod.SESSION_COOKIE}={token}".encode()
     scope = {"type": "http", "http_version": "1.1", "method": "GET", "scheme": "http",
              "path": f"/api/v1/cameras/{CAMERA_ID}/stream.mjpg",
              "raw_path": f"/api/v1/cameras/{CAMERA_ID}/stream.mjpg".encode(),
-             "query_string": query, "root_path": "", "headers": [(b"host", b"test")],
+             "query_string": query, "root_path": "",
+             "headers": [(b"host", b"test"), (b"cookie", cookie_header)],
              "client": ("127.0.0.1", 1234), "server": ("test", 80)}
 
     async def receive():

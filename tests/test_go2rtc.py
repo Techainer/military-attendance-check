@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 import app.api as api
 from app import go2rtc
+from auth_helper import login_as
 
 failures = []
 
@@ -30,6 +31,9 @@ def check(name, cond, extra=""):
 
 
 client = TestClient(api.app)
+# /api/v1/cameras và /go2rtc/* đều cần phiên đăng nhập — đăng nhập một lần,
+# websocket_connect() bên dưới dùng chung cookie jar của client này.
+login_as(client)
 
 old_url, old_enabled, old_ice = go2rtc.GO2RTC_URL, go2rtc.GO2RTC_ENABLED, go2rtc._ICE_SERVERS_RAW
 

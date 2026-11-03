@@ -1,7 +1,9 @@
 """Kiểm đăng nhập, đổi mật khẩu và sửa thông tin cá nhân.
 
-Bản POC không có phiên và không kiểm quyền ở endpoint khác; test ở đây chỉ
-khẳng định mật khẩu đổi được và lưu lại được, không khẳng định gì về bảo mật.
+Có phiên rồi: đăng nhập đúng là cookie ``horus_session`` được set trên
+``TestClient`` (httpx giữ cookie qua các lần gọi), nên các bước sau trong bài
+này tự mang theo phiên của ``cbqh`` không cần làm gì thêm. Bài kiểm quyền hạn
+đầy đủ (ai được/không được gọi gì) nằm ở test_auth_enforcement.py.
 """
 
 import sys
@@ -86,7 +88,8 @@ check("đăng nhập lần sau thấy tên mới",
 
 r = client.patch("/api/v1/auth/profile", json={
     "username": "khong-co", "display_name": "Ai đó"})
-check("sửa hồ sơ tài khoản lạ -> 404", r.status_code == 404, str(r.status_code))
+check("phiên của cbqh không sửa được hồ sơ tài khoản khác -> 403",
+      r.status_code == 403, str(r.status_code))
 
 reset()
 
