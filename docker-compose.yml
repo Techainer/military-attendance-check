@@ -11,9 +11,9 @@ services:
     network_mode: host
     environment:
       HORUS_PORT: ${HORUS_PORT:-8199}
-    env_file:
-      - path: .env
-        required: false
+    # Dạng chuỗi để chạy được cả Compose cũ (2.18 chưa hiểu path/required):
+    # cần có file .env, chép từ .env.example rồi sửa
+    env_file: .env
     volumes:
       - ./data:/app/data        # cấu hình, khuôn mặt, biên bản, ảnh bằng chứng
       - ./alerts:/app/alerts    # ảnh cảnh báo
