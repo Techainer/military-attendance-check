@@ -1457,7 +1457,7 @@ MJPEG_KEEPALIVE_S = 5.0
 
 
 @app.get("/api/v1/cameras/{camera_id}/stream.mjpg")
-async def v1_camera_stream(camera_id: str, overlay: int = 1, fps: int = 5):
+async def v1_camera_stream(camera_id: str, overlay: int = 1, fps: Optional[int] = None):
     """Luồng hình trực tiếp dạng MJPEG, dùng thẳng trong thẻ <img>.
 
     Không cần WebSocket, không cần canvas, trình duyệt tự nối lại khi đứt.
@@ -1471,7 +1471,9 @@ async def v1_camera_stream(camera_id: str, overlay: int = 1, fps: int = 5):
     if _current_jpeg(camera_id, overlay) is None:
         raise HTTPException(status_code=409, detail="Camera chưa được bật xử lý")
 
-    min_interval = 1.0 / max(1, min(25, fps))
+    # Mặc định theo nhịp publish thật (STREAM_FPS), không tự cắt còn 5 fps
+    from app import video_processor as _vp
+    min_interval = 1.0 / max(1, min(25, fps or _vp.STREAM_FPS))
     boundary = b"--frame\r\n"
 
     async def generator():
