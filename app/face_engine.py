@@ -24,6 +24,12 @@ class FaceEngine:
     # giữa hai quân nhân có nét giống nhau.
     AMBIGUITY_MARGIN = 0.05
 
+    # Cổng chất lượng lúc ĐĂNG KÝ (không áp cho nhận diện lúc chạy): ảnh mờ/mặt
+    # quá nhỏ cho embedding không đáng tin — đăng ký vào rồi cả ca nhận nhầm còn
+    # tệ hơn từ chối ngay lúc đăng ký.
+    MIN_ENROLL_DET_SCORE = 0.6
+    MIN_ENROLL_FACE_WIDTH = 60
+
     def __init__(
         self,
         model_name: Optional[str] = None,
@@ -34,11 +40,17 @@ class FaceEngine:
         # buffalo_l (R50) chính xác hơn hẳn buffalo_s (MobileFaceNet) trên ảnh camera
         # mờ; buffalo_s chỉ nên dùng khi CPU yếu không chạy kịp R50 (xem app/hw.py).
         self.model_name = model_name or os.environ.get("FACE_MODEL") or settings.face_model
+        # 0.36 (mặc định cũ) với 0.30 (từng chỉnh lúc triển khai) đều quá thấp cho
+        # ArcFace trên ảnh CCTV mờ/góc xấu -> dễ nhận nhầm hai quân nhân khác nhau.
+        # Nâng mặc định lên 0.40; vẫn ghi đè được qua biến môi trường khi cần.
         self.similarity_threshold = (
             similarity_threshold
             if similarity_threshold is not None
-            else float(os.environ.get("FACE_SIM_THRESHOLD", "0.36"))
+            else float(os.environ.get("FACE_SIM_THRESHOLD", "0.40"))
         )
+        if self.similarity_threshold < 0.35:
+            print(f"[FaceEngine] CẢNH BÁO: FACE_SIM_THRESHOLD={self.similarity_threshold} quá thấp "
+                  f"cho ArcFace trên ảnh CCTV (khuyến nghị >= 0.40), dễ nhận nhầm người.")
         # det_size lớn hơn để bắt được khuôn mặt nhỏ ở xa; det_thresh thấp hơn để
         # không bỏ sót mặt mờ. Cả hai chỉnh được qua biến môi trường.
         det = int(os.environ.get("FACE_DET_SIZE") or settings.face_det_size)
@@ -179,10 +191,16 @@ class FaceEngine:
             except Exception as e:
                 print(f"[FaceEngine] Error saving face database: {e}")
 
-    def extract_face_and_embedding(self, frame: np.ndarray) -> Optional[Tuple[np.ndarray, np.ndarray, Tuple[int, int, int, int]]]:
+    def extract_face_and_embedding(
+        self, frame: np.ndarray, enforce_quality: bool = False
+    ) -> Optional[Tuple[np.ndarray, np.ndarray, Tuple[int, int, int, int]]]:
         """
         Extract the most prominent face embedding and bounding box from an image.
-        
+
+        ``enforce_quality=True`` (dùng lúc ĐĂNG KÝ, xem ``register_person``) ném
+        ``ValueError`` tiếng Việt khi mặt quá mờ/quá nhỏ, theo đúng đường lỗi mà
+        API đăng ký đã bắt sẵn (``except Exception`` -> HTTPException 400).
+
         Returns:
             (norm_embedding, cropped_face_img, (x1, y1, x2, y2)) or None
         """
@@ -208,6 +226,17 @@ class FaceEngine:
 
         if largest_face is None or largest_face.embedding is None:
             return None
+
+        if enforce_quality:
+            det_score = float(getattr(largest_face, "det_score", 1.0))
+            fb = largest_face.bbox.astype(int)
+            face_width = int(fb[2] - fb[0])
+            if det_score < self.MIN_ENROLL_DET_SCORE or face_width < self.MIN_ENROLL_FACE_WIDTH:
+                raise ValueError(
+                    "Ảnh khuôn mặt chưa đủ rõ để đăng ký (độ tin cậy phát hiện "
+                    f"{det_score:.2f}, bề ngang {face_width}px). Vui lòng chụp lại gần hơn, "
+                    "đủ sáng và nhìn thẳng vào camera."
+                )
 
         # Normalize embedding vector
         emb = largest_face.embedding
@@ -239,7 +268,7 @@ class FaceEngine:
         """
         Extract face embedding from image and register a new soldier into the database.
         """
-        extracted = self.extract_face_and_embedding(image)
+        extracted = self.extract_face_and_embedding(image, enforce_quality=True)
         if extracted is None:
             raise ValueError("Không phát hiện được khuôn mặt trong ảnh. Vui lòng căn chỉnh góc chụp rõ nét và đủ ánh sáng.")
 
