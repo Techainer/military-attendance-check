@@ -148,22 +148,23 @@ check("xoá camera cũng gỡ luồng khỏi go2rtc",
       any(m == "DELETE" and f"src={cam_id}" in p for m, p in received), str(received))
 
 
-print("\n[7] Proxy HTTP /go2rtc/api/* chuyển tiếp đúng")
+print("\n[7] Proxy HTTP chỉ cho đọc /go2rtc/api, chặn API quản trị")
 received.clear()
-res = client.get("/go2rtc/api/streams")
-check("GET qua proxy trả 200", res.status_code == 200, str(res.status_code))
-check("proxy gọi đúng go2rtc", received == [("GET", "/api/streams")], str(received))
-check("nội dung đi xuyên qua nguyên vẹn", res.json() == {"ok": True}, res.text)
+res = client.get("/go2rtc/api")
+check("GET /go2rtc/api qua proxy trả 200", res.status_code == 200, str(res.status_code))
+check("proxy gọi đúng GET /api của go2rtc", received == [("GET", "/api")], str(received))
 
 received.clear()
-res = client.put("/go2rtc/api/streams", params={"name": "x", "src": "rtsp://h/s"})
-check("PUT qua proxy trả 200", res.status_code == 200)
-check("PUT giữ nguyên query string", len(received) == 1 and received[0][0] == "PUT", str(received))
+res = client.get("/go2rtc/api/streams")
+check("GET /api/streams bị chặn (lộ URI có mật khẩu)", res.status_code == 403, str(res.status_code))
+res = client.put("/go2rtc/api/streams", params={"name": "x", "src": "exec:id"})
+check("PUT /api/streams bị chặn (src exec: chạy lệnh)", res.status_code == 403, str(res.status_code))
+check("không request quản trị nào tới go2rtc", received == [], str(received))
 
 
 print("\n[8] go2rtc tắt thì proxy HTTP từ chối rõ ràng (503), không treo")
 go2rtc.GO2RTC_ENABLED = False
-res = client.get("/go2rtc/api/streams")
+res = client.get("/go2rtc/api")
 check("trả 503 khi tắt", res.status_code == 503, str(res.status_code))
 go2rtc.GO2RTC_ENABLED = True
 
@@ -212,6 +213,14 @@ if not ws_ready.wait(timeout=5):
     check("máy chủ WS giả khởi động được", False, "timeout")
 else:
     go2rtc.GO2RTC_URL = f"http://127.0.0.1:{ws_holder['port']}"
+    for bad in ("exec:id", "rtsp://evil/x", "chua_dang_ky"):
+        try:
+            with client.websocket_connect(f"/go2rtc/api/ws?src={bad}") as ws:
+                ws.receive_text()
+            check(f"WS src={bad} bị từ chối", False, "đã kết nối được")
+        except Exception:
+            check(f"WS src={bad} bị từ chối", True)
+    go2rtc._registered.add("cam_test")
     try:
         with client.websocket_connect("/go2rtc/api/ws?src=cam_test") as ws:
             ws.send_text("hello")

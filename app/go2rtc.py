@@ -19,6 +19,7 @@ thuộc. WebSocket proxy dùng ``websockets`` (đã có sẵn, kéo theo bởi
 
 import asyncio
 import json
+import re
 import os
 import urllib.error
 import urllib.parse
@@ -119,6 +120,13 @@ def _go2rtc_src(uri: str) -> str:
     return f"ffmpeg:{uri}#video=copy"
 
 
+# Tên luồng đã đăng ký lên go2rtc. Proxy WS chỉ cho xem đúng các tên này:
+# go2rtc hiểu src là URL/nguồn động (vd "exec:..." chạy lệnh trên máy), nên
+# không được để trình duyệt tự đặt src tuỳ ý.
+_registered: set = set()
+_STREAM_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+
+
 def sync_camera(camera: dict) -> List[str]:
     """Đẩy cấu hình nguồn của MỘT camera lên go2rtc. Trả về danh sách lỗi (rỗng = OK).
 
@@ -133,6 +141,7 @@ def sync_camera(camera: dict) -> List[str]:
     main_src = (camera.get("source_uri") or "").strip()
     sub_src = (camera.get("substream_uri") or "").strip() or main_src
     names = _stream_names(camera_id)
+    _registered.update(names.values())
     errors = []
 
     if main_src:
@@ -157,6 +166,7 @@ def remove_camera(camera_id: str) -> None:
     if not GO2RTC_ENABLED:
         return
     for name in _stream_names(camera_id).values():
+        _registered.discard(name)
         _delete_stream(name)
 
 
@@ -209,10 +219,15 @@ async def proxy_ws(websocket: WebSocket) -> None:
         await websocket.close(code=1013)
         return
 
+    # Chỉ chuyển tiếp đúng một tham số src là tên luồng đã đăng ký; mọi giá
+    # trị khác (URL, "exec:", "ffmpeg:"...) bị từ chối trước khi tới go2rtc
+    src = websocket.query_params.get("src", "")
+    if not _STREAM_NAME_RE.match(src) or src not in _registered:
+        await websocket.close(code=1008)
+        return
+
     await websocket.accept()
-    target = f"{_ws_base()}/api/ws"
-    if websocket.url.query:
-        target += f"?{websocket.url.query}"
+    target = f"{_ws_base()}/api/ws?{urllib.parse.urlencode({'src': src})}"
 
     try:
         async with websockets.connect(target, max_size=None, open_timeout=_HTTP_TIMEOUT_S) as upstream:
@@ -265,16 +280,19 @@ def _forward_http(method: str, url: str, body: bytes, content_type: Optional[str
         return 502, json.dumps({"error": str(e)}).encode(), "application/json"
 
 
-@router.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-async def proxy_http(path: str, request: Request):
-    """Proxy REST API của go2rtc (danh sách stream, trạng thái…) cho giao diện."""
+@router.get("/api")
+async def proxy_info(request: Request):
+    """Chỉ cho đọc thông tin chung của go2rtc (phiên bản) để giao diện dò xem
+    go2rtc còn sống không. API quản trị (/api/streams, /api/config, /api/restart…)
+    KHÔNG được proxy: /api/streams lộ URI có mật khẩu, PUT nhận src "exec:" là
+    chạy lệnh trên máy. Đăng ký luồng chỉ do server làm (sync_camera)."""
     if not GO2RTC_ENABLED:
         raise HTTPException(status_code=503, detail="go2rtc đang tắt (GO2RTC_ENABLED=0)")
-
-    url = f"{GO2RTC_URL}/api/{path}"
-    if request.url.query:
-        url += f"?{request.url.query}"
-    body = await request.body()
     status, data, content_type = await asyncio.to_thread(
-        _forward_http, request.method, url, body, request.headers.get("content-type"))
+        _forward_http, "GET", f"{GO2RTC_URL}/api", b"", None)
     return Response(content=data, status_code=status, media_type=content_type)
+
+
+@router.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+async def proxy_blocked(path: str):
+    raise HTTPException(status_code=403, detail="Không cho truy cập API quản trị go2rtc qua proxy")

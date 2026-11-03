@@ -34,7 +34,7 @@ async function probeGo2rtc(proxyBase, timeoutMs = 3000) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
-        const res = await fetch(`${proxyBase}/api/streams`, { signal: ctrl.signal });
+        const res = await fetch(`${proxyBase}/api`, { signal: ctrl.signal });
         return res.ok;
     } catch (e) {
         return false;

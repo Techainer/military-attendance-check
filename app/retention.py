@@ -127,21 +127,28 @@ def cleanup(
             key=lambda f: f.stat().st_mtime
         )
 
+        # Trần số file xoá mỗi lượt: nếu đĩa đầy vì thứ khác (docker, model...)
+        # thì xoá hết events cũng không đủ — dừng lại và cảnh báo thay vì dọn sạch
+        max_delete = int(os.environ.get("RETENTION_MAX_DELETE_PER_RUN", "2000"))
+        deleted = 0
         for fpath in files_to_delete:
             if free_pct >= min_free_pct:
                 break
+            if deleted >= max_delete:
+                print(f"[Retention] Cảnh báo: đã xoá {deleted} file mà đĩa vẫn còn "
+                      f"{free_pct}% trống (< {min_free_pct}%) — kiểm tra thứ khác chiếm đĩa")
+                break
 
-            # Không xoá file được tham chiếu gần đây
-            if fpath.name in referenced_files:
-                # Tính xem file này có trong 2 ngày gần nhất không
-                fmtime = datetime.fromtimestamp(fpath.stat().st_mtime)
-                if fmtime >= now - timedelta(days=2):
-                    continue
+            # Không xoá file của sự kiện trong 2 ngày gần nhất
+            fmtime = datetime.fromtimestamp(fpath.stat().st_mtime)
+            if fmtime >= now - timedelta(days=2):
+                continue
 
             if not dry_run:
                 fsize = fpath.stat().st_size
                 try:
                     fpath.unlink()
+                    deleted += 1
                     result["min_free_files"] += 1
                     result["min_free_bytes"] += fsize
                 except Exception as e:

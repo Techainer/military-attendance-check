@@ -496,6 +496,7 @@ class RTSPStreamReader(FrameSource):
             pass
         self.thread = None
         self._stop_flag = False
+        self._stop_event = threading.Event()
 
     def start(self):
         if self.started:
@@ -516,6 +517,10 @@ class RTSPStreamReader(FrameSource):
             self.cap.release()
         except Exception:
             pass
+        # Đã bị dừng trong lúc chờ backoff thì không mở kết nối mới: không ai
+        # còn giữ reader để release, camera giá rẻ lại giới hạn số phiên RTSP
+        if self._stop_flag:
+            return
         self.cap = open_stream_capture(self.rtsp_url)
         try:
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -537,7 +542,9 @@ class RTSPStreamReader(FrameSource):
                     if not self.stale:
                         self.stale = True
                         print(f"[Camera] Mất tín hiệu, thử nối lại: {mask_credentials(self.rtsp_url)}")
-                    time.sleep(backoff)
+                    # Chờ được ngắt ngay khi stop(), không ngủ hết backoff (tới 30 s)
+                    if self._stop_event.wait(backoff):
+                        break
                     self._reopen()
                     backoff = min(RECONNECT_BACKOFF_MAX_S, backoff * 2)
                 else:
@@ -550,17 +557,25 @@ class RTSPStreamReader(FrameSource):
                 print(f"[Camera] Đã nối lại luồng: {mask_credentials(self.rtsp_url)}")
             self._publish(frame)
             time.sleep(0.005)
+        # Luồng đọc tự release capture của nó khi thoát, kể cả khi stop() đã
+        # hết thời gian chờ join — tránh rò kết nối RTSP
+        try:
+            self.cap.release()
+        except Exception:
+            pass
 
     def stop(self) -> None:
         self._stop_flag = True
+        self._stop_event.set()
         self.started = False
         if self.thread:
-            self.thread.join(timeout=1.0)
-        try:
-            if self.cap.isOpened():
-                self.cap.release()
-        except Exception:
-            pass
+            self.thread.join(timeout=2.0)
+        if self.thread is None or not self.thread.is_alive():
+            try:
+                if self.cap.isOpened():
+                    self.cap.release()
+            except Exception:
+                pass
 
 
 class FileStreamReader(FrameSource):
