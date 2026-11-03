@@ -6,8 +6,10 @@ from app.api import app
 
 def main():
     """Run the FastAPI application."""
+    from app import hw
     print("Starting Military Attendance Check System...")
-    print("Server will be available at: http://localhost:8000")
+    print("AI:", hw.describe())
+    print("Server will be available at: http://localhost:8199")
     print("Press Ctrl+C to stop")
 
     uvicorn.run(

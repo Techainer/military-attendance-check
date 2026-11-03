@@ -40,7 +40,10 @@ from app.safety import RULE_ATTENDANCE, RULE_CROSSING, RULE_RESTRICTED, Intrusio
 
 # Nhịp publish khung hình cho luồng xem, ĐỘC LẬP với tốc độ AI (camera có thể
 # cấu hình target_fps khác, chậm hơn nhiều nếu CPU yếu).
-STREAM_FPS = int(os.environ.get("STREAM_FPS", "12"))
+from app import hw
+
+_HW = hw.settings()
+STREAM_FPS = _HW.stream_fps
 
 # Mỗi camera có kho riêng: khung hình mới nhất và bộ đệm clip phát lại. Trước
 # đây tất cả dùng chung một biến toàn cục nên chỉ chạy được một camera; hai
@@ -266,8 +269,9 @@ IDENTITY_TTL_SECONDS = 20.0
 # Điểm tương đồng cộng dồn tối thiểu (khoảng hai lượt khớp) trước khi gán cứng
 # danh tính vào một track
 IDENTITY_BIND_SCORE = 0.7
-# Số vùng người được quét lại khuôn mặt ở độ phân giải cao mỗi khung hình
-MAX_FACE_RESCANS = 4
+# Số vùng người được quét lại khuôn mặt ở độ phân giải cao mỗi khung hình;
+# CPU yếu thì ít lần hơn, lấy từ app.hw theo phần cứng
+MAX_FACE_RESCANS = _HW.max_face_rescans
 # Chỉ quét lại những người có bề ngang box nhỏ hơn ngần này (mặt bị thu nhỏ khi
 # quét cả khung hình nên hay bị bỏ sót)
 FACE_RESCAN_MAX_WIDTH = 300
@@ -938,7 +942,9 @@ class VideoProcessor:
                        video_path: str, is_rtsp: bool) -> int:
         frame_count = 0
         last_seq = -1
-        min_interval = 1.0 / max(1, self.fps)
+        # Nhịp AI theo phần cứng (app.hw), không theo target_fps cũ của camera:
+        # video đã tách riêng nên AI chỉ cần đủ dày cho tracker và luật vùng
+        min_interval = 1.0 / max(1, _HW.ai_fps)
         last_processed_mono = 0.0
         was_stale = False
 

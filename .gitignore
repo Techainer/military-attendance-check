@@ -223,3 +223,6 @@ alerts/
 data/
 node_modules/
 
+
+# Worktree của agent Claude Code
+.claude/worktrees/
