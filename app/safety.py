@@ -285,6 +285,23 @@ class IntrusionDetector:
             })
         return violations
 
+    def restricted_occupied(self) -> bool:
+        """Có track nào đang được XÁC NHẬN ở trong một vùng cấm không.
+
+        Dùng cho motion gating (app/video_processor.py): không được hạ nhịp AI
+        trong lúc có người đứng trong vùng cấm, kể cả khi họ đã đứng yên — khác
+        với ``check()`` chỉ trả về lần VỪA chuyển trạng thái (để khỏi bắn lại
+        cảnh báo mỗi khung), ở đây cần biết tình trạng ĐANG diễn ra.
+        """
+        for zone in self.zones.zones():
+            if zone.get("rule") != RULE_RESTRICTED:
+                continue
+            zone_id = zone.get("id", zone.get("name", "zone"))
+            state = self._track_state.get(zone_id, {})
+            if any(st.get("confirmed") for st in state.values()):
+                return True
+        return False
+
     @staticmethod
     def _real_track_id(track_ids, occluded, idx) -> Optional[int]:
         """Track id thật của box, hoặc ``None`` nếu box này không được tính (bị

@@ -37,6 +37,15 @@ from app.attendance import AttendanceManager
 from app.events import CAMERA_ID, EventStore, TYPE_ABSENT, TYPE_INTRUSION, normalize_box
 from app.safety import RULE_ATTENDANCE, RULE_CROSSING, RULE_RESTRICTED, IntrusionDetector, ZoneStore
 
+# scipy không phải dependency bắt buộc của repo gốc (tới dù vậy nó đi kèm sẵn
+# qua ultralytics/opencv/insightface trong uv.lock); vẫn phòng hờ máy nào thiếu
+# thì rơi về gán tham lam theo điểm, không chết tiến trình.
+try:
+    from scipy.optimize import linear_sum_assignment
+    _HAS_SCIPY = True
+except ImportError:
+    _HAS_SCIPY = False
+
 
 # Nhịp publish khung hình cho luồng xem, ĐỘC LẬP với tốc độ AI (camera có thể
 # cấu hình target_fps khác, chậm hơn nhiều nếu CPU yếu).
@@ -228,6 +237,48 @@ class RateCounter:
         return (len(self._events) - 1) / span if span > 0 else 0.0
 
 
+# ---------- gating theo động, dùng để hạ nhịp AI lúc cảnh tĩnh ----------
+
+class MotionGate:
+    """Phát hiện có đang động trong một vùng ảnh hay không, rẻ hơn hẳn chạy
+    YOLO chỉ để biết "có gì đổi không": downscale ảnh xám về bề ngang cố định
+    rồi so khác biệt với trung bình trượt (EMA) của nền.
+    """
+
+    DOWNSCALE_WIDTH = 160
+    # EMA thấp -> nền thích nghi chậm với nhiễu tức thời (không bị một khung có
+    # động kéo nền lệch ngay), nhưng vẫn theo kịp thay đổi ánh sáng chậm (mây
+    # che nắng) để không báo "động" giả kéo dài.
+    EMA_ALPHA = 0.05
+
+    def __init__(self, threshold: float = 12.0):
+        self.threshold = threshold
+        self._avg: Optional[np.ndarray] = None
+
+    def update(self, region: Optional[np.ndarray]) -> bool:
+        """Đưa vùng ảnh MỚI NHẤT vào, trả ``True`` nếu phát hiện có động."""
+        if region is None or region.size == 0:
+            return True  # Vùng rỗng (ROI tính sai) -> an toàn là coi như có động
+
+        gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY) if region.ndim == 3 else region
+        h, w = gray.shape[:2]
+        scale = self.DOWNSCALE_WIDTH / max(1, w)
+        small = cv2.resize(gray, (self.DOWNSCALE_WIDTH, max(1, round(h * scale))),
+                           interpolation=cv2.INTER_AREA).astype(np.float32)
+
+        if self._avg is None or self._avg.shape != small.shape:
+            self._avg = small.copy()
+            return True  # Chưa có nền để so (khung đầu/ROI đổi cỡ) -> coi như có động
+
+        motion = float(np.mean(cv2.absdiff(small, self._avg))) > self.threshold
+        cv2.accumulateWeighted(small, self._avg, self.EMA_ALPHA)
+        return motion
+
+    def reset(self) -> None:
+        """Bỏ nền cũ — gọi khi bắt đầu luồng mới hoặc ROI đổi hẳn vùng."""
+        self._avg = None
+
+
 # ---------- pub/sub kết quả AI thô, cho overlay WebRTC/canvas sau này ----------
 # Nhẹ hơn hẳn so với bắn khung hình JPEG qua WebSocket: chỉ số liệu + box chuẩn
 # hoá [0,1], client tự vẽ lên <canvas> đặt trên nền WebRTC/MJPEG.
@@ -269,12 +320,50 @@ IDENTITY_TTL_SECONDS = 20.0
 # Điểm tương đồng cộng dồn tối thiểu (khoảng hai lượt khớp) trước khi gán cứng
 # danh tính vào một track
 IDENTITY_BIND_SCORE = 0.7
+# Một người KHÁC phải khớp cùng track đủ ngần này lượt, với điểm trung bình cao
+# hơn người đang khoá, mới được THU HỒI và gán lại — chống sửa nhầm chỉ vì một
+# lượt nhận nhầm ngẫu nhiên, nhưng vẫn sửa được lỗi khoá sai lúc mới vào khung.
+IDENTITY_REVOKE_HITS = int(os.environ.get("IDENTITY_REVOKE_HITS", "3"))
 # Số vùng người được quét lại khuôn mặt ở độ phân giải cao mỗi khung hình;
 # CPU yếu thì ít lần hơn, lấy từ app.hw theo phần cứng
 MAX_FACE_RESCANS = _HW.max_face_rescans
 # Chỉ quét lại những người có bề ngang box nhỏ hơn ngần này (mặt bị thu nhỏ khi
 # quét cả khung hình nên hay bị bỏ sót)
 FACE_RESCAN_MAX_WIDTH = 300
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    return os.environ.get(name, "1" if default else "0").strip().lower() not in ("0", "false", "")
+
+
+# ---------------------------------------------------------- ROI cho YOLO
+# Khung camera góc rộng mà vùng quan tâm chỉ chiếm một phần: chạy YOLO trên cả
+# khung ở imgsz cố định làm mỗi người chỉ còn vài chục pixel, dễ bị bỏ sót (đo
+# thực tế: YOLO11s@640 cả khung chỉ bắt được ~65% người so với @1280 — xem mục
+# benchmark). Cắt về đúng vùng quan tâm (nới 10%) rồi mới resize về imgsz thì độ
+# phân giải hiệu dụng trên mỗi người cao hơn hẳn, không cần tăng imgsz (tốn CPU
+# hơn nhiều, tăng tuyến tính theo imgsz^2).
+AI_ROI = _env_bool("AI_ROI", True)
+AI_ROI_PAD_FRAC = float(os.environ.get("AI_ROI_PAD_FRAC", "0.10"))
+# ROI chiếm quá tỉ lệ này diện tích khung thì cắt chẳng còn lợi gì (gần hết
+# khung), dùng cả khung cho đơn giản.
+AI_ROI_MAX_AREA_FRAC = float(os.environ.get("AI_ROI_MAX_AREA_FRAC", "0.70"))
+# Ghép 2 ô có chồng lấn + NMS khi ROI dài hơn hẳn imgsz trên CPU — CHƯA triển
+# khai trong bản này (ưu tiên thời gian cho ROI/motion-gating/identity, như kế
+# hoạch cho phép bỏ qua nếu không kịp). Cờ vẫn đọc được, giữ chỗ cho sau; bật
+# lên hiện tại không có tác dụng gì khác AI_ROI thường, chỉ in cảnh báo một lần.
+AI_TILING = _env_bool("AI_TILING", False)
+if AI_TILING:
+    print("[Camera] AI_TILING=1 nhưng tính năng ghép ô (tiling) chưa triển khai trong bản "
+          "này; chạy như ROI nguyên khối (AI_TILING không có tác dụng).")
+
+# ---------------------------------------------------------- motion gating
+# Cảnh tĩnh (sân bãi vắng người, không ai di chuyển) chiếm phần lớn thời gian
+# trong ngày — chạy YOLO+Face full nhịp lúc đó chỉ phí CPU. Hạ xuống AI_IDLE_FPS
+# khi không có động VÀ không có track sống; trở lại ai_fps đầy đủ ngay khi có
+# động, có track, đang điểm danh, hoặc có người trong vùng cấm.
+AI_MOTION_GATING = _env_bool("AI_MOTION_GATING", True)
+AI_IDLE_FPS = int(os.environ.get("AI_IDLE_FPS", "1"))
 
 
 def _bbox_center(bbox) -> Tuple[float, float]:
@@ -530,6 +619,57 @@ class FileStreamReader(FrameSource):
             self.cap.release()
 
 
+def _zones_signature(zones_cfg) -> tuple:
+    """Khoá rẻ để biết cấu hình vùng có đổi không, khỏi tính lại ROI mỗi khung
+    hình — ROI phải ĐỨNG YÊN qua các khung liên tiếp để tracker (ByteTrack) ổn
+    định, chỉ tính lại khi thật sự có người chỉnh vùng."""
+    return tuple(
+        (z.get("id"), tuple((p.get("x"), p.get("y")) for p in z.get("points", [])))
+        for z in zones_cfg
+    )
+
+
+def _zones_bounding_box(zones_cfg, w_img: int, h_img: int) -> Optional[Tuple[float, float, float, float]]:
+    """Hộp bao (pixel) mọi điểm của mọi vùng đã cấu hình. ``None`` nếu chưa có vùng nào."""
+    xs, ys = [], []
+    for zone in zones_cfg:
+        for p in zone.get("points", []):
+            xs.append(p["x"] * w_img)
+            ys.append(p["y"] * h_img)
+    if not xs:
+        return None
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def compute_roi(
+    zones_cfg, w_img: int, h_img: int,
+    pad_frac: float = AI_ROI_PAD_FRAC, max_area_frac: float = AI_ROI_MAX_AREA_FRAC,
+) -> Optional[Tuple[int, int, int, int]]:
+    """ROI để chạy YOLO: hộp bao mọi vùng (điểm danh + an toàn) đã cấu hình của
+    camera, nới thêm ``pad_frac`` mỗi phía (người ở ngay mép vùng vẫn cần thấy
+    đủ thân để tracker không bị cắt box).
+
+    Trả ``None`` (nghĩa là: dùng cả khung) khi không có vùng nào, hoặc ROI sau
+    khi nới đã chiếm hơn ``max_area_frac`` diện tích khung — cắt chẳng còn lợi
+    gì so với công quản lý thêm một bước toạ độ.
+    """
+    box = _zones_bounding_box(zones_cfg, w_img, h_img)
+    if box is None:
+        return None
+    bx1, by1, bx2, by2 = box
+    pad_x = (bx2 - bx1) * pad_frac
+    pad_y = (by2 - by1) * pad_frac
+    x1 = max(0, int(bx1 - pad_x))
+    y1 = max(0, int(by1 - pad_y))
+    x2 = min(w_img, int(bx2 + pad_x) + 1)
+    y2 = min(h_img, int(by2 + pad_y) + 1)
+    if x2 <= x1 or y2 <= y1:
+        return None
+    if (x2 - x1) * (y2 - y1) > max_area_frac * w_img * h_img:
+        return None
+    return x1, y1, x2, y2
+
+
 def _attendance_polygon_points(zones_cfg, w_img: int, h_img: int):
     """Polygon đếm quân số: dùng để LỌC người trong vùng và để VẼ, cùng một
     nguồn để hai việc không bao giờ lệch nhau.
@@ -696,9 +836,28 @@ class VideoProcessor:
         self._publish_rate = RateCounter()
         self._infer_ms: deque = deque(maxlen=50)
 
+        # ROI: nhớ lại ROI đã tính theo cấu hình vùng + cỡ khung hiện tại, khỏi
+        # tính lại mỗi khung hình (và khỏi làm ROI nhảy linh tinh làm rối tracker).
+        self._roi_cache_key = None
+        self._roi_box: Optional[Tuple[int, int, int, int]] = None
+        # Motion gating: nhịp AI hiện tại ("idle"/"active") + có động hay không,
+        # lộ ra qua get_metrics() cho /api/v1/system/health.
+        self._motion_gate = MotionGate()
+        self._last_motion = True
+        self._ai_mode = "active"
+
     def stop(self) -> None:
         """Request the processing pipeline to stop."""
         self._stop_requested = True
+
+    def _get_roi(self, zones_cfg, w_img: int, h_img: int) -> Optional[Tuple[int, int, int, int]]:
+        """ROI cố định của camera này; chỉ tính lại khi vùng hoặc cỡ khung đổi
+        (xem ``compute_roi``) — tracker cần ROI đứng yên qua các khung liên tiếp."""
+        key = (_zones_signature(zones_cfg), w_img, h_img)
+        if key != self._roi_cache_key:
+            self._roi_cache_key = key
+            self._roi_box = compute_roi(zones_cfg, w_img, h_img)
+        return self._roi_box
 
     # ---------- chỉ số vận hành ----------
 
@@ -725,42 +884,67 @@ class VideoProcessor:
             "frame_age_ms": frame_age_ms,
             "stale": bool(reader.stale) if reader else False,
             "reconnects": reader.reconnects if reader else 0,
+            # Motion gating (AI_MOTION_GATING): có đang động trong ROI không, và
+            # nhịp AI hiện tại đang chạy đầy ("active") hay rảnh ("idle").
+            "motion": bool(self._last_motion),
+            "ai_mode": self._ai_mode,
         }
 
     # ---------- nhận diện ----------
 
-    def _assign_faces(self, faces, person_boxes, in_zone_indices, claimed, assignments) -> list:
+    @staticmethod
+    def _assign_faces(faces, person_boxes, in_zone_indices, claimed, assignments) -> list:
         """Gắn mỗi khuôn mặt nhận ra được vào một người đang đứng trong vùng.
 
         Gán vào box người TRONG VÙNG nhỏ nhất có chứa tâm khuôn mặt; mỗi box chỉ
         nhận một người. Không dùng polygon để lọc mặt: polygon là vùng mặt đất nên
         tâm khuôn mặt luôn nằm phía trên nó. Mặt không gắn được vào ai trong vùng
         thì không tính điểm danh.
+
+        Gán TOÀN CỤC (``linear_sum_assignment``) thay vì tham lam theo thứ tự mặt:
+        thứ tự mặt trả về từ InsightFace không có ý nghĩa gì, gán tham lam theo
+        thứ tự đó có thể cướp mất box đúng của một mặt xử lý sau. Thiếu scipy thì
+        rơi về tham lam nhưng xếp theo độ tương đồng giảm dần (ít nhất ưu tiên
+        mặt chắc chắn nhất được ghép trước), không chết tính năng vì thiếu dependency.
         """
-        matched_boxes = []
-        for rf in faces:
-            if not (rf.get("is_recognized") and rf.get("person")):
-                continue
+        candidates = [rf for rf in faces if rf.get("is_recognized") and rf.get("person")]
+        people_idx = [p_idx for p_idx in in_zone_indices if p_idx not in claimed]
+        if not candidates or not people_idx:
+            return []
 
+        # cost[f, p] = diện tích box p (ưu tiên box nhỏ nhất bọc mặt, như logic
+        # cũ); NO_MATCH = tâm mặt không nằm trong (biên độ) box đó -> cấm ghép.
+        NO_MATCH = 1e9
+        cost = np.full((len(candidates), len(people_idx)), NO_MATCH, dtype=np.float64)
+        for fi, rf in enumerate(candidates):
             fcx, fcy = _bbox_center(rf["bbox"])
-            best_idx = None
-            best_area = None
-            for p_idx in in_zone_indices:
-                if p_idx in claimed:
-                    continue
+            for pi, p_idx in enumerate(people_idx):
                 px1, py1, px2, py2 = person_boxes[p_idx]
-                if not (px1 - 20 <= fcx <= px2 + 20 and py1 - 20 <= fcy <= py2 + 40):
-                    continue
-                area = max(1, (px2 - px1) * (py2 - py1))
-                if best_area is None or area < best_area:
-                    best_area = area
-                    best_idx = p_idx
+                if px1 - 20 <= fcx <= px2 + 20 and py1 - 20 <= fcy <= py2 + 40:
+                    cost[fi, pi] = max(1.0, (px2 - px1) * (py2 - py1))
 
-            if best_idx is None:
-                continue
+        if _HAS_SCIPY:
+            rows, cols = linear_sum_assignment(cost)
+            pairs = [(r, c) for r, c in zip(rows, cols) if cost[r, c] < NO_MATCH]
+        else:
+            order = sorted(range(len(candidates)), key=lambda i: -candidates[i].get("similarity", 0.0))
+            used_cols = set()
+            pairs = []
+            for fi in order:
+                best_pi, best_cost = None, NO_MATCH
+                for pi in range(len(people_idx)):
+                    if pi not in used_cols and cost[fi, pi] < best_cost:
+                        best_cost, best_pi = cost[fi, pi], pi
+                if best_pi is not None:
+                    used_cols.add(best_pi)
+                    pairs.append((fi, best_pi))
 
-            claimed.add(best_idx)
-            assignments[best_idx] = {"person": rf["person"], "similarity": rf.get("similarity", 0.0)}
+        matched_boxes = []
+        for fi, pi in pairs:
+            rf = candidates[fi]
+            p_idx = people_idx[pi]
+            claimed.add(p_idx)
+            assignments[p_idx] = {"person": rf["person"], "similarity": rf.get("similarity", 0.0)}
             matched_boxes.append(rf["bbox"])
 
         return matched_boxes
@@ -817,21 +1001,42 @@ class VideoProcessor:
         return [region for _w, region in candidates[:MAX_FACE_RESCANS]]
 
     def _remember_identity(self, track_id, person, similarity, now_mono) -> None:
-        """Cộng dồn bằng chứng nhận diện cho một track."""
+        """Cộng dồn bằng chứng nhận diện cho một track; khoá cứng khi đủ điểm.
+
+        Sau khi đã khoá, một người KHÁC vẫn được phép THAY THẾ nếu khớp đủ
+        ``IDENTITY_REVOKE_HITS`` lượt với điểm trung bình cao hơn người đang
+        khoá — sửa được lỗi khoá nhầm lúc mới vào khung (hai quân nhân giống
+        nhau) mà không bị đổi lung tung chỉ vì một lượt nhận nhầm ngẫu nhiên.
+        """
         if track_id is None or track_id < 0:
             return
         entry = self.track_identity.setdefault(
-            track_id, {"scores": {}, "people": {}, "person": None, "last_seen": now_mono}
+            track_id, {"scores": {}, "hits": {}, "people": {}, "person": None, "last_seen": now_mono}
         )
         entry["last_seen"] = now_mono
 
         pid = person.get("id")
         entry["people"][pid] = person
         entry["scores"][pid] = entry["scores"].get(pid, 0.0) + max(0.1, float(similarity))
+        entry["hits"][pid] = entry["hits"].get(pid, 0) + 1
 
-        best_pid = max(entry["scores"], key=entry["scores"].get)
-        if entry["scores"][best_pid] >= IDENTITY_BIND_SCORE:
-            entry["person"] = entry["people"][best_pid]
+        if entry["person"] is None:
+            best_pid = max(entry["scores"], key=entry["scores"].get)
+            if entry["scores"][best_pid] >= IDENTITY_BIND_SCORE:
+                entry["person"] = entry["people"][best_pid]
+            return
+
+        bound_pid = entry["person"].get("id")
+        if pid == bound_pid or entry["hits"][pid] < IDENTITY_REVOKE_HITS:
+            return
+
+        bound_mean = entry["scores"].get(bound_pid, 0.0) / max(1, entry["hits"].get(bound_pid, 1))
+        challenger_mean = entry["scores"][pid] / entry["hits"][pid]
+        if challenger_mean > bound_mean:
+            print(f"[Camera] Thu hồi danh tính track {track_id}: "
+                  f"{entry['person'].get('name')} (TB {bound_mean:.2f}) -> "
+                  f"{person.get('name')} (TB {challenger_mean:.2f}, {entry['hits'][pid]} lượt khớp)")
+            entry["person"] = person
 
     def _recall_identity(self, track_id, now_mono) -> Optional[dict]:
         """Danh tính đã khoá cho track, nếu vẫn còn hiệu lực.
@@ -850,6 +1055,9 @@ class VideoProcessor:
         return entry["person"]
 
     def _prune_identities(self, now_mono) -> None:
+        # Xoá HẲN entry (không chỉ "person") khi track vắng mặt quá TTL -> lượt
+        # tới nếu track id này quay lại (hiếm, do tracker cấp id mới) sẽ coi như
+        # chưa từng nhận diện, không kế thừa danh tính + điểm số cũ.
         for tid in [t for t, e in self.track_identity.items() if now_mono - e["last_seen"] > IDENTITY_TTL_SECONDS]:
             del self.track_identity[tid]
 
@@ -942,9 +1150,10 @@ class VideoProcessor:
                        video_path: str, is_rtsp: bool) -> int:
         frame_count = 0
         last_seq = -1
-        # Nhịp AI theo phần cứng (app.hw), không theo target_fps cũ của camera:
-        # video đã tách riêng nên AI chỉ cần đủ dày cho tracker và luật vùng
-        min_interval = 1.0 / max(1, _HW.ai_fps)
+        # Khung đã dùng để cập nhật motion gate lần gần nhất — tách khỏi last_seq
+        # vì motion phải cập nhật ở MỌI khung MỚI nhận được (để phản ứng kịp lúc
+        # vừa có động), không chỉ khung được AI xử lý đầy đủ (bị throttle).
+        last_motion_seq = -1
         last_processed_mono = 0.0
         was_stale = False
 
@@ -970,15 +1179,46 @@ class VideoProcessor:
                     await asyncio.sleep(0.02)
                     continue
 
+                h_img, w_img = frame.shape[:2]
+                # Vùng đếm quân số/an toàn: lấy từ cấu hình, không có thì dùng mặc
+                # định. Tính SỚM (trước cả throttle) vì ROI và motion gate đều cần.
+                zones_cfg = self.zones.zones()
+                roi_box = self._get_roi(zones_cfg, w_img, h_img) if AI_ROI else None
+
+                # Motion gate: rẻ (ảnh xám 160px) nên chạy ở MỌI khung mới, kể cả
+                # khung sắp bị bỏ qua vì chưa tới nhịp AI — phát hiện có động phải
+                # nhanh hơn chính cái nhịp mà nó dùng để quyết định hạ/nâng.
+                if AI_MOTION_GATING and seq != last_motion_seq:
+                    last_motion_seq = seq
+                    region = frame[roi_box[1]:roi_box[3], roi_box[0]:roi_box[2]] if roi_box else frame
+                    self._last_motion = self._motion_gate.update(region)
+
                 if seq == last_seq:
                     if not is_rtsp and reader.ended:
                         break
                     await asyncio.sleep(0.01)
                     continue
 
-                # Giữ đúng tốc độ xử lý mong muốn (camera.target_fps) dù nguồn
-                # phát nhanh hơn: lấy khung MỚI NHẤT nhưng không xử lý dày hơn
-                # mức cấu hình, tránh làm sai nhịp quan sát điểm danh.
+                now = clock.now()
+
+                # Nhịp AI: đủ nhịp bình thường (ai_fps) nếu có động, có track đang
+                # sống, đang trong cửa sổ điểm danh, hoặc có người trong vùng cấm;
+                # ngược lại hạ về AI_IDLE_FPS lúc cảnh tĩnh hoàn toàn để đỡ CPU —
+                # không bao giờ hạ nhịp khi đang cần "nhìn" (điểm danh/an toàn).
+                if AI_MOTION_GATING:
+                    has_tracks = bool(self.latest_result and self.latest_result.get("tracks"))
+                    attendance_active = bool(self.attendance and self.attendance.status(now).get("active"))
+                    restricted_occupied = self.intrusion.restricted_occupied()
+                    idle = (not self._last_motion) and not has_tracks \
+                        and not attendance_active and not restricted_occupied
+                    self._ai_mode = "idle" if idle else "active"
+                    min_interval = 1.0 / max(1, AI_IDLE_FPS) if idle else 1.0 / max(1, _HW.ai_fps)
+                else:
+                    self._ai_mode = "active"
+                    min_interval = 1.0 / max(1, _HW.ai_fps)
+
+                # Giữ đúng tốc độ xử lý mong muốn dù nguồn phát nhanh hơn: lấy
+                # khung MỚI NHẤT nhưng không xử lý dày hơn nhịp đang chọn ở trên.
                 now_check = time.monotonic()
                 if now_check - last_processed_mono < min_interval:
                     await asyncio.sleep(0.005)
@@ -989,9 +1229,21 @@ class VideoProcessor:
                 t0 = time.monotonic()
 
                 # 1. Hai model chạy song song trên cùng khung hình, mỗi model một thread
-                #    nên vòng lặp sự kiện không bị chặn trong lúc inference.
+                #    nên vòng lặp sự kiện không bị chặn trong lúc inference. YOLO chỉ
+                #    thấy ROI (nếu có) để giữ độ phân giải hiệu dụng cao hơn ở imgsz cố
+                #    định; mặt vẫn quét CẢ khung vì người ngoài ROI vẫn định danh được.
+                if roi_box:
+                    rx1, ry1, rx2, ry2 = roi_box
+                    # .copy(): slice theo cột không liên tục trong bộ nhớ, một số bước
+                    # xử lý ảnh của ultralytics cần mảng liên tục để chạy đúng/nhanh.
+                    detect_frame = frame[ry1:ry2, rx1:rx2].copy()
+                    detect_offset = (rx1, ry1)
+                else:
+                    detect_frame = frame
+                    detect_offset = (0, 0)
+
                 detection, recognized_faces = await asyncio.gather(
-                    asyncio.to_thread(self.detector.detect_persons, frame),
+                    asyncio.to_thread(self.detector.detect_persons, detect_frame, detect_offset),
                     asyncio.to_thread(self.face_engine.recognize_faces_in_frame, frame),
                 )
                 person_boxes = detection['boxes']
@@ -999,10 +1251,7 @@ class VideoProcessor:
                 track_ids = detection['track_ids']
                 occluded_flags = detection['occluded']
 
-                h_img, w_img = frame.shape[:2]
-
-                # 2. Vùng đếm quân số: lấy từ cấu hình, không có thì dùng mặc định
-                zones_cfg = self.zones.zones()
+                # 2. Polygon đếm quân số (đã có zones_cfg từ bước tính ROI ở trên)
                 np_pts, _used_fallback = _attendance_polygon_points(zones_cfg, w_img, h_img)
 
                 in_zone_indices = set()
@@ -1020,7 +1269,8 @@ class VideoProcessor:
                 person_count = len(in_zone_indices)
 
                 # 3. Giám sát an toàn: ai vào vùng cấm hoặc vượt vạch an toàn
-                now = clock.now()
+                # (``now`` đã lấy sớm hơn ở bước quyết định nhịp AI, dùng lại để
+                # toàn bộ khung này mang ĐÚNG MỘT mốc thời gian nhất quán)
                 intrusions = self.intrusion.check(person_boxes, track_ids, w_img, h_img, now,
                                                   occluded=occluded_flags)
                 intrusion_indices = {idx for v in intrusions for idx in v["indices"]}
@@ -1297,6 +1547,13 @@ class VideoProcessor:
 
         self.detector.reset()
         self.track_identity.clear()
+        # ROI/nền động gắn với cỡ khung + vùng của luồng CŨ; luồng mới có thể
+        # đổi camera nguồn (cỡ khung khác) nên bỏ hết, tính lại từ đầu.
+        self._roi_cache_key = None
+        self._roi_box = None
+        self._motion_gate.reset()
+        self._last_motion = True
+        self._ai_mode = "active"
         self.latest_result = None
         self._bg_tasks = set()
 

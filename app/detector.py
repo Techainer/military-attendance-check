@@ -2,6 +2,7 @@
 
 import time
 from pathlib import Path
+from typing import Tuple
 
 import numpy as np
 import yaml
@@ -155,9 +156,16 @@ class PersonDetector:
         m = self.BORDER_MARGIN_PX
         return x1 <= m or y1 <= m or x2 >= w - m or y2 >= h - m
 
-    def detect_persons(self, frame: np.ndarray) -> dict:
+    def detect_persons(self, frame: np.ndarray, offset: Tuple[int, int] = (0, 0)) -> dict:
         """
         Detect and track persons in a video frame.
+
+        ``frame`` có thể là một vùng ROI đã cắt sẵn (xem app/video_processor.py,
+        AI_ROI) thay vì cả khung hình — model.track() và bộ nhớ che khuất bên
+        dưới hoàn toàn không biết điều đó, mọi thứ vẫn tính theo toạ độ CỤC BỘ
+        của ``frame``. ``offset`` (dx, dy) chỉ cộng vào box ở bước trả kết quả
+        cuối cùng, để phía gọi (tracker nhìn thấy ROI cố định qua từng khung,
+        giữ track ổn định) nhận lại toạ độ TOÀN khung cho vẽ/luật vùng.
 
         Người đang bị đồ vật che khuất vẫn được giữ trong kết quả (cờ ``occluded``)
         trong ``occlusion_grace`` giây để sĩ số không tụt mỗi khi model miss.
@@ -229,6 +237,10 @@ class PersonDetector:
             confidences.append(entry["conf"])
             track_ids.append(tid)
             occluded.append(True)
+
+        if offset != (0, 0):
+            dx, dy = offset
+            boxes = [(x1 + dx, y1 + dy, x2 + dx, y2 + dy) for x1, y1, x2, y2 in boxes]
 
         return {
             'count': len(boxes),
