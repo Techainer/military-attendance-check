@@ -79,5 +79,5 @@ COPY scripts ./scripts
 
 EXPOSE 8199
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8199/api/v1/system/health', timeout=4)"
+  CMD python -c "import os, urllib.request; urllib.request.urlopen('http://localhost:%s/api/v1/system/health' % os.environ.get('HORUS_PORT', '8199'), timeout=4)"
 CMD ["python", "main.py"]

@@ -6,8 +6,11 @@ services:
         TORCH_VARIANT: cpu
     image: horus-ai:${HORUS_VERSION:-latest}
     restart: unless-stopped
-    ports:
-      - "${HORUS_PORT:-8199}:8199"
+    # Chạy host network cùng go2rtc: gọi go2rtc qua 127.0.0.1:1984 và để
+    # WebRTC trong LAN dùng thẳng cổng của máy. Cổng nghe đổi bằng HORUS_PORT.
+    network_mode: host
+    environment:
+      HORUS_PORT: ${HORUS_PORT:-8199}
     env_file:
       - path: .env
         required: false
@@ -20,6 +23,34 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
+
+  # Relay RTSP -> WebRTC/MSE thẳng ra trình duyệt, khỏi qua Python (OpenCV đọc
+  # + mã hoá JPEG) như MJPEG cũ — xem app/go2rtc.py. horus-ai gọi API nội bộ
+  # của go2rtc (GO2RTC_URL, mặc định http://127.0.0.1:1984) để đăng ký nguồn
+  # mỗi camera, và PROXY api/ws, api/* ra ngoài dưới tiền tố /go2rtc/, vì
+  # trình duyệt chỉ ra ngoài được qua tunnel tới cổng của horus-ai, không gọi
+  # thẳng được cổng của go2rtc.
+  #
+  # network_mode: host để WebRTC (UDP, cổng lựa động trong khoảng ICE) không
+  # phải khai từng cổng một trong compose, và để horus-ai gọi thẳng qua
+  # 127.0.0.1 như lúc chạy local (không cần biết tên service).
+  #
+  go2rtc:
+    image: alexxit/go2rtc:1.9.15
+    restart: unless-stopped
+    network_mode: host
+    # API (chứa nguồn RTSP có mật khẩu) và RTSP restream chỉ nghe localhost;
+    # trình duyệt đi qua proxy /go2rtc/ của horus-ai. WebRTC giữ :8555 cho LAN.
+    command: >-
+      go2rtc -config /config/go2rtc.yaml
+      -config {"api":{"listen":"127.0.0.1:${GO2RTC_API_PORT:-1984}"},"rtsp":{"listen":"127.0.0.1:18554"},"webrtc":{"listen":":${GO2RTC_WEBRTC_PORT:-8555}"}}
+    volumes:
+      - ./data/go2rtc:/config  # go2rtc.yaml — sinh/đọc lại nguồn các luồng
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
 
   # Tunnel ra ngoài cho demo. Không dùng ở bản triển khai thực tế.
   # Bật: docker compose --profile tunnel up -d frpc

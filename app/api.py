@@ -20,7 +20,8 @@ from typing import Dict, List, Optional
 from pydantic import ValidationError
 
 from app import clock
-from app.video_processor import VideoProcessor, mask_credentials
+from app import go2rtc
+from app.video_processor import VideoProcessor, mask_credentials, subscribe_results, unsubscribe_results
 from app.monitor import AttendanceMonitor
 from app.face_engine import FaceEngine
 from app.attendance import (STATE_LABELS, AttendanceManager, normalize_schedule,
@@ -78,6 +79,10 @@ app.mount("/alerts", StaticFiles(directory=str(alerts_path)), name="alerts")
 app.mount("/data/face_avatars", StaticFiles(directory=str(avatars_path)), name="face_avatars")
 app.mount("/data/attendance_evidence", StaticFiles(directory=str(evidence_path)), name="attendance_evidence")
 app.mount("/data/events", StaticFiles(directory=str(event_snapshots_path)), name="event_snapshots")
+
+# go2rtc đứng sau tunnel, trình duyệt không gọi thẳng được cổng của nó — mọi
+# request signalling/MSE của player.js đi qua đây (xem app/go2rtc.py).
+app.include_router(go2rtc.router, prefix="/go2rtc")
 
 # Dùng chung được: model nhận diện khuôn mặt không giữ trạng thái của luồng nào,
 # kho sự kiện ghi vào cùng một file.
@@ -232,6 +237,13 @@ async def startup_event():
     # Khởi động vòng lặp dọn dẹp
     _retention_task = asyncio.create_task(_retention_loop())
     print("[Startup] Đã khởi động scheduler dọn dẹp")
+
+    # go2rtc khởi động lại là mất sạch stream đã PUT qua API — đẩy lại toàn bộ
+    # camera mỗi lần app khởi động. Chạy nền, không chặn app lên nếu go2rtc
+    # chưa kịp sẵn sàng (compose thường chạy song song hai container).
+    if go2rtc.GO2RTC_ENABLED:
+        asyncio.create_task(asyncio.to_thread(go2rtc.sync_all, _load_cameras()))
+        print("[Startup] Đã gửi cấu hình luồng tới go2rtc")
 
 
 @app.on_event("shutdown")
@@ -1399,6 +1411,32 @@ async def v1_camera_stream(camera_id: str, overlay: int = 1, fps: int = 5):
     )
 
 
+@app.get("/api/v1/cameras/{camera_id}/detections")
+async def v1_camera_detections(camera_id: str):
+    """Luồng JSON kết quả AI thô (box chuẩn hoá 0..1, không ảnh) cho player.js
+    vẽ lên <canvas> — go2rtc chỉ relay bit video, không biết gì về AI, nên lớp
+    phủ phải ghép ở trình duyệt từ luồng số liệu riêng này. Dùng SSE (không
+    WebSocket) để đi xuyên qua tunnel HTTP đơn giản hơn.
+    """
+    _camera_or_404(camera_id)
+    queue = subscribe_results(camera_id)
+
+    async def generator():
+        try:
+            while True:
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        finally:
+            unsubscribe_results(camera_id, queue)
+
+    return StreamingResponse(generator(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @app.get("/api/v1/cameras/{camera_id}/snapshot")
 async def v1_camera_snapshot(camera_id: str, overlay: int = 0, download: int = 0):
     """Ảnh tĩnh khung hình hiện tại: nền để vẽ vùng, và nút chụp nhanh."""
@@ -1475,6 +1513,8 @@ def _camera_out(camera: dict) -> dict:
     }
     if "source_uri" in out:
         out["source_uri"] = mask_credentials(out["source_uri"])
+    if out.get("substream_uri"):
+        out["substream_uri"] = mask_credentials(out["substream_uri"])
     return out
 
 
@@ -1510,6 +1550,9 @@ async def v1_create_camera(payload: CameraInput):
     camera["id"] = f"cam_{int(time.time() * 1000)}"
     cameras.append(camera)
     write_json_list(cameras_file, cameras)
+    # Đẩy nguồn xuống go2rtc ngay, không đợi camera "chạy" — go2rtc chỉ relay
+    # bit, không chạy AI, nên không cần bật xử lý AI mới xem được qua go2rtc.
+    await asyncio.to_thread(go2rtc.sync_camera, camera)
     return _camera_out(camera)
 
 
@@ -1538,6 +1581,7 @@ async def v1_update_camera(camera_id: str, payload: CameraPatch):
     merged["id"] = camera_id
     cameras[index] = merged
     write_json_list(cameras_file, cameras)
+    await asyncio.to_thread(go2rtc.sync_camera, merged)
     return _camera_out(merged)
 
 
@@ -1550,6 +1594,7 @@ async def v1_delete_camera(camera_id: str):
 
     cameras.pop(index)
     write_json_list(cameras_file, cameras)
+    await asyncio.to_thread(go2rtc.remove_camera, camera_id)
     zone_store.save([z for z in zone_store.all_zones()
                      if z.get("camera_id", CAMERA_ID) != camera_id])
     return Response(status_code=204)
@@ -1733,6 +1778,18 @@ async def v1_update_profile(body: ProfilePatch):
 async def v1_system_time():
     """Giờ máy chủ. Giao diện nên đồng bộ theo đây vì mọi mốc điểm danh lấy từ nó."""
     return {"server_time": clock.iso(), "timezone": clock.TZ_NAME}
+
+
+@app.get("/api/v1/system/config")
+async def v1_system_config():
+    """Cấu hình để player.js quyết định dùng go2rtc (WebRTC/MSE) hay rơi hẳn về
+    MJPEG — giao diện không được tự đoán qua biến môi trường vì nó chạy ở
+    trình duyệt, không đọc được env của server."""
+    return {
+        "go2rtc_enabled": go2rtc.GO2RTC_ENABLED,
+        "go2rtc_proxy_base": "/go2rtc",
+        "ice_servers": go2rtc.ice_servers(),
+    }
 
 
 @app.get("/api/v1/system/health")

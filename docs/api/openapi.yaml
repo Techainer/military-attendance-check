@@ -259,6 +259,25 @@ paths:
         '409':
           description: Camera chưa có khung hình nào
 
+  /cameras/{camera_id}/detections:
+    parameters:
+      - $ref: '#/components/parameters/CameraId'
+    get:
+      tags: [Camera]
+      summary: Luồng kết quả AI thô (SSE), để vẽ lớp phủ trên canvas
+      description: |
+        Dành cho player go2rtc (WebRTC/MSE): hình đi thẳng từ go2rtc tới trình
+        duyệt, không qua Python, nên lớp phủ AI (khung người, định danh, vùng,
+        HUD) phải ghép ở trình duyệt từ luồng số liệu riêng này — mỗi bản tin
+        là một kết quả suy luận, box chuẩn hoá 0..1, không có ảnh.
+      responses:
+        '200':
+          description: 'luồng `text/event-stream`, mỗi bản tin một JSON (xem CameraDetection)'
+          content:
+            text/event-stream:
+              schema: { type: string }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   # ------------------------------------------------------------------
   # Vùng giám sát
   # ------------------------------------------------------------------
@@ -768,6 +787,33 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
         '422': { $ref: '#/components/responses/ValidationError' }
+
+  /system/config:
+    get:
+      tags: [Hệ thống]
+      summary: Cấu hình cho player.js (go2rtc bật/tắt, ICE servers)
+      description: |
+        Giao diện chạy ở trình duyệt, không đọc được biến môi trường của máy
+        chủ (`GO2RTC_ENABLED`, `GO2RTC_ICE_SERVERS`) — phải hỏi qua đây để biết
+        có nên thử WebRTC/MSE qua go2rtc hay rơi thẳng về MJPEG.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [go2rtc_enabled, go2rtc_proxy_base, ice_servers]
+                properties:
+                  go2rtc_enabled: { type: boolean }
+                  go2rtc_proxy_base:
+                    type: string
+                    description: Tiền tố FastAPI proxy cho API/WebSocket go2rtc.
+                    example: /go2rtc
+                  ice_servers:
+                    type: array
+                    description: 'RTCIceServer[] tuỳ chọn (STUN/TURN) cho WebRTC qua tunnel.'
+                    items: { type: object }
 
   /system/time:
     get:
