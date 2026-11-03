@@ -209,6 +209,117 @@ function switchNavTab(tabName) {
 window.switchNavTab = switchNavTab;
 
 
+// ----------------- ĐIỀU HƯỚNG THEO location.hash -----------------
+// Mục menu là thẻ <a href="#...">, nên bấm chuột đã tự đổi hash; listener này
+// phục vụ các đường vào khác: tải lại trang, nút back/forward, dán link kèm #.
+function applyHashRoute() {
+    const tab = (location.hash || '').replace(/^#/, '');
+    if (!tab || tab === currentTabName) return;
+    const navEl = document.getElementById(`nav-${tab}`);
+    // offsetParent === null khi mục menu (hoặc tổ tiên) đang display:none —
+    // dùng lại đúng cơ chế ẩn/hiện theo vai trò đã có, khỏi liệt kê lại danh sách tab
+    if (!navEl || navEl.offsetParent === null) return;
+    switchNavTab(tab);
+}
+window.addEventListener('hashchange', applyHashRoute);
+window.addEventListener('load', () => {
+    const appLayout = document.getElementById('app-layout');
+    if (appLayout && appLayout.style.display !== 'none') applyHashRoute();
+});
+
+
+// ----------------- SIDEBAR: THU GỌN (≤1280) & NGĂN KÉO (≤768) -----------------
+const SIDEBAR_COLLAPSE_KEY = 'horus_sidebar_collapsed';
+const appSidebar = document.getElementById('app-sidebar');
+const sidebarToggleBtn = document.getElementById('sidebar-toggle-btn');
+const menuToggleBtn = document.getElementById('menu-toggle');
+const sidebarBackdrop = document.getElementById('sidebar-backdrop');
+
+function applySidebarCollapsed(collapsed) {
+    if (!appSidebar) return;
+    appSidebar.classList.toggle('collapsed', collapsed);
+    if (sidebarToggleBtn) {
+        sidebarToggleBtn.setAttribute('aria-expanded', String(!collapsed));
+        sidebarToggleBtn.title = collapsed ? 'Mở rộng menu' : 'Thu gọn menu';
+        sidebarToggleBtn.setAttribute('aria-label', sidebarToggleBtn.title);
+    }
+}
+
+(function initSidebarCollapse() {
+    let saved = false;
+    try { saved = localStorage.getItem(SIDEBAR_COLLAPSE_KEY) === '1'; } catch (e) { /* chế độ riêng tư */ }
+    applySidebarCollapsed(saved);
+})();
+
+if (sidebarToggleBtn) {
+    sidebarToggleBtn.addEventListener('click', () => {
+        const collapsed = !appSidebar.classList.contains('collapsed');
+        applySidebarCollapsed(collapsed);
+        try { localStorage.setItem(SIDEBAR_COLLAPSE_KEY, collapsed ? '1' : '0'); } catch (e) { /* chế độ riêng tư */ }
+    });
+}
+
+function openSidebarDrawer() {
+    if (!appSidebar) return;
+    appSidebar.classList.add('drawer-open');
+    if (sidebarBackdrop) sidebarBackdrop.classList.add('show');
+    if (menuToggleBtn) menuToggleBtn.setAttribute('aria-expanded', 'true');
+}
+function closeSidebarDrawer() {
+    if (!appSidebar) return;
+    appSidebar.classList.remove('drawer-open');
+    if (sidebarBackdrop) sidebarBackdrop.classList.remove('show');
+    if (menuToggleBtn) menuToggleBtn.setAttribute('aria-expanded', 'false');
+}
+window.closeSidebarDrawer = closeSidebarDrawer;
+
+if (menuToggleBtn) {
+    menuToggleBtn.addEventListener('click', () => {
+        if (appSidebar && appSidebar.classList.contains('drawer-open')) closeSidebarDrawer();
+        else openSidebarDrawer();
+    });
+}
+if (sidebarBackdrop) sidebarBackdrop.addEventListener('click', closeSidebarDrawer);
+// Bấm vào một mục menu trên điện thoại thì đóng luôn ngăn kéo lại
+if (appSidebar) {
+    appSidebar.querySelectorAll('.nav-item').forEach((el) => {
+        el.addEventListener('click', closeSidebarDrawer);
+    });
+}
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && appSidebar && appSidebar.classList.contains('drawer-open')) closeSidebarDrawer();
+});
+
+
+// ----------------- TOAST: thay cho alert() chặn luồng -----------------
+let toastContainer = null;
+
+function ensureToastContainer() {
+    if (toastContainer) return toastContainer;
+    toastContainer = document.createElement('div');
+    toastContainer.className = 'toast-container';
+    toastContainer.setAttribute('role', 'status');
+    toastContainer.setAttribute('aria-live', 'polite');
+    document.body.appendChild(toastContainer);
+    return toastContainer;
+}
+
+// type: 'success' | 'error' | 'info'
+function showToast(message, type = 'info', durationMs = 4500) {
+    const wrap = ensureToastContainer();
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    const iconMap = { success: '✓', error: '✕', info: 'ℹ' };
+    toast.innerHTML = `<span class="toast-icon" aria-hidden="true">${iconMap[type] || iconMap.info}</span>
+        <span class="toast-msg">${esc(message)}</span>
+        <button type="button" class="toast-close" aria-label="Đóng thông báo">×</button>`;
+    toast.querySelector('.toast-close').onclick = () => toast.remove();
+    wrap.appendChild(toast);
+    setTimeout(() => toast.remove(), durationMs);
+}
+window.showToast = showToast;
+
+
 // ----------------- ALERT COUNTER LOGIC -----------------
 let totalAlertsCount = 0;
 
@@ -218,6 +329,68 @@ function incrementAlertCount() {
     const notiBadge = document.getElementById('header-noti-badge');
     if (notiBadge) notiBadge.textContent = totalAlertsCount;
 }
+
+
+// ----------------- BẢNG THÔNG BÁO 🔔 -----------------
+// Dùng lại đúng các thẻ sự kiện đã dựng ở dòng sự kiện trực tiếp
+// (events-list-container), khỏi gọi API riêng hay giữ thêm một bản state nữa.
+const notificationBtn = document.getElementById('notification-btn');
+const notificationPanel = document.getElementById('notification-panel');
+
+function renderNotificationPanel() {
+    const list = document.getElementById('notification-panel-list');
+    if (!list) return;
+    const cards = eventsListContainer ? [...eventsListContainer.querySelectorAll('.event-card')] : [];
+    if (!cards.length) {
+        list.innerHTML = '<p class="empty-hint">Không có sự kiện nào chờ xử lý.</p>';
+        return;
+    }
+    list.innerHTML = cards.slice(0, 8).map((card) => {
+        const desc = card.querySelector('.event-desc');
+        const time = card.querySelector('.event-time');
+        const place = card.querySelector('.event-location');
+        const descText = desc ? desc.textContent : '';
+        const metaText = [time ? time.textContent : '', place ? place.textContent : ''].filter(Boolean).join(' · ');
+        return `<button type="button" class="notification-panel-item" role="menuitem" onclick="openSafetyFromNotification()">
+            ${esc(descText)}
+            <span class="noti-item-time">${esc(metaText)}</span>
+        </button>`;
+    }).join('');
+}
+
+function toggleNotificationPanel() {
+    if (!notificationPanel) return;
+    const opening = notificationPanel.style.display === 'none';
+    if (opening) renderNotificationPanel();
+    notificationPanel.style.display = opening ? 'block' : 'none';
+    if (notificationBtn) notificationBtn.setAttribute('aria-expanded', String(opening));
+}
+
+function closeNotificationPanel() {
+    if (!notificationPanel) return;
+    notificationPanel.style.display = 'none';
+    if (notificationBtn) notificationBtn.setAttribute('aria-expanded', 'false');
+}
+
+if (notificationBtn) {
+    notificationBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleNotificationPanel(); });
+}
+// Bấm ra ngoài hoặc Esc thì đóng bảng thông báo
+document.addEventListener('click', (e) => {
+    if (notificationPanel && notificationPanel.style.display !== 'none'
+        && !notificationPanel.contains(e.target) && e.target !== notificationBtn) {
+        closeNotificationPanel();
+    }
+});
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && notificationPanel && notificationPanel.style.display !== 'none') closeNotificationPanel();
+});
+
+function openSafetyFromNotification() {
+    closeNotificationPanel();
+    switchNavTab('safety');
+}
+window.openSafetyFromNotification = openSafetyFromNotification;
 
 
 // ----------------- TRÌNH PHÁT ĐOẠN GHI 10 GIÂY -----------------
@@ -312,10 +485,10 @@ async function lockBaselineManual() {
         const data = await res.json();
         if (res.ok) {
             baselineCount = data.baseline;
-            alert(`✓ Đã chốt sĩ số chuẩn: ${data.baseline} quân nhân`);
+            showToast(`Đã chốt sĩ số chuẩn: ${data.baseline} quân nhân`, 'success');
         }
     } catch (e) {
-        alert('Lỗi khi chốt sĩ số: ' + e.message);
+        showToast('Lỗi khi chốt sĩ số: ' + e.message, 'error');
     }
 }
 window.lockBaselineManual = lockBaselineManual;
@@ -325,12 +498,12 @@ async function startAttendanceNow() {
         const res = await fetch('/api/attendance/start', { method: 'POST' });
         const data = await res.json();
         if (data.status !== 'success') {
-            alert(data.message || 'Không mở được phiên điểm danh');
+            showToast(data.message || 'Không mở được phiên điểm danh', 'error');
             return;
         }
-        alert('✓ ' + (data.message || 'Đã mở phiên điểm danh'));
+        showToast(data.message || 'Đã mở phiên điểm danh', 'success');
     } catch (e) {
-        alert('Lỗi mở phiên điểm danh: ' + e.message);
+        showToast('Lỗi mở phiên điểm danh: ' + e.message, 'error');
     }
 }
 window.startAttendanceNow = startAttendanceNow;
@@ -745,7 +918,7 @@ async function ackEvent(eventId) {
         if (currentTabName === 'safety') loadSafetyDashboard();
         else if (currentTabName === 'safety-detail') loadSafetyDetail();
     } catch (e) {
-        alert('Không xác nhận được: ' + e.message);
+        showToast('Không xác nhận được: ' + e.message, 'error');
     }
 }
 window.ackEvent = ackEvent;
@@ -856,7 +1029,7 @@ function stopWebcam() {
 
 function captureWebcamSnapshot() {
     if (!webcamVideo || !webcamStream) {
-        alert('Vui lòng bật webcam trước khi chụp.');
+        showToast('Vui lòng bật webcam trước khi chụp.', 'info');
         return;
     }
 
@@ -905,7 +1078,7 @@ async function handleFaceRegister(e) {
     const unit = regUnitSelect.value;
 
     if (!name || !militaryId || !rank || !unit) {
-        alert('Vui lòng điền đầy đủ các trường thông tin');
+        showToast('Vui lòng điền đầy đủ các trường thông tin', 'info');
         return;
     }
 
@@ -919,14 +1092,14 @@ async function handleFaceRegister(e) {
     if (currentMediaMode === 'webcam') {
         if (!capturedSnapshotBase64) captureWebcamSnapshot();
         if (!capturedSnapshotBase64) {
-            alert('Vui lòng chụp ảnh khuôn mặt từ webcam trước khi lưu.');
+            showToast('Vui lòng chụp ảnh khuôn mặt từ webcam trước khi lưu.', 'info');
             return;
         }
         formData.append('image_base64', capturedSnapshotBase64);
     } else {
         const file = photoUploadInput.files[0];
         if (!file && !capturedSnapshotBase64) {
-            alert('Vui lòng tải lên ảnh chân dung rõ nét');
+            showToast('Vui lòng tải lên ảnh chân dung rõ nét', 'info');
             return;
         }
         if (file) {
@@ -1021,8 +1194,8 @@ function renderPersonnelTable(list) {
             <td><span class="status-tag status-active">${p.status || 'Active'}</span></td>
             <td>
                 <div class="action-btn-group">
-                    <button class="icon-btn" title="Chỉnh sửa" onclick="editPerson('${p.id}')">✏️</button>
-                    <button class="icon-btn icon-btn-delete" title="Xóa" onclick="deletePerson('${p.id}')">🗑️</button>
+                    <button class="icon-btn" title="Chỉnh sửa" aria-label="Chỉnh sửa" onclick="editPerson('${p.id}')">✏️</button>
+                    <button class="icon-btn icon-btn-delete" title="Xoá" aria-label="Xoá quân nhân" onclick="deletePerson('${p.id}')">🗑️</button>
                 </div>
             </td>
         `;
@@ -1047,16 +1220,16 @@ function filterPersonnelTable() {
 window.filterPersonnelTable = filterPersonnelTable;
 
 async function deletePerson(personId) {
-    if (!confirm('Bạn có chắc chắn muốn xóa quân nhân này khỏi cơ sở dữ liệu Face ID?')) return;
+    if (!confirm('Bạn có chắc chắn muốn xoá quân nhân này khỏi cơ sở dữ liệu Face ID?')) return;
     try {
         const res = await fetch(`/api/faces/${personId}`, { method: 'DELETE' });
         if (res.ok) {
             await loadRegisteredFaces();
         } else {
-            alert('Lỗi khi xóa quân nhân');
+            showToast('Lỗi khi xoá quân nhân', 'error');
         }
     } catch (e) {
-        alert('Lỗi: ' + e.message);
+        showToast('Lỗi: ' + e.message, 'error');
     }
 }
 window.deletePerson = deletePerson;
@@ -1130,7 +1303,7 @@ async function deletePersonFromModal() {
         closePersonModal();
         loadRegisteredFaces();
     } catch (e) {
-        alert(e.message);
+        showToast(e.message, 'error');
     }
 }
 window.deletePersonFromModal = deletePersonFromModal;
@@ -1242,8 +1415,8 @@ async function captureFrameForRoi() {
         const res = await fetch(`/api/v1/cameras/${zoneTargetCamera()}/snapshot?overlay=0&_=${Date.now()}`);
         if (!res.ok) {
             const cam = (cameraWallData || []).find(c => c.id === zoneTargetCamera());
-            alert(`Camera "${(cam && cam.name) || zoneTargetCamera()}" chưa chạy nên chưa có khung hình. `
-                  + 'Bấm Chạy trên ô camera đó rồi lấy lại khung hình.');
+            showToast(`Camera "${(cam && cam.name) || zoneTargetCamera()}" chưa chạy nên chưa có khung hình. `
+                  + 'Bấm Chạy trên ô camera đó rồi lấy lại khung hình.', 'info');
             return;
         }
         const blob = await res.blob();
@@ -1467,10 +1640,10 @@ function renderZoneList() {
                 <span class="muted">${z.points.length} điểm${z.enabled ? '' : ' · đang tắt'}</span>
             </div>
             <div class="zone-row-actions">
-                <button class="icon-btn" title="Sửa vùng" onclick="editZone('${z.id}')">✏️</button>
-                <button class="icon-btn" title="${z.enabled ? 'Tắt vùng' : 'Bật vùng'}"
+                <button class="icon-btn" title="Sửa vùng" aria-label="Sửa vùng" onclick="editZone('${z.id}')">✏️</button>
+                <button class="icon-btn" title="${z.enabled ? 'Tắt vùng' : 'Bật vùng'}" aria-label="${z.enabled ? 'Tắt vùng' : 'Bật vùng'}"
                         onclick="toggleZone('${z.id}', ${!z.enabled})">${z.enabled ? '🔕' : '🔔'}</button>
-                <button class="icon-btn icon-btn-delete" title="Xoá vùng"
+                <button class="icon-btn icon-btn-delete" title="Xoá vùng" aria-label="Xoá vùng"
                         onclick="deleteZone('${z.id}','${esc(z.name)}')">🗑️</button>
             </div>
         </div>`;
@@ -1528,7 +1701,7 @@ async function toggleZone(zoneId, enabled) {
         if (!res.ok) throw new Error(describeApiError(await res.json()));
         loadZoneRules();
     } catch (e) {
-        alert(e.message);
+        showToast(e.message, 'error');
     }
 }
 window.toggleZone = toggleZone;
@@ -1541,7 +1714,7 @@ async function deleteZone(zoneId, name) {
         resetZoneForm();
         loadZoneRules();
     } catch (e) {
-        alert(e.message);
+        showToast(e.message, 'error');
     }
 }
 window.deleteZone = deleteZone;
@@ -1729,7 +1902,7 @@ function renderSchedulesTable(schedules) {
     schedulesTbody.innerHTML = '';
 
     if (schedules.length === 0) {
-        schedulesTbody.innerHTML = `<tr><td colspan="7" class="empty-row">Chưa có ca thời khóa biểu nào được thiết lập</td></tr>`;
+        schedulesTbody.innerHTML = `<tr><td colspan="7" class="empty-row">Chưa có ca thời khoá biểu nào được thiết lập</td></tr>`;
         return;
     }
 
@@ -1764,8 +1937,8 @@ function renderSchedulesTable(schedules) {
                 </div>
             </td>
             <td>
-                <button class="icon-btn icon-btn-edit" title="Sửa ca" onclick="editSchedule('${sch.id}')">✏️</button>
-                <button class="icon-btn icon-btn-delete" title="Xóa ca" onclick="deleteSchedule('${sch.id}')">🗑️</button>
+                <button class="icon-btn icon-btn-edit" title="Sửa ca" aria-label="Sửa ca" onclick="editSchedule('${sch.id}')">✏️</button>
+                <button class="icon-btn icon-btn-delete" title="Xoá ca" aria-label="Xoá ca" onclick="deleteSchedule('${sch.id}')">🗑️</button>
             </td>
         `;
         schedulesTbody.appendChild(row);
@@ -1832,14 +2005,14 @@ async function handleCreateSchedule(e) {
 window.handleCreateSchedule = handleCreateSchedule;
 
 async function deleteSchedule(schId) {
-    if (!confirm('Bạn có chắc muốn xóa ca thời khóa biểu này?')) return;
+    if (!confirm('Bạn có chắc muốn xoá ca thời khoá biểu này?')) return;
     try {
         const res = await fetch(`/api/schedules/${schId}`, { method: 'DELETE' });
         if (res.ok) {
             loadSchedules();
         }
     } catch (e) {
-        alert('Lỗi xóa ca: ' + e.message);
+        showToast('Lỗi xoá ca: ' + e.message, 'error');
     }
 }
 window.deleteSchedule = deleteSchedule;
@@ -2090,6 +2263,7 @@ function makeZoomable(container) {
     btn.type = 'button';
     btn.className = 'zoom-fullscreen-btn';
     btn.title = 'Phóng to toàn màn hình';
+    btn.setAttribute('aria-label', 'Phóng to toàn màn hình');
     btn.textContent = '⛶';
     btn.onclick = (e) => { e.stopPropagation(); toggleFullscreen(container); };
     container.appendChild(btn);
@@ -2268,7 +2442,7 @@ function updateLogMetrics(logs) {
 
 function exportAttendanceLogsCsv() {
     if (attendanceLogsData.length === 0) {
-        alert('Không có dữ liệu điểm danh để xuất báo cáo');
+        showToast('Không có dữ liệu điểm danh để xuất báo cáo', 'info');
         return;
     }
 
@@ -2758,8 +2932,10 @@ async function loadSafetyDashboard() {
     document.getElementById('sf-subtitle').textContent =
         'PHÁT HIỆN ĐỐI TƯỢNG ĐI VÀO VÙNG CẤM CỦA TRƯỜNG BẮN THEO THỜI GIAN THỰC';
 
+    const errEl = document.getElementById('sf-error');
     try {
         const data = await getJson('/api/v1/summary/safety');
+        if (errEl) errEl.style.display = 'none';
         const stateEl = document.getElementById('sf-state');
         stateEl.className = `safety-state-pill state-${data.state}`;
         document.getElementById('sf-state-label').textContent = data.state_label;
@@ -2770,6 +2946,10 @@ async function loadSafetyDashboard() {
         setActiveIntrusion(data.active_intrusion);
     } catch (e) {
         console.error('Lỗi tải dashboard an toàn:', e);
+        if (errEl) {
+            errEl.textContent = `⚠ Không tải được dữ liệu an toàn: ${e.message}`;
+            errEl.style.display = 'block';
+        }
     }
 }
 window.loadSafetyDashboard = loadSafetyDashboard;
@@ -2828,8 +3008,10 @@ window.openSafetyDetail = openSafetyDetail;
 
 async function loadSafetyDetail() {
     if (!safetyDetailCameraId) return;
+    const errEl = document.getElementById('sfd-error');
     try {
         const data = await getJson('/api/v1/summary/safety');
+        if (errEl) errEl.style.display = 'none';
         const cam = (data.cameras || []).find(c => c.id === safetyDetailCameraId);
         if (!cam) {
             document.getElementById('sfd-subtitle').textContent = 'Camera không còn trong hệ thống';
@@ -2878,6 +3060,10 @@ async function loadSafetyDetail() {
         setActiveIntrusion(data.active_intrusion);
     } catch (e) {
         console.error('Lỗi tải chi tiết camera an toàn:', e);
+        if (errEl) {
+            errEl.textContent = `⚠ Không tải được chi tiết camera: ${e.message}`;
+            errEl.style.display = 'block';
+        }
     }
 }
 window.loadSafetyDetail = loadSafetyDetail;
@@ -3170,7 +3356,7 @@ async function toggleCameraRun(cameraId, isRunning) {
         activeCameraId = cameraId;
         setTimeout(loadCameras, 800);
     } catch (e) {
-        alert(e.message);
+        showToast(e.message, 'error');
     }
 }
 window.toggleCameraRun = toggleCameraRun;
@@ -3182,7 +3368,7 @@ async function deleteCamera(cameraId, name) {
         if (!res.ok && res.status !== 204) throw new Error(describeApiError(await res.json()));
         loadCameras();
     } catch (e) {
-        alert(e.message);
+        showToast(e.message, 'error');
     }
 }
 window.deleteCamera = deleteCamera;
