@@ -2,6 +2,9 @@ services:
   horus-ai:
     build:
       context: .
+      # Build bằng host network: có máy bridge của Docker không ra được Internet
+      # (gặp trên techainer-rtx3090-1), lúc chạy cũng đã là host network
+      network: host
       args:
         TORCH_VARIANT: cpu
     image: horus-ai:${HORUS_VERSION:-latest}
