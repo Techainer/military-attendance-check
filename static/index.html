@@ -12,11 +12,11 @@
 <body>
     <!-- Cảnh báo vi phạm an toàn: bám đỉnh màn hình, nổi trên mọi trang -->
     <div id="global-alert" class="global-alert" style="display: none;">
-        <div class="global-alert-body" onclick="openSafetyFromAlert()" title="Bấm để xem trang An toàn bắn đạn thật">
-            <span class="global-alert-icon">⚠</span>
+        <button type="button" class="global-alert-body" onclick="openSafetyFromAlert()" title="Bấm để xem trang An toàn bắn đạn thật">
+            <span class="global-alert-icon" aria-hidden="true">⚠</span>
             <span id="global-alert-text">Có người đi vào vùng cấm</span>
-        </div>
-        <button type="button" class="global-alert-close" onclick="hideGlobalAlert()" title="Ẩn cảnh báo">×</button>
+        </button>
+        <button type="button" class="global-alert-close" onclick="hideGlobalAlert()" title="Ẩn cảnh báo" aria-label="Ẩn cảnh báo">×</button>
     </div>
 
     <div id="login-screen" class="login-screen">
@@ -64,7 +64,7 @@
 
     <div class="app-layout" id="app-layout" style="display: none;">
         <!-- Sidebar Navigation -->
-        <aside class="sidebar">
+        <aside class="sidebar" id="app-sidebar">
             <div class="brand-header">
                 <div class="brand-logo">
                     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -76,21 +76,21 @@
                     <span class="brand-title">HORUS AI WEB</span>
                     <span class="brand-subtitle">V1.0 · MILITARY EDITION</span>
                 </div>
-                <button class="sidebar-toggle" title="Thu gọn menu">‹</button>
+                <button class="sidebar-toggle" id="sidebar-toggle-btn" title="Thu gọn menu" aria-label="Thu gọn menu" aria-expanded="true">‹</button>
             </div>
 
             <div class="nav-section-title">NGHIỆP VỤ HUẤN LUYỆN</div>
             <nav class="sidebar-nav">
                 <a href="#schedule-progress" class="nav-item active" id="nav-schedule-progress" onclick="switchNavTab('schedule-progress')">
-                    <span class="nav-icon nav-glyph">🗓</span>
+                    <span class="nav-icon nav-glyph" aria-hidden="true">🗓</span>
                     <span>Lịch &amp; Tiến độ</span>
                 </a>
                 <a href="#safety" class="nav-item" id="nav-safety" onclick="switchNavTab('safety')">
-                    <span class="nav-icon nav-glyph">🎯</span>
+                    <span class="nav-icon nav-glyph" aria-hidden="true">🎯</span>
                     <span>An toàn bắn đạn thật</span>
                 </a>
                 <a href="#logs" class="nav-item" id="nav-logs" onclick="switchNavTab('logs')">
-                    <span class="nav-icon nav-glyph">📋</span>
+                    <span class="nav-icon nav-glyph" aria-hidden="true">📋</span>
                     <span>Nhật ký điểm danh</span>
                 </a>
             </nav>
@@ -98,23 +98,23 @@
             <div class="nav-section-title role-only" data-role="qtht">PHÂN HỆ III · QUẢN TRỊ HỆ THỐNG</div>
             <nav class="sidebar-nav role-only" data-role="qtht">
                 <a href="#monitoring" class="nav-item" id="nav-monitoring" onclick="switchNavTab('monitoring')">
-                    <span class="nav-icon nav-glyph">📹</span>
+                    <span class="nav-icon nav-glyph" aria-hidden="true">📹</span>
                     <span>Giám sát trực tiếp</span>
                 </a>
                 <a href="#schedule" class="nav-item" id="nav-schedule" onclick="switchNavTab('schedule')">
-                    <span class="nav-icon nav-glyph">⚙️</span>
+                    <span class="nav-icon nav-glyph" aria-hidden="true">⚙️</span>
                     <span>Cấu hình thời khoá biểu</span>
                 </a>
                 <a href="#zones" class="nav-item" id="nav-zones" onclick="switchNavTab('zones')">
-                    <span class="nav-icon nav-glyph">⬡</span>
+                    <span class="nav-icon nav-glyph" aria-hidden="true">⬡</span>
                     <span>Vùng giám sát</span>
                 </a>
                 <a href="#cameras" class="nav-item" id="nav-cameras" onclick="switchNavTab('cameras')">
-                    <span class="nav-icon nav-glyph">🎥</span>
+                    <span class="nav-icon nav-glyph" aria-hidden="true">🎥</span>
                     <span>Thiết bị camera</span>
                 </a>
                 <a href="#registration" class="nav-item" id="nav-registration" onclick="switchNavTab('registration')">
-                    <span class="nav-icon nav-glyph">🪪</span>
+                    <span class="nav-icon nav-glyph" aria-hidden="true">🪪</span>
                     <span>Đăng ký khuôn mặt</span>
                 </a>
             </nav>
@@ -123,10 +123,10 @@
             <div class="sidebar-footer">
                 <div id="account-menu" class="account-menu" style="display: none;">
                     <button type="button" class="account-menu-item" onclick="openAccountModal()">
-                        👤 Thông tin cá nhân
+                        <span aria-hidden="true">👤</span> Thông tin cá nhân
                     </button>
                     <button type="button" class="account-menu-item account-menu-danger" onclick="handleLogout()">
-                        ⏻ Đăng xuất
+                        <span aria-hidden="true">⏻</span> Đăng xuất
                     </button>
                 </div>
                 <button type="button" class="sidebar-user" id="sidebar-user" onclick="toggleAccountMenu()">
@@ -135,43 +135,62 @@
                         <span class="user-name" id="user-name">—</span>
                         <span class="user-role" id="user-role">—</span>
                     </span>
-                    <span class="account-caret">⌃</span>
+                    <span class="account-caret" aria-hidden="true">⌃</span>
                 </button>
             </div>
         </aside>
+
+        <!-- Lớp phủ tối sau menu khi mở dạng ngăn kéo trên màn hình nhỏ -->
+        <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
 
         <!-- Main Content Area -->
         <main class="main-wrapper">
             <!-- Top Navbar -->
             <header class="top-header">
+                <button type="button" class="menu-toggle" id="menu-toggle" aria-label="Mở menu điều hướng" aria-expanded="false" aria-controls="app-sidebar">☰</button>
+
                 <div class="breadcrumb-container">
-                    <span class="breadcrumb-icon">⊞</span>
+                    <span class="breadcrumb-icon" aria-hidden="true">⊞</span>
                     <span class="breadcrumb-root">Horus AI</span>
-                    <span class="breadcrumb-separator">/</span>
-                    <span class="breadcrumb-current" id="current-page-title">Giám sát trực tiếp</span>
+                    <span class="breadcrumb-separator" aria-hidden="true">/</span>
+                    <span class="breadcrumb-current" id="current-page-title">Lịch &amp; Tiến độ huấn luyện</span>
                 </div>
 
                 <div class="header-badges">
                     <div class="status-pill pill-online">
-                        <span class="pill-dot"></span>
+                        <span class="pill-dot" aria-hidden="true"></span>
                         <span id="topbar-camera-stat">Camera: 0/0 trực tuyến</span>
                     </div>
                     <div class="status-pill pill-neutral">
-                        <span class="pill-icon">💡</span>
+                        <span class="pill-icon" aria-hidden="true">💡</span>
                         <span id="topbar-alert-stat">Cảnh báo: 0</span>
                     </div>
                 </div>
 
                 <div class="header-right">
                     <div class="live-clock-container" title="Giờ hệ thống, đồng bộ với dấu thời gian trên khung hình">
-                        <span id="live-time" class="live-time">23:18:13</span>
-                        <span id="live-date" class="live-date">17/08/2026</span>
+                        <span id="live-time" class="live-time">--:--:--</span>
+                        <span id="live-date" class="live-date">--/--/----</span>
                         <span id="clock-drift-warning" class="clock-drift-warning" style="display: none;"></span>
                     </div>
-                    <button class="notification-btn" title="Thông báo cảnh báo">
-                        🔔
-                        <span class="noti-badge" id="header-noti-badge">0</span>
-                    </button>
+                    <div class="noti-wrap">
+                        <button type="button" class="notification-btn" id="notification-btn" title="Thông báo cảnh báo"
+                                aria-label="Thông báo cảnh báo" aria-haspopup="true" aria-expanded="false" aria-controls="notification-panel">
+                            <span aria-hidden="true">🔔</span>
+                            <span class="noti-badge" id="header-noti-badge">0</span>
+                        </button>
+                        <div id="notification-panel" class="notification-panel" style="display: none;" role="menu">
+                            <div class="notification-panel-header">
+                                <strong>Sự kiện chờ xử lý</strong>
+                            </div>
+                            <div class="notification-panel-list" id="notification-panel-list">
+                                <p class="empty-hint">Không có sự kiện nào chờ xử lý.</p>
+                            </div>
+                            <button type="button" class="notification-panel-footer" onclick="openSafetyFromNotification()">
+                                Xem tất cả tại trang An toàn →
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </header>
 
@@ -304,14 +323,14 @@
 
                                 <div class="face-capture-viewport" id="viewport-upload" style="display: none;">
                                     <input type="file" id="photo-upload-input" accept="image/*" onchange="previewUploadedPhoto(event)" style="display: none;">
-                                    <div class="upload-dropzone" onclick="document.getElementById('photo-upload-input').click()">
+                                    <button type="button" class="upload-dropzone" aria-label="Chọn ảnh chân dung để tải lên" onclick="document.getElementById('photo-upload-input').click()">
                                         <img id="photo-preview-img" style="display: none;" alt="Preview">
                                         <div id="upload-placeholder-content">
-                                            <div class="drop-icon">📁</div>
+                                            <div class="drop-icon" aria-hidden="true">📁</div>
                                             <p>Nhấp vào đây để chọn ảnh chân dung rõ nét</p>
                                             <span class="help-text">Hỗ trợ JPG, PNG, WEBP</span>
                                         </div>
-                                    </div>
+                                    </button>
                                 </div>
 
                                 <div class="capture-actions" id="webcam-actions">
@@ -338,9 +357,9 @@
                                 <div class="table-filters">
                                     <div class="search-box">
                                         <span class="search-icon">🔍</span>
-                                        <input type="text" id="search-personnel" placeholder="Tìm tên / số hiệu" oninput="filterPersonnelTable()">
+                                        <input type="text" id="search-personnel" aria-label="Tìm quân nhân theo tên hoặc số hiệu" placeholder="Tìm tên / số hiệu" oninput="filterPersonnelTable()">
                                     </div>
-                                    <select id="filter-unit" class="filter-select" onchange="filterPersonnelTable()">
+                                    <select id="filter-unit" aria-label="Lọc theo đơn vị" class="filter-select" onchange="filterPersonnelTable()">
                                         <option value="all">Tất cả đơn vị</option>
                                         <option value="Đại đội 1">Đại đội 1</option>
                                         <option value="Đại đội 2">Đại đội 2</option>
@@ -350,7 +369,7 @@
                                         <option value="Tiểu đoàn 3">Tiểu đoàn 3</option>
                                         <option value="Chỉ huy sở">Chỉ huy sở</option>
                                     </select>
-                                    <select id="filter-rank" class="filter-select" onchange="filterPersonnelTable()">
+                                    <select id="filter-rank" aria-label="Lọc theo cấp bậc" class="filter-select" onchange="filterPersonnelTable()">
                                         <option value="all">Tất cả cấp bậc</option>
                                         <option value="Binh nhì">Binh nhì</option>
                                         <option value="Binh nhất">Binh nhất</option>
@@ -407,7 +426,7 @@
                                         <span class="tool-icon">📸</span> Lấy khung hình Camera
                                     </button>
                                     <button type="button" class="btn-roi-reset" onclick="resetRoiCanvas()">
-                                        <span class="tool-icon">⟲</span> Xóa Vùng
+                                        <span class="tool-icon">⟲</span> Xoá Vùng
                                     </button>
                                 </div>
                                 <div class="roi-cam-tag">
@@ -495,12 +514,12 @@
                     </div>
                 </section>
 
-                <!-- VIEW 4: CẤU HÌNH THỜI KHÓA BIỂU -->
+                <!-- VIEW 4: CẤU HÌNH THỜI KHOÁ BIỂU -->
                 <section id="view-schedule" class="page-view">
                     <div class="glass-card section-card">
                         <div class="card-header flex-between">
                             <div>
-                                <h2>CẤU HÌNH THỜI KHÓA BIỂU & CA ĐIỂM DANH TÁC CHIẾN</h2>
+                                <h2>CẤU HÌNH THỜI KHOÁ BIỂU & CA ĐIỂM DANH TÁC CHIẾN</h2>
                                 <p class="card-subtitle">LẬP LỊCH TRỰC, HUẤN LUYỆN VÀ TỰ ĐỘNG ĐIỂM DANH QUÂN SỐ THEO CA</p>
                             </div>
                             <button class="btn-primary-green" onclick="openScheduleModal()">
@@ -552,13 +571,13 @@
                             <label class="filter-inline">Đến ngày
                                 <input type="date" id="dt-date-to" class="filter-select" onchange="loadTrainingSchedule()">
                             </label>
-                            <select id="dt-filter-shift" class="filter-select" onchange="loadTrainingSchedule()">
+                            <select id="dt-filter-shift" aria-label="Lọc theo ca trực" class="filter-select" onchange="loadTrainingSchedule()">
                                 <option value="">Tất cả ca</option>
                                 <option value="Ca sáng">Ca sáng</option>
                                 <option value="Ca chiều">Ca chiều</option>
                                 <option value="Ca đêm">Ca đêm</option>
                             </select>
-                            <select id="dt-filter-state" class="filter-select" onchange="loadTrainingSchedule()">
+                            <select id="dt-filter-state" aria-label="Lọc theo trạng thái" class="filter-select" onchange="loadTrainingSchedule()">
                                 <option value="">Tất cả trạng thái</option>
                                 <option value="upcoming">Chưa tới giờ</option>
                                 <option value="check_start">Đang điểm danh đầu giờ</option>
@@ -566,7 +585,7 @@
                                 <option value="check_end">Đang điểm danh cuối giờ</option>
                                 <option value="finished">Đã kết thúc</option>
                             </select>
-                            <input type="text" id="dt-schedule-search" class="filter-select"
+                            <input type="text" id="dt-schedule-search" aria-label="Tìm theo tên ca, bài học hoặc đơn vị" class="filter-select"
                                    placeholder="Tìm theo tên ca / bài học / đơn vị" oninput="loadTrainingSchedule()">
                         </div>
 
@@ -659,9 +678,9 @@
                         <div class="card-header flex-between" style="margin-top: 8px;">
                             <h2>QUÂN SỐ THAM GIA TRONG CA</h2>
                             <div class="table-filters">
-                                <input type="text" id="sd-search" class="filter-select"
+                                <input type="text" id="sd-search" aria-label="Tìm quân nhân" class="filter-select"
                                        placeholder="Tìm quân nhân" oninput="renderSessionAttendance()">
-                                <select id="sd-filter" class="filter-select" onchange="renderSessionAttendance()">
+                                <select id="sd-filter" aria-label="Lọc theo trạng thái tham gia" class="filter-select" onchange="renderSessionAttendance()">
                                     <option value="all">Tất cả trạng thái</option>
                                     <option value="absent">Không tham gia</option>
                                     <option value="late">Đi chậm</option>
@@ -716,6 +735,8 @@
                             </div>
                         </div>
 
+                        <p id="sf-error" class="inline-error" style="display: none;" role="alert"></p>
+
                         <div class="training-filter" id="tt-filter-safety">
                             <button class="tt-btn active" data-tt="" onclick="setTrainingFilter('')">Tất cả</button>
                             <button class="tt-btn" data-tt="dao_tao" onclick="setTrainingFilter('dao_tao')">Huấn luyện đào tạo</button>
@@ -724,9 +745,9 @@
 
 
                         <div class="table-filters" style="margin: 12px 0;">
-                            <input type="text" id="sf-search" class="filter-select"
+                            <input type="text" id="sf-search" aria-label="Tìm theo camera, khu vực hoặc bài học" class="filter-select"
                                    placeholder="Tìm theo camera / khu vực / bài học" oninput="renderSafetyCameraTable()">
-                            <select id="sf-filter-state" class="filter-select" onchange="renderSafetyCameraTable()">
+                            <select id="sf-filter-state" aria-label="Lọc theo trạng thái an toàn" class="filter-select" onchange="renderSafetyCameraTable()">
                                 <option value="">Tất cả trạng thái</option>
                                 <option value="danger">Cảnh báo</option>
                                 <option value="normal">Bình thường</option>
@@ -766,6 +787,8 @@
                                 <span class="pill-dot"></span><span id="sfd-state-label">Bình thường</span>
                             </div>
                         </div>
+
+                        <p id="sfd-error" class="inline-error" style="display: none;" role="alert"></p>
 
                         <div class="safety-grid">
                             <div class="camera-tile is-running">
@@ -870,13 +893,13 @@
                         </div>
 
                         <div class="table-filters" style="margin: 16px 0 12px;">
-                            <select id="log-filter-unit" class="filter-select" onchange="loadAttendanceLogs()">
+                            <select id="log-filter-unit" aria-label="Lọc theo đơn vị" class="filter-select" onchange="loadAttendanceLogs()">
                                 <option value="all">Tất cả đơn vị</option>
                                 <option value="Đại đội 1">Đại đội 1</option>
                                 <option value="Đại đội 2">Đại đội 2</option>
                                 <option value="Tiểu đoàn 3">Tiểu đoàn 3</option>
                             </select>
-                            <select id="log-filter-shift" class="filter-select" onchange="loadAttendanceLogs()">
+                            <select id="log-filter-shift" aria-label="Lọc theo ca trực" class="filter-select" onchange="loadAttendanceLogs()">
                                 <option value="">Tất cả ca</option>
                                 <option value="Ca sáng">Ca sáng</option>
                                 <option value="Ca chiều">Ca chiều</option>
@@ -888,9 +911,9 @@
                             <label class="filter-inline">Đến ngày
                                 <input type="date" id="log-date-to" class="filter-select" onchange="loadAttendanceLogs()">
                             </label>
-                            <input type="text" id="log-search" class="filter-select"
+                            <input type="text" id="log-search" aria-label="Tìm theo tên bài học" class="filter-select"
                                    placeholder="Tìm theo tên bài học" oninput="loadAttendanceLogs()">
-                            <select id="log-filter-status" class="filter-select" onchange="filterAttendanceLogsByStatus()">
+                            <select id="log-filter-status" aria-label="Lọc theo trạng thái điểm danh" class="filter-select" onchange="filterAttendanceLogsByStatus()">
                                 <option value="all">Tất cả trạng thái</option>
                                 <option value="success">Đủ quân số</option>
                                 <option value="warning">Thiếu quân số</option>
@@ -934,7 +957,7 @@
                     <h3 id="clip-modal-title">▶️ Bản Ghi Đoạn 10s Sự Kiện Tác Chiến</h3>
                     <span class="modal-subtitle" id="clip-modal-subtitle">CAM-01 · SÂN TẬP TRUNG</span>
                 </div>
-                <button class="btn-close-modal" onclick="closeClipModal()">✕</button>
+                <button class="btn-close-modal" onclick="closeClipModal()" aria-label="Đóng">✕</button>
             </div>
             <div class="clip-viewport-container">
                 <video id="clip-player-video" controls autoplay muted playsinline></video>
@@ -954,7 +977,7 @@
                     <h3 id="cam-stream-title">📺 Luồng camera</h3>
                     <span class="modal-subtitle" id="cam-stream-subtitle"></span>
                 </div>
-                <button class="btn-close-modal" onclick="closeCameraStreamModal()">✕</button>
+                <button class="btn-close-modal" onclick="closeCameraStreamModal()" aria-label="Đóng">✕</button>
             </div>
             <div class="clip-viewport-container">
                 <img id="cam-stream-img" alt="Luồng camera">
@@ -969,27 +992,27 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h3 id="camera-modal-title">Thêm thiết bị camera</h3>
-                <button class="modal-close" onclick="closeCameraModal()">×</button>
+                <button class="modal-close" onclick="closeCameraModal()" aria-label="Đóng">×</button>
             </div>
             <form id="camera-form" onsubmit="submitCameraForm(event)">
                 <input type="hidden" id="cam-id">
                 <div class="form-group">
-                    <label>Tên camera</label>
+                    <label for="cam-name">Tên camera</label>
                     <input type="text" id="cam-name" placeholder="Sân tập trung" required class="form-input">
                 </div>
                 <div class="form-row">
                     <div class="form-group">
-                        <label>Mã camera</label>
+                        <label for="cam-code">Mã camera</label>
                         <input type="text" id="cam-code" placeholder="CAM-01" class="form-input">
                     </div>
                     <div class="form-group">
-                        <label>Khu vực</label>
+                        <label for="cam-area">Khu vực</label>
                         <input type="text" id="cam-area" placeholder="Thao trường số 1" class="form-input">
                     </div>
                 </div>
                 <div class="form-row">
                     <div class="form-group">
-                        <label>Loại nguồn</label>
+                        <label for="cam-source-type">Loại nguồn</label>
                         <select id="cam-source-type" class="form-input form-select" required>
                             <option value="rtsp">RTSP (camera mạng)</option>
                             <option value="file">Tệp video</option>
@@ -997,23 +1020,23 @@
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>Số khung hình/giây xử lý</label>
+                        <label for="cam-fps">Số khung hình/giây xử lý</label>
                         <input type="number" id="cam-fps" value="5" min="1" max="25" class="form-input">
                     </div>
                 </div>
                 <div class="form-group">
-                    <label>Đường dẫn nguồn (luồng chính)</label>
+                    <label for="cam-source-uri">Đường dẫn nguồn (luồng chính)</label>
                     <input type="text" id="cam-source-uri" placeholder="rtsp://10.0.0.21:554/stream1" required class="form-input font-mono">
                     <p class="form-hint">Nguồn RTSP phải là URL đầy đủ. Tệp video ghi đường dẫn trên máy chủ.</p>
                 </div>
                 <div class="form-group">
-                    <label>Đường dẫn luồng phụ (tuỳ chọn)</label>
+                    <label for="cam-substream-uri">Đường dẫn luồng phụ (tuỳ chọn)</label>
                     <input type="text" id="cam-substream-uri" placeholder="rtsp://10.0.0.21:554/stream2" class="form-input font-mono">
                     <p class="form-hint">Độ phân giải thấp hơn, dùng cho ô lưới camera qua go2rtc. Bỏ trống thì dùng lại luồng chính.</p>
                 </div>
                 <p id="cam-form-status" class="status-message"></p>
                 <div class="modal-actions">
-                    <button type="button" class="btn-toolbar-neutral" onclick="closeCameraModal()">Hủy bỏ</button>
+                    <button type="button" class="btn-toolbar-neutral" onclick="closeCameraModal()">Huỷ bỏ</button>
                     <button type="submit" class="btn-primary-green">Lưu thiết bị</button>
                 </div>
             </form>
@@ -1024,26 +1047,26 @@
         <div class="modal-content glass-card">
             <div class="modal-header">
                 <h3 id="schedule-modal-title">Thêm ca huấn luyện</h3>
-                <button class="btn-close-modal" onclick="closeScheduleModal()">✕</button>
+                <button class="btn-close-modal" onclick="closeScheduleModal()" aria-label="Đóng">✕</button>
             </div>
             <form id="add-schedule-form" onsubmit="handleCreateSchedule(event)">
                 <input type="hidden" id="sch-id">
 
                 <div class="form-group">
-                    <label>Tên nhiệm vụ / Nội dung huấn luyện</label>
+                    <label for="sch-name-input">Tên nhiệm vụ / Nội dung huấn luyện</label>
                     <input type="text" id="sch-name-input" placeholder="Huấn luyện bắn súng tiểu liên AK" required class="form-input">
                 </div>
 
                 <div class="form-row-two">
                     <div class="form-group">
-                        <label>Loại huấn luyện</label>
+                        <label for="sch-training-type">Loại huấn luyện</label>
                         <select id="sch-training-type" required class="form-input form-select">
                             <option value="dao_tao">Huấn luyện đào tạo (Phân hệ I)</option>
                             <option value="chien_dau">Huấn luyện chiến đấu (Phân hệ II)</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>Ca trực</label>
+                        <label for="sch-shift-select">Ca trực</label>
                         <select id="sch-shift-select" required class="form-input form-select">
                             <option value="Ca sáng">Ca sáng</option>
                             <option value="Ca chiều">Ca chiều</option>
@@ -1054,7 +1077,7 @@
 
                 <div class="form-row-two">
                     <div class="form-group">
-                        <label>Đơn vị áp dụng</label>
+                        <label for="sch-unit-select">Đơn vị áp dụng</label>
                         <select id="sch-unit-select" required class="form-input form-select">
                             <option value="Đại đội 1">Đại đội 1</option>
                             <option value="Đại đội 2">Đại đội 2</option>
@@ -1063,29 +1086,29 @@
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>Đội học / Lớp</label>
+                        <label for="sch-class-name">Đội học / Lớp</label>
                         <input type="text" id="sch-class-name" placeholder="Đội học A1" class="form-input">
                     </div>
                 </div>
 
                 <div class="form-row-two">
                     <div class="form-group">
-                        <label>Giờ bắt đầu</label>
+                        <label for="sch-start-time">Giờ bắt đầu</label>
                         <input type="time" id="sch-start-time" value="07:00" required class="form-input">
                     </div>
                     <div class="form-group">
-                        <label>Giờ kết thúc</label>
+                        <label for="sch-end-time">Giờ kết thúc</label>
                         <input type="time" id="sch-end-time" value="11:30" required class="form-input">
                     </div>
                 </div>
 
                 <div class="form-row-two">
                     <div class="form-group">
-                        <label>Từ ngày</label>
+                        <label for="sch-date-from">Từ ngày</label>
                         <input type="date" id="sch-date-from" class="form-input">
                     </div>
                     <div class="form-group">
-                        <label>Đến ngày</label>
+                        <label for="sch-date-to">Đến ngày</label>
                         <input type="date" id="sch-date-to" class="form-input">
                     </div>
                 </div>
@@ -1106,22 +1129,22 @@
 
                 <div class="form-row-two">
                     <div class="form-group">
-                        <label>Tên bài học</label>
+                        <label for="sch-lesson-name">Tên bài học</label>
                         <input type="text" id="sch-lesson-name" placeholder="Bài 3 — Ngắm bắn mục tiêu cố định" class="form-input">
                     </div>
                     <div class="form-group">
-                        <label>Giáo viên phụ trách</label>
+                        <label for="sch-instructor">Giáo viên phụ trách</label>
                         <input type="text" id="sch-instructor" placeholder="Thượng uý Trần Văn B" class="form-input">
                     </div>
                 </div>
 
                 <div class="form-row-two">
                     <div class="form-group">
-                        <label>Thao trường thực hiện</label>
+                        <label for="sch-field">Thao trường thực hiện</label>
                         <input type="text" id="sch-field" placeholder="Trường bắn số 1" class="form-input">
                     </div>
                     <div class="form-group">
-                        <label>Camera giám sát</label>
+                        <label for="sch-camera-select">Camera giám sát</label>
                         <select id="sch-camera-select" class="form-input form-select">
                             <option value="">— Chưa gán camera —</option>
                         </select>
@@ -1130,29 +1153,29 @@
 
                 <div class="form-row-two">
                     <div class="form-group">
-                        <label>Điểm danh N phút mỗi mốc</label>
+                        <label for="sch-window-input">Điểm danh N phút mỗi mốc</label>
                         <input type="number" id="sch-window-input" value="5" min="1" max="60" required class="form-input">
                     </div>
                     <div class="form-group">
-                        <label>Sĩ số chuẩn</label>
+                        <label for="sch-count-input">Sĩ số chuẩn</label>
                         <input type="number" id="sch-count-input" value="45" min="1" required class="form-input">
                     </div>
                 </div>
 
                 <div class="form-row-two">
                     <div class="form-group">
-                        <label>Dung sai đi chậm (phút)</label>
+                        <label for="sch-late-tol">Dung sai đi chậm (phút)</label>
                         <input type="number" id="sch-late-tol" value="5" min="0" max="240" class="form-input">
                     </div>
                     <div class="form-group">
-                        <label>Dung sai về sớm (phút)</label>
+                        <label for="sch-early-tol">Dung sai về sớm (phút)</label>
                         <input type="number" id="sch-early-tol" value="5" min="0" max="240" class="form-input">
                     </div>
                 </div>
 
                 <p id="sch-form-status" class="status-message"></p>
                 <div class="modal-actions">
-                    <button type="button" class="btn-toolbar-neutral" onclick="closeScheduleModal()">Hủy bỏ</button>
+                    <button type="button" class="btn-toolbar-neutral" onclick="closeScheduleModal()">Huỷ bỏ</button>
                     <button type="submit" class="btn-primary-green">Lưu ca huấn luyện</button>
                 </div>
             </form>
@@ -1164,7 +1187,7 @@
         <div class="modal-content glass-card">
             <div class="modal-header">
                 <h3 id="person-modal-title">Hồ sơ quân nhân</h3>
-                <button class="btn-close-modal" onclick="closePersonModal()">✕</button>
+                <button class="btn-close-modal" onclick="closePersonModal()" aria-label="Đóng">✕</button>
             </div>
             <form id="person-form" onsubmit="submitPersonForm(event)">
                 <input type="hidden" id="person-id">
@@ -1180,18 +1203,18 @@
 
                 <div class="form-row-two">
                     <div class="form-group">
-                        <label>Họ và tên</label>
+                        <label for="person-name">Họ và tên</label>
                         <input type="text" id="person-name" required class="form-input">
                     </div>
                     <div class="form-group">
-                        <label>Số hiệu quân nhân</label>
+                        <label for="person-military-id">Số hiệu quân nhân</label>
                         <input type="text" id="person-military-id" required class="form-input font-mono">
                     </div>
                 </div>
 
                 <div class="form-row-two">
                     <div class="form-group">
-                        <label>Cấp bậc</label>
+                        <label for="person-rank">Cấp bậc</label>
                         <select id="person-rank" required class="form-input form-select">
                             <option>Binh nhì</option>
                             <option>Binh nhất</option>
@@ -1207,7 +1230,7 @@
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>Đơn vị</label>
+                        <label for="person-unit">Đơn vị</label>
                         <select id="person-unit" required class="form-input form-select">
                             <option>Đại đội 1</option>
                             <option>Đại đội 2</option>
@@ -1218,7 +1241,7 @@
                 </div>
 
                 <div class="form-group">
-                    <label>Trạng thái</label>
+                    <label for="person-status">Trạng thái</label>
                     <select id="person-status" class="form-input form-select">
                         <option value="Active">Đang phục vụ</option>
                         <option value="Inactive">Tạm dừng</option>
@@ -1228,7 +1251,7 @@
                 <p id="person-form-status" class="status-message"></p>
                 <div class="modal-actions">
                     <button type="button" class="btn-row-danger" onclick="deletePersonFromModal()">Xoá quân nhân</button>
-                    <button type="button" class="btn-toolbar-neutral" onclick="closePersonModal()">Hủy bỏ</button>
+                    <button type="button" class="btn-toolbar-neutral" onclick="closePersonModal()">Huỷ bỏ</button>
                     <button type="submit" class="btn-primary-green">Lưu hồ sơ</button>
                 </div>
             </form>
@@ -1243,7 +1266,7 @@
                     <h3 id="log-modal-title">Chi tiết ca điểm danh</h3>
                     <span class="modal-subtitle" id="log-modal-subtitle"></span>
                 </div>
-                <button class="btn-close-modal" onclick="closeLogModal()">✕</button>
+                <button class="btn-close-modal" onclick="closeLogModal()" aria-label="Đóng">✕</button>
             </div>
 
             <div class="detail-grid" id="log-modal-info"></div>
@@ -1271,7 +1294,7 @@
         <div class="modal-content glass-card">
             <div class="modal-header">
                 <h3>Gán nguồn tín hiệu cho camera</h3>
-                <button class="btn-close-modal" onclick="toggleSourceModal()">✕</button>
+                <button class="btn-close-modal" onclick="toggleSourceModal()" aria-label="Đóng">✕</button>
             </div>
             <div class="modal-body">
                 <div class="form-group">
@@ -1324,7 +1347,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h3>Thông tin cá nhân</h3>
-                <button class="modal-close" onclick="closeAccountModal()">×</button>
+                <button class="modal-close" onclick="closeAccountModal()" aria-label="Đóng">×</button>
             </div>
 
             <form id="account-profile-form" onsubmit="submitProfileForm(event)">
@@ -1356,15 +1379,15 @@
     </div>
 
     <!-- Lớp phủ xem ảnh phóng to: mọi ảnh bằng chứng trong hệ thống dùng chung -->
-    <div id="zoom-modal" class="zoom-modal" style="display: none;" onclick="closeZoomModal(event)">
+    <div id="zoom-modal" class="zoom-modal" style="display: none;" onclick="closeZoomModal(event)" role="dialog" aria-modal="true" aria-label="Xem ảnh phóng to">
         <div class="zoom-toolbar" onclick="event.stopPropagation()">
             <span class="zoom-caption" id="zoom-caption"></span>
-            <button type="button" class="zoom-btn" onclick="zoomStageBy(-0.25)" title="Thu nhỏ">−</button>
+            <button type="button" class="zoom-btn" onclick="zoomStageBy(-0.25)" title="Thu nhỏ" aria-label="Thu nhỏ">−</button>
             <span class="zoom-level" id="zoom-level">100%</span>
-            <button type="button" class="zoom-btn" onclick="zoomStageBy(0.25)" title="Phóng to">+</button>
-            <button type="button" class="zoom-btn" onclick="zoomStageReset()" title="Vừa khung">⤢</button>
-            <a class="zoom-btn" id="zoom-download" download title="Tải ảnh">⬇</a>
-            <button type="button" class="zoom-btn" onclick="closeZoomModal()" title="Đóng">×</button>
+            <button type="button" class="zoom-btn" onclick="zoomStageBy(0.25)" title="Phóng to" aria-label="Phóng to">+</button>
+            <button type="button" class="zoom-btn" onclick="zoomStageReset()" title="Vừa khung" aria-label="Vừa khung">⤢</button>
+            <a class="zoom-btn" id="zoom-download" download title="Tải ảnh" aria-label="Tải ảnh">⬇</a>
+            <button type="button" class="zoom-btn" onclick="closeZoomModal()" title="Đóng" aria-label="Đóng">×</button>
         </div>
         <div class="zoom-stage" id="zoom-stage" onclick="event.stopPropagation()">
             <img id="zoom-img" alt="Ảnh bằng chứng phóng to">
