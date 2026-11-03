@@ -224,25 +224,40 @@ military-attendance-check/
 
 ## Configuration
 
-### Adjust Processing Speed
+### Phần cứng AI (CPU / GPU tự chọn)
 
-Edit `app/api.py` line 100:
-```python
-processor = VideoProcessor(fps=5)  # Change to 10 for faster, 3 for slower
-```
+`app/hw.py` là nguồn cấu hình runtime duy nhất cho YOLO (`app/detector.py`) và
+InsightFace (`app/face_engine.py`): tự dò CPU hay GPU NVIDIA lúc khởi động và áp
+mặc định phù hợp, không cần sửa code khi đổi máy hoặc lắp thêm GPU sau. Xem log
+khởi động (`hw.describe()`) để biết đang chạy cấu hình nào.
+
+Độ ưu tiên: biến môi trường (xem `.env.example`) > `data/hw_profile.json` (đo sẵn
+trên đúng máy bằng `scripts/bench_hw.py`, tự bỏ qua nếu chữ ký phần cứng không khớp)
+> mặc định theo thiết bị:
+
+| Biến | Mặc định CPU | Mặc định GPU |
+|---|---|---|
+| `AI_DEVICE` | `auto` → dò CPU/CUDA | |
+| `AI_THREADS` | `max(1, nhân_vật_lý // 2)`, tối đa 4 | 2 |
+| `YOLO_MODEL` | `yolo11s.pt` | `yolo11s.pt` |
+| `YOLO_IMGSZ` | 960 | 1280 |
+| `AI_BACKEND` | `auto` (OpenVINO nếu có bản xuất, không thì `.pt`) | `.pt` trên CUDA |
+| `FACE_MODEL` | `buffalo_l` (cho phép đổi `buffalo_s` nếu máy yếu) | `buffalo_l` |
+| `FACE_DET_SIZE` | 640 | 960 |
+| `MAX_FACE_RESCANS` | 1 | 4 |
+| `AI_FPS` | 4 | 10 |
+| `STREAM_FPS` | 12 | 12 |
+
+Chạy `scripts/bench_hw.py` trên máy đích để đo tốc độ thật và ghi
+`data/hw_profile.json` — ứng dụng tự đọc file này ở lần khởi động kế tiếp. Cắm
+thêm GPU hay đổi CPU thì chạy lại script, chữ ký phần cứng đổi sẽ tự vô hiệu hồ sơ
+cũ (có cảnh báo trong log) thay vì dùng số đo sai máy.
 
 ### Adjust Alert Threshold
 
 Edit `app/monitor.py` line 11:
 ```python
 ALERT_THRESHOLD_SECONDS = 60  # Change to 30 for 30 seconds, etc.
-```
-
-### Change YOLO Model
-
-Edit `app/detector.py` line 11:
-```python
-def __init__(self, model_name: str = 'yolov8n.pt'):  # Use yolov8s.pt for more accuracy
 ```
 
 ## Troubleshooting

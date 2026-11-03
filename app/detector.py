@@ -1,8 +1,13 @@
 """Person detection module using YOLO v8/v11 with multi-object tracking."""
 
 import time
-from ultralytics import YOLO
+from pathlib import Path
+
 import numpy as np
+import yaml
+from ultralytics import YOLO
+
+from app import hw
 
 
 def _iou(a, b) -> float:
@@ -19,6 +24,20 @@ def _iou(a, b) -> float:
     return inter / union if union > 0 else 0.0
 
 
+# Mặc định của ultralytics/cfg/trackers/bytetrack.yaml — chép lại để chỉnh track_buffer
+# mà không đụng file trong package (tránh mất khi cập nhật ultralytics).
+_BYTETRACK_DEFAULTS = {
+    "tracker_type": "bytetrack",
+    "track_high_thresh": 0.25,
+    "track_low_thresh": 0.1,
+    "new_track_thresh": 0.25,
+    "track_buffer": 30,
+    "match_thresh": 0.8,
+    "fuse_score": True,
+}
+_DEFAULT_TRACKER_FPS = 30  # fps mà bộ mặc định trên giả định
+
+
 class PersonDetector:
     """Detects and tracks persons in video frames using YOLO."""
 
@@ -33,28 +52,92 @@ class PersonDetector:
 
     def __init__(
         self,
-        model_name: str = 'yolo11s.pt',
+        model_name: str = None,
         conf: float = 0.25,
-        imgsz: int = 1280,
+        imgsz: int = None,
         occlusion_grace: float = OCCLUSION_GRACE_SECONDS
     ):
         """
         Initialize the person detector.
 
         Args:
-            model_name: YOLO model to use
+            model_name: YOLO model to use. None thì lấy từ app.hw.settings() (tự chọn
+                theo CPU/GPU và hw_profile.json).
             conf: Ngưỡng tin cậy. Hạ thấp hơn mặc định vì có tracking lọc nhiễu.
-            imgsz: Kích thước ảnh đưa vào model
+            imgsz: Kích thước ảnh đưa vào model. None thì lấy từ app.hw.settings().
             occlusion_grace: Số giây tiếp tục tính một người đã bị vật che
         """
-        self.model = YOLO(model_name)
+        settings = hw.settings()
+        hw.apply_torch_threads()  # torch mặc định chiếm hết nhân, tranh CPU với onnxruntime (FaceEngine)
+        model_name = model_name or settings.yolo_model
+        self.imgsz = imgsz or settings.yolo_imgsz
+        self.device = settings.device
+        # GPU: half precision nhanh gần gấp đôi, sai số không đáng kể cho detection.
+        # OpenVINO/CPU không hỗ trợ half theo cách này nên chỉ bật khi có CUDA.
+        self.half = self.device == "cuda"
+
+        resolved_path = self._resolve_model_path(model_name, settings)
+        self.model = YOLO(resolved_path)
+        if self.device == "cuda":
+            self.model.to("cuda")
+
         # COCO dataset class 0 is 'person'
         self.person_class_id = 0
         self.conf = conf
-        self.imgsz = imgsz
         self.occlusion_grace = occlusion_grace
         # track_id -> {box, conf, hits, last_seen}
         self._tracks: dict = {}
+        self._tracker_cfg_path = self._write_tracker_config(settings.ai_fps)
+
+    @staticmethod
+    def _resolve_model_path(model_name: str, settings) -> str:
+        """Dùng bản xuất OpenVINO cạnh file .pt khi có, nhanh hơn .pt nhiều trên CPU
+        không có GPU (xem docs/review — YOLO11s@960 ~300ms .pt vs OpenVINO nhanh hơn
+        hẳn). Bật qua AI_BACKEND=openvino, hoặc tự dùng khi "auto" trên CPU và thấy
+        sẵn thư mục xuất. Thiếu thư mục hoặc load lỗi thì rơi về .pt, không chết tiến
+        trình vì một bước tối ưu không bắt buộc.
+        """
+        if settings.device == "cuda":
+            return model_name
+        stem = Path(model_name).stem
+        ov_dir = Path(model_name).with_name(f"{stem}_openvino_model")
+        wants_ov = settings.ai_backend == "openvino" or (
+            settings.ai_backend == "auto" and ov_dir.is_dir()
+        )
+        if not wants_ov:
+            return model_name
+        if not ov_dir.is_dir():
+            print(f"[PersonDetector] AI_BACKEND=openvino nhưng không thấy {ov_dir}, "
+                  f"dùng {model_name}")
+            return model_name
+        return str(ov_dir)
+
+    def _write_tracker_config(self, ai_fps: int) -> str:
+        """Sinh file cấu hình ByteTrack riêng cho tốc độ khung thực tế của pipeline.
+
+        ultralytics LUÔN khởi tạo BYTETracker với frame_rate=30 cố định trong code
+        (track.py: on_predict_start), bất kể giá trị nào ghi trong yaml — nên không
+        thể "sửa frame_rate" để có tác dụng. Hệ quả: track_buffer (số LƯỢT GỌI
+        track(), không phải giây) bị tính theo giả định 30 khung/giây. Pipeline này
+        gọi track() ở AI_FPS thấp hơn hẳn (CPU ~4-10 khung/giây), nên nếu giữ
+        track_buffer=30 mặc định thì một track mất dấu sẽ bị giữ "sống" quá lâu theo
+        thời gian thực (30 lượt gọi ở 4fps = 7.5s thay vì ý định ~1s). Scale lại
+        track_buffer theo đúng AI_FPS để bù việc frame_rate bị khoá cứng ở 30.
+        """
+        cfg = dict(_BYTETRACK_DEFAULTS)
+        cfg["frame_rate"] = ai_fps  # chỉ để tham khảo/log, ultralytics không đọc field này
+        cfg["track_buffer"] = max(1, round(_BYTETRACK_DEFAULTS["track_buffer"] * ai_fps / _DEFAULT_TRACKER_FPS))
+
+        out_dir = Path("data")
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            cfg_path = out_dir / f"bytetrack_{ai_fps}fps.yaml"
+            cfg_path.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
+            return str(cfg_path.resolve())
+        except OSError:
+            # Không ghi được file (quyền, đĩa đầy...) thì dùng bộ mặc định của ultralytics
+            # thay vì làm hỏng cả detector.
+            return "bytetrack.yaml"
 
     def reset(self) -> None:
         """Xoá trạng thái tracking khi bắt đầu một luồng video mới."""
@@ -87,8 +170,9 @@ class PersonDetector:
             classes=[self.person_class_id],
             conf=self.conf,
             imgsz=self.imgsz,
-            tracker="bytetrack.yaml",
+            tracker=self._tracker_cfg_path,
             persist=True,
+            half=self.half,
             verbose=False
         )
 

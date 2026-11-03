@@ -1,12 +1,17 @@
 # Chỉ dùng khi máy có GPU NVIDIA + NVIDIA Container Toolkit:
 #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
-# YOLO chạy GPU; InsightFace vẫn chạy CPU (onnxruntime bản CPU).
+# YOLO chạy GPU; InsightFace cũng chạy GPU (Dockerfile cài onnxruntime-gpu thay
+# bản CPU khi TORCH_VARIANT=cu128 — xem app/hw.py, app/face_engine.py).
 services:
   horus-ai:
     build:
       args:
         TORCH_VARIANT: cu128
     image: horus-ai:${HORUS_VERSION:-latest}-gpu
+    environment:
+      # auto cũng tự chọn cuda khi có GPU, nhưng khai rõ để lỡ máy có GPU hỏng driver
+      # thì thấy ngay log "device=cuda" mà không lên, thay vì âm thầm rơi về CPU.
+      AI_DEVICE: cuda
     deploy:
       resources:
         reservations:

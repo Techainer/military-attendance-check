@@ -16,3 +16,12 @@ dependencies = [
     # 1.24 trở lên bỏ wheel cho cp310, mà .python-version đang ghim 3.10
     "onnxruntime>=1.17.0,<1.24",
 ]
+
+[project.optional-dependencies]
+# Máy có GPU NVIDIA: InsightFace chạy CUDA thay vì CPU (xem app/hw.py). Cùng tên
+# import "onnxruntime" với bản CPU nên KHÔNG cài chung một venv — Dockerfile bản
+# GPU gỡ bản CPU rồi cài bản này (xem Dockerfile, biến TORCH_VARIANT=cu128).
+gpu = ["onnxruntime-gpu>=1.20,<1.24"]
+# Máy chỉ có CPU: xuất YOLO sang OpenVINO rồi nạp bằng Ultralytics nhanh hơn .pt
+# hẳn (xem app/detector.py, AI_BACKEND=openvino).
+openvino = ["openvino>=2025.0"]
