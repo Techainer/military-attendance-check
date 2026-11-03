@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css?v=b73c8426">
+    <link rel="stylesheet" href="/static/style.css?v=a739b3b9">
 </head>
 <body>
     <!-- Cảnh báo vi phạm an toàn: bám đỉnh màn hình, nổi trên mọi trang -->
@@ -1002,9 +1002,14 @@
                     </div>
                 </div>
                 <div class="form-group">
-                    <label>Đường dẫn nguồn</label>
+                    <label>Đường dẫn nguồn (luồng chính)</label>
                     <input type="text" id="cam-source-uri" placeholder="rtsp://10.0.0.21:554/stream1" required class="form-input font-mono">
                     <p class="form-hint">Nguồn RTSP phải là URL đầy đủ. Tệp video ghi đường dẫn trên máy chủ.</p>
+                </div>
+                <div class="form-group">
+                    <label>Đường dẫn luồng phụ (tuỳ chọn)</label>
+                    <input type="text" id="cam-substream-uri" placeholder="rtsp://10.0.0.21:554/stream2" class="form-input font-mono">
+                    <p class="form-hint">Độ phân giải thấp hơn, dùng cho ô lưới camera qua go2rtc. Bỏ trống thì dùng lại luồng chính.</p>
                 </div>
                 <p id="cam-form-status" class="status-message"></p>
                 <div class="modal-actions">
@@ -1366,6 +1371,9 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=93ef27f0"></script>
+    <!-- Module (go2rtc WebRTC/MSE + lớp phủ canvas) — nạp TRƯỚC app.js để
+         window.AiPlayer có sẵn khi app.js gọi attachStream() lần đầu. -->
+    <script type="module" src="/static/player.js?v=468cb0d9"></script>
+    <script src="/static/app.js?v=3923d950"></script>
 </body>
 </html>

@@ -171,6 +171,9 @@ class CameraInput(BaseModel):
     area_name: Optional[str] = Field(default=None, max_length=120)
     enabled: bool = True
     target_fps: int = Field(default=5, ge=1, le=25)
+    # Luồng phụ (độ phân giải thấp hơn), dùng cho ô lưới camera qua go2rtc —
+    # không có thì go2rtc dùng lại source_uri, tương thích ngược hoàn toàn.
+    substream_uri: Optional[str] = Field(default=None, max_length=2000)
 
     @field_validator("source_type")
     @classmethod
@@ -196,6 +199,7 @@ class CameraPatch(BaseModel):
     area_name: Optional[str] = Field(default=None, max_length=120)
     enabled: Optional[bool] = None
     target_fps: Optional[int] = Field(default=None, ge=1, le=25)
+    substream_uri: Optional[str] = Field(default=None, max_length=2000)
 
     def apply_to(self, existing: dict) -> dict:
         merged = {**existing, **self.model_dump(exclude_unset=True, exclude_none=True)}

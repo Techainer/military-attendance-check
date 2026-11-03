@@ -300,7 +300,7 @@ function toggleAiOverlay() {
     }
     // Gắn lại luồng của mọi camera đang chạy theo chế độ mới
     (cameraWallData || []).filter(c => c.status === 'online').forEach(cam => {
-        attachStream(document.getElementById(`cam-img-${cam.id}`), cam.id, isAiOverlayEnabled);
+        attachStream(document.getElementById(`cam-img-${cam.id}`), cam.id, isAiOverlayEnabled, 'sub');
     });
 }
 window.toggleAiOverlay = toggleAiOverlay;
@@ -488,9 +488,13 @@ async function startRtspStream() {
 }
 window.startRtspStream = startRtspStream;
 
-// ----------------- LUỒNG HÌNH (MJPEG) VÀ SỰ KIỆN (SSE) -----------------
-// Hình và dữ liệu đi hai đường khác nhau: thẻ <img> nhận MJPEG, EventSource nhận
-// sự kiện. Không còn nhồi khung hình base64 qua WebSocket rồi vẽ lên canvas.
+// ----------------- LUỒNG HÌNH VÀ SỰ KIỆN (SSE) -----------------
+// Luồng hình giờ ưu tiên go2rtc (WebRTC/MSE, relay thẳng RTSP, lớp phủ AI vẽ
+// trên <canvas> từ /detections) — xem static/player.js. Hàm attachStream/
+// detachStream GIỮ NGUYÊN TÊN+CHỮ KÝ để mọi nơi gọi cũ (lưới camera, chi tiết
+// ca huấn luyện, chi tiết an toàn, modal xem thử) khỏi phải sửa; bên trong chỉ
+// còn là lớp mỏng gọi sang window.AiPlayer, rơi về MJPEG cũ nếu player.js vì lý
+// do gì không nạp được (ví dụ trình duyệt rất cũ chặn <script type="module">).
 
 let eventSource = null;
 let statusTimer = null;
@@ -501,13 +505,21 @@ function streamUrl(cameraId, overlay) {
     return `/api/v1/cameras/${cameraId}/stream.mjpg?overlay=${overlay ? 1 : 0}&_=${Date.now()}`;
 }
 
-function attachStream(imgEl, cameraId, overlay) {
+function attachStream(imgEl, cameraId, overlay, variant = 'main') {
     if (!imgEl) return;
+    if (window.AiPlayer) {
+        window.AiPlayer.attachPlayer(imgEl, cameraId, overlay, variant);
+        return;
+    }
     imgEl.src = streamUrl(cameraId, overlay);
     imgEl.onerror = () => { imgEl.removeAttribute('src'); };
 }
 
 function detachStream(imgEl) {
+    if (window.AiPlayer) {
+        window.AiPlayer.detachPlayer(imgEl);
+        return;
+    }
     // Bỏ src để trình duyệt đóng kết nối; không làm thì luồng vẫn chạy ngầm
     if (imgEl) imgEl.removeAttribute('src');
 }
@@ -585,7 +597,7 @@ async function loadCameraWall() {
         const img = document.getElementById(`cam-img-${cam.id}`);
         if (running) {
             // Chỉ gắn lại khi chưa có luồng, tránh giật hình mỗi lần làm mới
-            if (!img.getAttribute('src')) attachStream(img, cam.id, isAiOverlayEnabled);
+            if (!img.getAttribute('src')) attachStream(img, cam.id, isAiOverlayEnabled, 'sub');
         } else {
             detachStream(img);
         }
@@ -2083,7 +2095,15 @@ function makeZoomable(container) {
     container.appendChild(btn);
 
     let scale = 1, x = 0, y = 0, drag = null;
-    const img = () => container.querySelector('img');
+    // player.js (go2rtc) chèn <video-stream> và ẨN <img> MJPEG thay vì gỡ nó —
+    // nên không chỉ querySelector('img'): phải lấy đúng phần tử ĐANG HIỂN THỊ
+    // để phóng/kéo đúng cái người dùng nhìn thấy.
+    const img = () => {
+        for (const el of container.querySelectorAll('video-stream, img')) {
+            if (el.offsetWidth > 0 && el.style.display !== 'none') return el;
+        }
+        return container.querySelector('img');
+    };
 
     // Giữ ảnh trong khung: phóng to hơn khung thì không cho kéo lộ khoảng trống,
     // nhỏ hơn khung thì căn giữa. Không có cái này thì kéo quá tay là mất ảnh.
@@ -3053,6 +3073,7 @@ function openCameraModal(camera) {
     document.getElementById('cam-area').value = cam.area_name || '';
     document.getElementById('cam-source-type').value = cam.source_type || 'rtsp';
     document.getElementById('cam-source-uri').value = cam.source_uri || '';
+    document.getElementById('cam-substream-uri').value = cam.substream_uri || '';
     document.getElementById('cam-fps').value = cam.target_fps || 5;
     document.getElementById('cam-form-status').textContent = '';
     modal.style.display = 'flex';
@@ -3108,6 +3129,7 @@ async function submitCameraForm(event) {
         area_name: document.getElementById('cam-area').value.trim() || null,
         source_type: document.getElementById('cam-source-type').value,
         source_uri: document.getElementById('cam-source-uri').value.trim(),
+        substream_uri: document.getElementById('cam-substream-uri').value.trim() || null,
         target_fps: parseInt(document.getElementById('cam-fps').value, 10) || 5
     };
 
