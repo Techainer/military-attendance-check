@@ -20,7 +20,7 @@ from typing import Dict, List, Optional
 from pydantic import ValidationError
 
 from app import clock
-from app.video_processor import VideoProcessor
+from app.video_processor import VideoProcessor, mask_credentials
 from app.monitor import AttendanceMonitor
 from app.face_engine import FaceEngine
 from app.attendance import (STATE_LABELS, AttendanceManager, normalize_schedule,
@@ -32,10 +32,14 @@ from app.schemas import (AckInput, CameraInput, CameraPatch, LoginInput,
                          PasswordChangeInput, ProfilePatch, ScheduleInput,
                          SchedulePatch, ZoneInput, ZonePatch)
 from app.storage import read_json_list, write_json_list
+from app import retention
 
 
 # Initialize FastAPI app
 app = FastAPI(title="HORUS AI - Military Attendance & Face ID")
+
+# Reference to retention task for lifecycle management
+_retention_task: Optional[asyncio.Task] = None
 
 # Paths
 static_path = Path(__file__).parent.parent / "static"
@@ -159,6 +163,83 @@ async def _run_camera(runtime: CameraRuntime):
         # Dọn kể cả khi luồng ném lỗi, nếu không camera kẹt ở trạng thái "đang
         # chạy" mãi và không bật lại được.
         runtimes.pop(runtime.camera_id, None)
+
+
+async def _retention_loop():
+    """Chạy dọn dẹp file sự kiện cũ và mồ côi theo lịch trình."""
+    global _retention_task
+
+    enabled = int(os.environ.get("RETENTION_ENABLED", "1"))
+    if not enabled:
+        print("[Retention] Disabled by RETENTION_ENABLED=0")
+        return
+
+    interval_mins = int(os.environ.get("RETENTION_INTERVAL_MIN", "60"))
+    clip_days = int(os.environ.get("RETENTION_CLIP_DAYS", "7"))
+    image_days = int(os.environ.get("RETENTION_IMAGE_DAYS", "30"))
+    min_free_pct = int(os.environ.get("RETENTION_MIN_FREE_PCT", "10"))
+
+    print(f"[Retention] Khởi động, chạy mỗi {interval_mins} phút")
+
+    while True:
+        try:
+            await asyncio.sleep(interval_mins * 60)
+
+            # Chạy cleanup trong thread riêng để không block event loop
+            result = await asyncio.to_thread(
+                retention.cleanup,
+                data_dir=str(data_path),
+                clip_days=clip_days,
+                image_days=image_days,
+                min_free_pct=min_free_pct,
+                dry_run=False
+            )
+
+            # Log tóm tắt kết quả
+            total_files = (result.get("orphan_files", 0) + result.get("old_clips", 0) +
+                          result.get("old_images", 0) + result.get("min_free_files", 0))
+            total_bytes = (result.get("orphan_bytes", 0) + result.get("old_clips_bytes", 0) +
+                          result.get("old_images_bytes", 0) + result.get("min_free_bytes", 0))
+
+            if total_files > 0:
+                size_mb = total_bytes / (1024 * 1024)
+                print(f"[Retention] Xoá {total_files} file, {size_mb:.1f} MB: "
+                      f"mồ côi={result.get('orphan_files', 0)}, "
+                      f"clip cũ={result.get('old_clips', 0)}, "
+                      f"ảnh cũ={result.get('old_images', 0)}, "
+                      f"trống disk={result.get('min_free_files', 0)}")
+            else:
+                print("[Retention] Kiểm tra: không có gì cần xoá")
+
+        except Exception as e:
+            # Không để crash app, chỉ log lỗi
+            print(f"[Retention] Lỗi chạy cleanup: {e}")
+            import traceback
+            traceback.print_exc()
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Khởi động các tác vụ nền khi app khởi động."""
+    global _retention_task
+
+    # Khởi động vòng lặp dọn dẹp
+    _retention_task = asyncio.create_task(_retention_loop())
+    print("[Startup] Đã khởi động scheduler dọn dẹp")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Dọn dẹp khi app tắt."""
+    global _retention_task
+
+    if _retention_task and not _retention_task.done():
+        _retention_task.cancel()
+        try:
+            await _retention_task
+        except asyncio.CancelledError:
+            pass
+    print("[Shutdown] Đã dừng scheduler dọn dẹp")
 
 
 # ----------------- Navigation & Static Routes -----------------
@@ -673,7 +754,7 @@ async def set_baseline(count: int):
 @app.get("/api/time")
 async def get_server_time():
     """Giờ máy chủ để giao diện hiển thị trùng với dấu thời gian trên khung hình."""
-    return {"status": "success", "server_time": clock.now().isoformat(), "timezone": clock.TZ_NAME}
+    return {"status": "success", "server_time": clock.iso(), "timezone": clock.TZ_NAME}
 
 
 @app.get("/api/status")
@@ -1341,14 +1422,17 @@ def _live_count(camera_id: str) -> int:
 
 
 def _camera_out(camera: dict) -> dict:
-    """Bản ghi trả về giao diện, kèm trạng thái và đường dẫn dựng sẵn."""
-    return {
+    """Bản ghi trả về giao diện, kèm trạng thái và đường dẫn dựng sẵn. Giấu mật khẩu."""
+    out = {
         **camera,
         "status": _camera_status(camera),
         "live_count": _live_count(camera["id"]),
         "stream_url": f"/api/v1/cameras/{camera['id']}/stream.mjpg?overlay=1",
         "snapshot_url": f"/api/v1/cameras/{camera['id']}/snapshot?overlay=0",
     }
+    if "source_uri" in out:
+        out["source_uri"] = mask_credentials(out["source_uri"])
+    return out
 
 
 def _camera_or_404(camera_id: str) -> tuple:
@@ -1395,6 +1479,19 @@ async def v1_update_camera(camera_id: str, payload: CameraPatch):
         raise HTTPException(status_code=422,
                             detail=e.errors(include_url=False, include_context=False,
                                             include_input=False))
+    # Nếu source_uri chứa :***@ (mật khẩu bị che), lấy mật khẩu cũ để không mất
+    if merged.get("source_uri", "").count(":***@") > 0:
+        old_uri = cameras[index].get("source_uri", "")
+        if old_uri and "://" in old_uri:
+            # Trích xuất mật khẩu từ URI cũ (định dạng scheme://user:pass@host/path)
+            match = re.match(r"(.*://[^:/@]+:)([^@]*)(@.*)", old_uri)
+            if match:
+                old_password = match.group(2)
+                merged["source_uri"] = re.sub(
+                    r"(.*://[^:/@]+:)\*{3}(@.*)",
+                    rf"\1{old_password}\2",
+                    merged["source_uri"]
+                )
     merged["id"] = camera_id
     cameras[index] = merged
     write_json_list(cameras_file, cameras)
