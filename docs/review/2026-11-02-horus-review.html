@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Review kỹ thuật Horus · Giám sát huấn luyện AI · 02/11/2026</title>
+<title>Review kỹ thuật Horus · Giám sát huấn luyện AI · 02/11/2026 (cập nhật 04/11/2026)</title>
 <style>
 :root{
   --navy:#2b4c93; --cyan:#29b6e8; --ink:#0b0b0b; --ink2:#52514e; --muted:#76746e;
@@ -116,7 +116,7 @@ table.req td ul{margin:.2rem 0 0;padding-left:1rem}
     <div class="sub">Stream giật / trễ, độ phủ yêu cầu, tối ưu, chất lượng AI, vận hành, UI/UX responsive và lộ trình cải thiện</div>
     <div class="band"></div>
     <dl>
-      <dt>Ngày</dt><dd>02/11/2026</dd>
+      <dt>Ngày</dt><dd>02/11/2026 (cập nhật 04/11/2026)</dd>
       <dt>Repo</dt><dd><code>horus/military-attendance-check</code></dd>
       <dt>Commit review</dt><dd>local <code>6fc2929</code> · đang deploy <code>ac6f28b</code> (chậm 3 commit, chỉ khác Docker và script probe; mã app giống nhau)</dd>
       <dt>Môi trường đo</dt><dd><code>techainer-rtx3090-1</code> · https://military-attendance-dev.techainer.com</dd>
@@ -133,6 +133,9 @@ table.req td ul{margin:.2rem 0 0;padding-left:1rem}
   <h2>Mục lục</h2>
   <ol>
     <li>Tóm tắt điều hành</li>
+  </ol>
+  <p class="small" style="margin:-.2rem 0 .5rem"><b>• Kết quả sau triển khai (04/11/2026)</b> — mục mới, ngay sau tóm tắt điều hành: trước/sau, kiến trúc đang chạy, lỗi đã vá, việc còn lại, rollback.</p>
+  <ol start="2">
     <li>Bảo mật khẩn cấp</li>
     <li>Stream: giật, đứng hình và trễ — số đo &amp; nguyên nhân</li>
     <li>Kỹ thuật stream: có cần WebRTC?</li>
@@ -176,6 +179,116 @@ table.req td ul{margin:.2rem 0 0;padding-left:1rem}
     <li><b>Chạy app bằng Docker/systemd</b> có restart, giới hạn CPU, tách khỏi job train (hoặc dời job train).</li>
     <li><b>Bắt đầu PoC go2rtc</b> (WebRTC + fallback MSE qua WebSocket) và overlay vẽ phía trình duyệt — đây là lời giải dứt điểm cho giật và trễ.</li>
   </ol>
+</section>
+
+<!-- ============ KẾT QUẢ SAU TRIỂN KHAI ============ -->
+<section class="page">
+  <h2>Kết quả sau triển khai (04/11/2026)</h2>
+  <p>Mục này ghi lại số đo thật <b>sau khi</b> triển khai go2rtc + WebRTC qua TURN, chuyển AI sang CUDA, và vá các lỗi bảo mật/vận hành nêu ở các mục bên dưới (ghi nhận ngày 02/11/2026). Đo trên production qua Cloudflare, camera <code>cam_01</code> (Hikvision 1080p25).</p>
+
+  <div class="tiles">
+    <div class="tile"><div class="v">18–25</div><div class="l">fps video gốc 1080p qua WebRTC (từ 0.15–0.25 fps)</div></div>
+    <div class="tile"><div class="v">≈0.3 s</div><div class="l">glass-to-glass qua WebRTC/TURN (từ TB 3.0 s, p95 5.4 s)</div></div>
+    <div class="tile"><div class="v">114–132 ms</div><div class="l">infer AI p50 trên CUDA (từ ~6.5 s/khung trên CPU)</div></div>
+    <div class="tile"><div class="v">176.5 GB</div><div class="l">dọn 118,493 file sự kiện mồ côi; <code>/mnt/ssd</code> 99% → 90%</div></div>
+  </div>
+
+  <h3>Trước / sau</h3>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>Hạng mục</th><th>Trước (02/11/2026)</th><th>Sau triển khai (04/11/2026)</th></tr></thead>
+    <tbody>
+      <tr><td>Khung hình tới trình duyệt</td><td>0.15–0.25 fps; khoảng trống tối đa 7.3 s</td><td>Video gốc 1080p <b>18–25 fps</b> qua WebRTC; MJPEG dự phòng 11.7 fps, khoảng trống tối đa 0.20 s</td></tr>
+      <tr><td>Độ trễ glass-to-glass</td><td>TB 3.0 s, p95 5.4 s</td><td>MSE qua tunnel ≈1–1.5 s; <b>WebRTC qua TURN ≈0.3 s</b> (ngang đọc RTSP trực tiếp; sai số ±1 s do OSD camera chỉ có giây)</td></tr>
+      <tr><td>AI</td><td>onnxruntime CPU, ~6.5 s/khung</td><td>CUDA (RTX 3090): infer p50 114–132 ms, p95 ~164 ms; AI 6.4–7.5 fps; frame age 60–115 ms</td></tr>
+      <tr><td>Bảo mật</td><td>API không auth, lộ mật khẩu RTSP</td><td>Phiên đăng nhập HMAC, trả 401 khi chưa đăng nhập, mật khẩu camera được che, proxy go2rtc chặn API quản trị (403)</td></tr>
+      <tr><td>Dung lượng</td><td><code>/mnt/ssd</code> 99%, không retention</td><td>Dọn 118,493 file sự kiện mồ côi (176.5 GB) → <code>/mnt/ssd</code> 90%; retention tự động (clip 7 ngày, ảnh 30 ngày, trần 2000 file/lượt)</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Kiến trúc đang chạy</h3>
+  <ul>
+    <li><b>Video:</b> Camera RTSP → <b>go2rtc</b> (relay, transcode sang H.264 khi cần) → trình duyệt, tự ưu tiên <b>WebRTC qua TURN</b> (<code>turn.techainer.com</code> — coturn có sẵn trên <code>quadpro-2</code>, dùng chung với dự án THS; mật khẩu TURN tạm dạng HMAC, chỉ cấp cho phiên đã đăng nhập), rơi về <b>MSE qua Cloudflare tunnel</b>, cuối cùng là <b>MJPEG</b>.</li>
+    <li><b>AI:</b> luồng riêng capture → YOLO11s + InsightFace (CUDA) → kết quả gửi qua SSE → trình duyệt vẽ overlay trên canvas.</li>
+    <li><b>Triển khai:</b> Docker Compose (<code>horus-ai</code> + <code>go2rtc</code>, network host, <code>restart unless-stopped</code>) tại <code>/mnt/ssd/horus-deploy/src</code> trên <code>techainer-rtx3090-1</code>; camera tự bật lại sau khi app/container khởi động lại.</li>
+  </ul>
+  <figure><svg viewBox="0 0 680 250" class="chart" role="img" font-family="Be Vietnam Pro, DejaVu Sans, sans-serif">
+    <defs><marker id="ahpd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#52514e"/></marker></defs>
+    <rect x="8" y="58" width="92" height="46" rx="8" fill="#ffffff" stroke="#2b4c93" stroke-width="1.5"/>
+    <text x="54" y="78.5" text-anchor="middle" font-size="11" font-weight="700" fill="#0b0b0b">Camera RTSP</text>
+    <text x="54" y="92.5" text-anchor="middle" font-size="10" fill="#52514e">Hikvision 1080p25</text>
+    <rect x="118" y="58" width="110" height="46" rx="8" fill="#ffffff" stroke="#2b4c93" stroke-width="1.5"/>
+    <text x="173" y="78.5" text-anchor="middle" font-size="11" font-weight="700" fill="#0b0b0b">go2rtc</text>
+    <text x="173" y="92.5" text-anchor="middle" font-size="9.5" fill="#52514e">relay / transcode</text>
+    <line x1="100" y1="81" x2="118" y2="81" stroke="#52514e" stroke-width="1.6" marker-end="url(#ahpd)"/>
+    <rect x="250" y="10" width="190" height="42" rx="8" fill="#ffffff" stroke="#2b4c93" stroke-width="1.5"/>
+    <text x="345" y="28" text-anchor="middle" font-size="10" font-weight="700" fill="#0b0b0b">WebRTC qua TURN (ưu tiên 1)</text>
+    <text x="345" y="41" text-anchor="middle" font-size="9" fill="#52514e">turn.techainer.com · HMAC tạm</text>
+    <rect x="250" y="58" width="190" height="42" rx="8" fill="#ffffff" stroke="#2b4c93" stroke-width="1.5"/>
+    <text x="345" y="76" text-anchor="middle" font-size="9.5" font-weight="700" fill="#0b0b0b">MSE qua tunnel (ưu tiên 2)</text>
+    <text x="345" y="89" text-anchor="middle" font-size="9" fill="#52514e">Cloudflare, khi WebRTC không tới</text>
+    <rect x="250" y="106" width="190" height="42" rx="8" fill="#ffffff" stroke="#2b4c93" stroke-width="1.5"/>
+    <text x="345" y="124" text-anchor="middle" font-size="10" font-weight="700" fill="#0b0b0b">MJPEG (ưu tiên 3 — cuối)</text>
+    <text x="345" y="137" text-anchor="middle" font-size="9" fill="#52514e">fallback cuối, luôn chạy được</text>
+    <line x1="228" y1="81" x2="250" y2="31" stroke="#52514e" stroke-width="1.6" marker-end="url(#ahpd)"/>
+    <line x1="228" y1="81" x2="250" y2="79" stroke="#52514e" stroke-width="1.6" marker-end="url(#ahpd)"/>
+    <line x1="228" y1="81" x2="250" y2="127" stroke="#52514e" stroke-width="1.6" marker-end="url(#ahpd)"/>
+    <rect x="470" y="58" width="110" height="46" rx="8" fill="#eef4fb" stroke="#2b4c93" stroke-width="1.5"/>
+    <text x="525" y="78.5" text-anchor="middle" font-size="11" font-weight="700" fill="#0b0b0b">Trình duyệt</text>
+    <text x="525" y="92.5" text-anchor="middle" font-size="10" fill="#52514e">tự chọn theo ưu tiên</text>
+    <line x1="440" y1="31" x2="470" y2="81" stroke="#52514e" stroke-width="1.6" marker-end="url(#ahpd)"/>
+    <line x1="440" y1="79" x2="470" y2="81" stroke="#52514e" stroke-width="1.6" marker-end="url(#ahpd)"/>
+    <line x1="440" y1="127" x2="470" y2="81" stroke="#52514e" stroke-width="1.6" marker-end="url(#ahpd)"/>
+    <rect x="8" y="190" width="110" height="46" rx="8" fill="#ffffff" stroke="#2b4c93" stroke-width="1.5"/>
+    <text x="63" y="210.5" text-anchor="middle" font-size="11" font-weight="700" fill="#0b0b0b">Capture riêng</text>
+    <text x="63" y="224.5" text-anchor="middle" font-size="10" fill="#52514e">đọc RTSP cho AI</text>
+    <line x1="54" y1="104" x2="63" y2="190" stroke="#52514e" stroke-width="1.6" marker-end="url(#ahpd)"/>
+    <rect x="148" y="190" width="190" height="46" rx="8" fill="#ffffff" stroke="#2b4c93" stroke-width="1.5"/>
+    <text x="243" y="210.5" text-anchor="middle" font-size="11" font-weight="700" fill="#0b0b0b">YOLO11s + InsightFace</text>
+    <text x="243" y="224.5" text-anchor="middle" font-size="10" fill="#52514e">CUDA (RTX 3090)</text>
+    <line x1="118" y1="213" x2="148" y2="213" stroke="#52514e" stroke-width="1.6" marker-end="url(#ahpd)"/>
+    <rect x="368" y="190" width="90" height="46" rx="8" fill="#ffffff" stroke="#2b4c93" stroke-width="1.5"/>
+    <text x="413" y="210.5" text-anchor="middle" font-size="11" font-weight="700" fill="#0b0b0b">SSE</text>
+    <text x="413" y="224.5" text-anchor="middle" font-size="10" fill="#52514e">kết quả + pts</text>
+    <line x1="338" y1="213" x2="368" y2="213" stroke="#52514e" stroke-width="1.6" marker-end="url(#ahpd)"/>
+    <rect x="488" y="190" width="160" height="46" rx="8" fill="#eef4fb" stroke="#2b4c93" stroke-width="1.5"/>
+    <text x="568" y="210.5" text-anchor="middle" font-size="11" font-weight="700" fill="#0b0b0b">Trình duyệt</text>
+    <text x="568" y="224.5" text-anchor="middle" font-size="10" fill="#52514e">vẽ overlay trên canvas</text>
+    <line x1="458" y1="213" x2="488" y2="213" stroke="#52514e" stroke-width="1.6" marker-end="url(#ahpd)"/>
+  </svg><figcaption>Hình A.1 — Kiến trúc đang chạy sau triển khai: đường video (go2rtc → WebRTC/MSE/MJPEG) tách khỏi đường AI (capture riêng → YOLO11s + InsightFace CUDA → SSE → canvas).</figcaption></figure>
+
+  <h3>Lỗi phát hiện &amp; đã vá trong quá trình triển khai</h3>
+  <ul>
+    <li><b>(a)</b> Proxy go2rtc ban đầu mở toàn bộ API quản trị (có thể chạy lệnh qua nguồn <code>exec:</code>) → đã chặn, chỉ cho <code>GET /api</code> và WS với luồng đã đăng ký.</li>
+    <li><b>(b)</b> Docker Compose nuốt dấu <code>"</code> trong cấu hình go2rtc → API 1984 / RTSP 8554 mở ra LAN → chuyển <code>command</code> sang dạng list, chỉ nghe <code>127.0.0.1</code>.</li>
+    <li><b>(c)</b> Reader RTSP rò kết nối khi dừng camera lúc đang reconnect.</li>
+    <li><b>(d)</b> Build image hỏng vì tải gói CUDA quá timeout → tăng <code>UV_HTTP_TIMEOUT</code> + cache mount.</li>
+  </ul>
+
+  <h3>Thay đổi hành vi cần biết</h3>
+  <ul>
+    <li>Ngưỡng nhận diện khuôn mặt: <b>0.30 → 0.40</b>.</li>
+    <li>Ẩn khối tài khoản demo ở màn đăng nhập.</li>
+    <li>Vùng "nguy hiểm" <code>cam_01</code> đang phủ lối đi văn phòng nên sinh <b>~10 cảnh báo/giờ</b> (đúng người thật) — cần vẽ lại vùng.</li>
+  </ul>
+
+  <h3>Việc còn lại</h3>
+  <ul>
+    <li>Vẽ lại vùng nguy hiểm <code>cam_01</code>.</li>
+    <li>Quyết định tắt đường frpc cũ.</li>
+    <li>Cloudflare Access.</li>
+    <li>Đổi mật khẩu demo trước khi demo cho khách.</li>
+    <li>9 yêu cầu PARTIAL trong ma trận (mục 7).</li>
+    <li>Chat Bot.</li>
+    <li>Cảnh báo khi app chết.</li>
+    <li>GPU dùng chung với job khác.</li>
+  </ul>
+
+  <h3>Rollback</h3>
+  <p>Nếu cần quay lại bản chạy tay trước đây:</p>
+  <pre><code># trong /mnt/ssd/horus-deploy/src
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml down
+# rồi chạy lại trong tmux của martin:
+FACE_SIM_THRESHOLD=0.3 uv run main.py</code></pre>
 </section>
 
 <!-- ============ 2. BẢO MẬT ============ -->
