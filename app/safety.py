@@ -36,6 +36,10 @@ INTRUSION_HYSTERESIS_PX = float(os.environ.get("INTRUSION_HYSTERESIS_PX", "12"))
 INTRUSION_MIN_FRAMES = int(os.environ.get("INTRUSION_MIN_FRAMES", "2"))
 # Số giây tối thiểu phải "đứng" ở trạng thái mới trước khi coi là đã chuyển
 INTRUSION_MIN_DWELL_S = float(os.environ.get("INTRUSION_MIN_DWELL_S", "1.0"))
+# Box dưới ngưỡng này không được BẮT ĐẦU tích vi phạm. Đo trên cam_01: báo nhầm
+# ban đêm (đồ vật dưới hồng ngoại) đều 0.25–0.49, người thật 0.60–0.92. Box đã
+# xác nhận vẫn giữ trạng thái dù conf tụt (người quay lưng, bị che một phần).
+INTRUSION_MIN_CONF = float(os.environ.get("INTRUSION_MIN_CONF", "0.5"))
 # Track không thấy lại quá lâu thì dọn trạng thái, tránh rò bộ nhớ theo track_id
 TRACK_STATE_TTL_SECONDS = 10.0
 # Khung hình chuẩn dùng để quy đổi biên độ hysteresis theo tỉ lệ khung hình thật
@@ -54,6 +58,12 @@ def _margin_px(width: int) -> float:
 
 def _to_pixels(points: List[dict], width: int, height: int) -> np.ndarray:
     return np.array([[int(p["x"] * width), int(p["y"] * height)] for p in points], np.int32)
+
+
+def _low_conf(confidences, idx: int) -> bool:
+    if confidences is None or idx >= len(confidences):
+        return False
+    return float(confidences[idx]) < INTRUSION_MIN_CONF
 
 
 def _feet_point(box) -> tuple:
@@ -251,7 +261,8 @@ class IntrusionDetector:
         self._track_state: Dict[str, Dict[int, dict]] = {}
 
     def check(self, person_boxes, track_ids, width: int, height: int, now: datetime,
-              occluded: Optional[List[bool]] = None) -> List[dict]:
+              occluded: Optional[List[bool]] = None,
+              confidences: Optional[List[float]] = None) -> List[dict]:
         """Trả về danh sách vi phạm VỪA CHUYỂN TRẠNG THÁI trong khung hình này.
 
         Mỗi phần tử: ``{"zone", "indices", "dwell_seconds"}`` — ``indices`` là vị
@@ -264,9 +275,11 @@ class IntrusionDetector:
         for zone in self.zones.zones():
             rule = zone.get("rule")
             if rule == RULE_RESTRICTED:
-                hits = self._restricted_hits(zone, person_boxes, track_ids, occluded, width, height, now)
+                hits = self._restricted_hits(zone, person_boxes, track_ids, occluded, width, height, now,
+                                             confidences)
             elif rule == RULE_CROSSING:
-                hits = self._crossing_hits(zone, person_boxes, track_ids, occluded, width, height, now)
+                hits = self._crossing_hits(zone, person_boxes, track_ids, occluded, width, height, now,
+                                           confidences)
             else:
                 continue
             if not hits:
@@ -321,7 +334,7 @@ class IntrusionDetector:
                 del state[tid]
 
     def _restricted_hits(self, zone, person_boxes, track_ids, occluded,
-                          width, height, now) -> List[Tuple[int, float]]:
+                          width, height, now, confidences=None) -> List[Tuple[int, float]]:
         points = zone.get("points", [])
         if len(points) < 3:
             return []
@@ -352,6 +365,10 @@ class IntrusionDetector:
                     st["candidate_frames"] = 0
                 continue
 
+            if dist >= margin and _low_conf(confidences, idx):
+                # Có thể là đồ vật bị nhận nhầm — không tích dồn, cũng không xoá
+                # dwell đang tích (conf người thật dao động quanh ngưỡng)
+                continue
             if dist >= margin:
                 # Lún sâu hơn biên độ vào trong đa giác thu hẹp -> tích dwell
                 if st["candidate_since"] is None:
@@ -373,7 +390,7 @@ class IntrusionDetector:
         return hits
 
     def _crossing_hits(self, zone, person_boxes, track_ids, occluded,
-                        width, height, now) -> List[Tuple[int, float]]:
+                        width, height, now, confidences=None) -> List[Tuple[int, float]]:
         points = zone.get("points", [])
         if len(points) < 2:
             return []
@@ -406,6 +423,9 @@ class IntrusionDetector:
                 continue
 
             side = SIDE_A if dist > 0 else SIDE_B
+            if _low_conf(confidences, idx):
+                # Box mờ không được chốt phía mới (tránh "vượt vạch" do nhận nhầm)
+                continue
             if st["candidate_side"] != side:
                 st["candidate_side"] = side
                 st["candidate_since"] = now

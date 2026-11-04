@@ -1287,7 +1287,8 @@ class VideoProcessor:
                 # (``now`` đã lấy sớm hơn ở bước quyết định nhịp AI, dùng lại để
                 # toàn bộ khung này mang ĐÚNG MỘT mốc thời gian nhất quán)
                 intrusions = self.intrusion.check(person_boxes, track_ids, w_img, h_img, now,
-                                                  occluded=occluded_flags)
+                                                  occluded=occluded_flags,
+                                                  confidences=confidences)
                 intrusion_indices = {idx for v in intrusions for idx in v["indices"]}
 
                 # 4. Gắn khuôn mặt đã quét được vào người trong vùng

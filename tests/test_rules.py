@@ -245,6 +245,26 @@ for k in range(MIN_SIGHTINGS):
 check("phiên: không truyền 'now' -> giữ hành vi cũ, chỉ cần đủ số lượt",
       "p1" in sess_no_now.present_ids())
 
+# ---------------------------------------------------------------- ngưỡng conf vùng cấm
+print("\n[conf] Box mờ (đồ vật nhận nhầm ban đêm) không kích hoạt vùng cấm")
+det_c = IntrusionDetector(_zone_store([restricted]))
+fired = []
+for i in range(20):  # 6 giây đứng sâu trong vùng, conf 0.3
+    fired += det_c.check([deep_inside], [300], W, H, now + timedelta(seconds=0.3 * i),
+                         confidences=[0.3])
+check("conf 0.3 đứng yên 6 s trong vùng -> không báo", fired == [], str(fired))
+fired = []
+for i in range(20):
+    fired += det_c.check([deep_inside], [301], W, H, now + timedelta(seconds=0.3 * i),
+                         confidences=[0.85])
+check("conf 0.85 -> báo đúng một lần", len(fired) == 1, str(fired))
+det_c2 = IntrusionDetector(_zone_store([restricted]))
+fired = []
+for i, c in enumerate([0.8, 0.4, 0.8, 0.4, 0.8, 0.8, 0.8, 0.8]):
+    fired += det_c2.check([deep_inside], [302], W, H, now + timedelta(seconds=0.3 * i),
+                          confidences=[c])
+check("conf dao động quanh ngưỡng vẫn báo được (không reset dwell)", len(fired) == 1, str(fired))
+
 # ---------------------------------------------------------------- kết luận
 print()
 if failures:
