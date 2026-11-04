@@ -181,19 +181,27 @@ function drawDetections(ctx, w, h, result, zonesMeta) {
 
     const hud = result.hud || {};
     ctx.font = '13px "Segoe UI", sans-serif';
-    ctx.fillStyle = HUD_COLORS.text;
     ctx.textBaseline = 'top';
-    if (hud.camera_name) ctx.fillText(hud.camera_name, 10, 8);
-    if (hud.time_str) ctx.fillText(hud.time_str, 10, 26);
+    // Nền tối sau chữ: camera tự in OSD (giờ, tên) ở góc trên, chữ HUD đè lên
+    // nền sáng/OSD sẽ không đọc được
+    const label = (text, x, y, color, align = 'left') => {
+        const tw = ctx.measureText(text).width;
+        const left = align === 'right' ? x - tw : x;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+        ctx.fillRect(left - 4, y - 2, tw + 8, 18);
+        ctx.fillStyle = color;
+        ctx.fillText(text, left, y);
+        return tw;
+    };
+    const nameW = hud.camera_name ? label(hud.camera_name, 10, 8, HUD_COLORS.text) : 0;
+    if (hud.time_str) label(hud.time_str, 10, 28, HUD_COLORS.text);
+    if (hud.roll_line) label(hud.roll_line, 10, 48, HUD_COLORS.roll);
     if (hud.stat_line) {
-        ctx.fillStyle = HUD_COLORS.stat;
-        ctx.textAlign = 'right';
-        ctx.fillText(hud.stat_line, w - 10, 8);
-        ctx.textAlign = 'left';
-    }
-    if (hud.roll_line) {
-        ctx.fillStyle = HUD_COLORS.roll;
-        ctx.fillText(hud.roll_line, 10, 44);
+        // Khung nhỏ không đủ chỗ cho cả tên camera và dòng thống kê trên một
+        // hàng thì đưa dòng thống kê xuống đáy để không chồng chữ
+        const statW = ctx.measureText(hud.stat_line).width;
+        if (nameW + statW + 40 <= w) label(hud.stat_line, w - 10, 8, HUD_COLORS.stat, 'right');
+        else label(hud.stat_line, 10, h - 24, HUD_COLORS.stat);
     }
 }
 

@@ -2886,3 +2886,8 @@ a.btn-clip-ctrl {
     font-size: 13px;
     font-weight: 600;
 }
+
+/* <img> MJPEG chưa có src (camera chưa chạy) hiện icon ảnh vỡ + alt — ẩn đi,
+   khối "Chưa chạy" đã báo trạng thái */
+.camera-tile-video img:not([src]),
+.camera-tile-video img[src=""] { visibility: hidden; }
