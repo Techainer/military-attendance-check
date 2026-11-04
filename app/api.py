@@ -259,6 +259,48 @@ async def _run_camera(runtime: CameraRuntime):
         runtimes.pop(runtime.camera_id, None)
 
 
+def _set_autostart(camera_id: str, value: bool) -> None:
+    """Ghi nhớ camera đang được bật để app khởi động lại (container restart,
+    reboot máy) tự chạy lại — trước đây restart xong mọi camera tắt âm thầm."""
+    cameras = read_json_list(cameras_file)
+    for cam in cameras:
+        if cam.get("id") == camera_id and cam.get("autostart") != value:
+            cam["autostart"] = value
+            write_json_list(cameras_file, cameras)
+            break
+
+
+async def _resume_cameras():
+    """Bật lại các camera có autostart. Camera chưa kết nối được thì thử lại
+    với khoảng chờ tăng dần, tới khi được hoặc có người tắt autostart."""
+    from app.video_processor import probe_stream
+    pending = {c["id"] for c in _load_cameras()
+               if c.get("autostart") and c.get("enabled", True) and c.get("source_uri")}
+    delay = 10.0
+    while pending:
+        for cam in _load_cameras():
+            cid = cam.get("id")
+            if cid not in pending:
+                continue
+            if not cam.get("autostart") or is_camera_running(cid):
+                pending.discard(cid)
+                continue
+            source = cam["source_uri"]
+            reason = await asyncio.to_thread(probe_stream, source) if "://" in source else (
+                None if os.path.exists(source) else "không thấy file nguồn")
+            if reason:
+                print(f"[Startup] Chưa bật lại được camera {cid}: {reason}")
+                continue
+            runtime = await asyncio.to_thread(CameraRuntime, cam)
+            runtimes[cid] = runtime
+            asyncio.create_task(_run_camera(runtime))
+            pending.discard(cid)
+            print(f"[Startup] Đã bật lại camera {cid}")
+        if pending:
+            await asyncio.sleep(delay)
+            delay = min(300.0, delay * 2)
+
+
 async def _retention_loop():
     """Chạy dọn dẹp file sự kiện cũ và mồ côi theo lịch trình."""
     global _retention_task
@@ -327,6 +369,9 @@ async def startup_event():
     if go2rtc.GO2RTC_ENABLED:
         asyncio.create_task(asyncio.to_thread(go2rtc.sync_all, _load_cameras()))
         print("[Startup] Đã gửi cấu hình luồng tới go2rtc")
+
+    if os.environ.get("CAMERA_AUTOSTART", "1") == "1":
+        asyncio.create_task(_resume_cameras())
 
 
 @app.on_event("shutdown")
@@ -1744,6 +1789,7 @@ async def v1_start_camera(camera_id: str, background_tasks: BackgroundTasks,
     runtime = await asyncio.to_thread(CameraRuntime, camera)
     runtimes[camera_id] = runtime
     background_tasks.add_task(_run_camera, runtime)
+    _set_autostart(camera_id, True)
     return _camera_out(camera)
 
 
@@ -1754,6 +1800,7 @@ async def v1_stop_camera(camera_id: str, _qtht=Depends(require_qtht)):
     runtime = runtimes.get(camera_id)
     if runtime is not None:
         runtime.processor.stop()
+    _set_autostart(camera_id, False)
     return _camera_out(cameras[index])
 
 
