@@ -44,9 +44,16 @@ services:
     network_mode: host
     # API (chứa nguồn RTSP có mật khẩu) và RTSP restream chỉ nghe localhost;
     # trình duyệt đi qua proxy /go2rtc/ của horus-ai. WebRTC giữ :8555 cho LAN.
-    command: >-
-      go2rtc -config /config/go2rtc.yaml -config /config/ice.yaml
-      -config {"api":{"listen":"127.0.0.1:${GO2RTC_API_PORT:-1984}"},"rtsp":{"listen":"127.0.0.1:18554"},"webrtc":{"listen":":${GO2RTC_WEBRTC_PORT:-8555}"}}
+    # Dạng list, KHÔNG dùng chuỗi: compose tách chuỗi kiểu shell và nuốt mất
+    # dấu " trong JSON -> go2rtc đọc lỗi, âm thầm mở API/RTSP ra 0.0.0.0
+    command:
+      - go2rtc
+      - -config
+      - /config/go2rtc.yaml
+      - -config
+      - /config/ice.yaml
+      - -config
+      - '{"api":{"listen":"127.0.0.1:${GO2RTC_API_PORT:-1984}"},"rtsp":{"listen":"127.0.0.1:18554"},"webrtc":{"listen":":${GO2RTC_WEBRTC_PORT:-8555}"}}'
     # ice.yaml: STUN/TURN cho chính go2rtc, sinh bằng scripts/gen_go2rtc_ice.py
     # (không có file thì go2rtc bỏ qua, dùng STUN mặc định)
     volumes:
