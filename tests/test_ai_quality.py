@@ -299,6 +299,22 @@ extracted_lenient = fe_small.extract_face_and_embedding(frame, enforce_quality=F
 check("Không bật enforce_quality -> không từ chối (đường nhận diện lúc chạy không đổi)",
       extracted_lenient is not None)
 
+# ---------------------------------------------------------------- quét lại mặt có giãn cách
+print("\n[rescan] Không quét lại mặt người lạ ở mọi khung, bỏ qua track đã khoá")
+from app import video_processor as _vp  # noqa: E402
+rs = _FakeSelf()
+rs.track_identity = {7: {"person": {"id": "a"}}}
+rs._last_rescan = {}
+boxes = [(100, 100, 200, 400), (300, 100, 400, 400), (500, 100, 600, 400)]
+tids = [7, 8, 9]
+pick = lambda t: VideoProcessor._rescan_regions(rs, boxes, {0, 1, 2}, set(), (720, 1280, 3), tids, t)
+r0 = pick(100.0)
+check("track đã khoá danh tính (7) không bị quét lại", len(r0) == 2, str(r0))
+r1 = pick(100.2)
+check("trong thời gian giãn cách -> không quét lại", r1 == [], str(r1))
+r2 = pick(100.0 + _vp.FACE_RESCAN_COOLDOWN_S + 0.01)
+check("hết giãn cách -> quét lại", len(r2) == 2, str(r2))
+
 # ---------------------------------------------------------------- kết luận
 print()
 if failures:

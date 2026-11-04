@@ -327,6 +327,8 @@ IDENTITY_REVOKE_HITS = int(os.environ.get("IDENTITY_REVOKE_HITS", "3"))
 # Số vùng người được quét lại khuôn mặt ở độ phân giải cao mỗi khung hình;
 # CPU yếu thì ít lần hơn, lấy từ app.hw theo phần cứng
 MAX_FACE_RESCANS = _HW.max_face_rescans
+# Mỗi track chưa định danh được quét lại mặt tối đa 1 lần / khoảng này (giây)
+FACE_RESCAN_COOLDOWN_S = float(os.environ.get("FACE_RESCAN_COOLDOWN_S", "1.0"))
 # Chỉ quét lại những người có bề ngang box nhỏ hơn ngần này (mặt bị thu nhỏ khi
 # quét cả khung hình nên hay bị bỏ sót)
 FACE_RESCAN_MAX_WIDTH = 300
@@ -841,6 +843,8 @@ class VideoProcessor:
         self._stop_requested = False
         # track_id -> {"scores": {person_id: điểm cộng dồn}, "person": dict, "last_seen": ts}
         self.track_identity: Dict[int, dict] = {}
+        # track_id -> mốc monotonic lần cuối quét lại mặt (xem _rescan_regions)
+        self._last_rescan: Dict[int, float] = {}
 
         # Trạng thái chia sẻ giữa AI task và render task
         self.reader: Optional[FrameSource] = None
@@ -992,28 +996,53 @@ class VideoProcessor:
         except Exception as e:
             print(f"[Camera] Lỗi dựng đoạn ghi nền cho sự kiện {event.get('id')}: {e}")
 
-    def _rescan_regions(self, person_boxes, in_zone_indices, claimed, frame_shape) -> list:
-        """Chọn vùng ảnh quanh những người trong vùng chưa định danh để quét lại."""
+    def _rescan_regions(self, person_boxes, in_zone_indices, claimed, frame_shape,
+                        track_ids=None, now_mono: Optional[float] = None) -> list:
+        """Chọn vùng ảnh quanh những người trong vùng chưa định danh để quét lại.
+
+        Quét lại là phần đắt nhất của một khung (~30 ms/vùng, chạy tuần tự). Bỏ
+        qua track đã khoá danh tính, và mỗi track chỉ quét lại tối đa một lần mỗi
+        ``FACE_RESCAN_COOLDOWN_S`` — người lạ (chưa đăng ký) không bao giờ khớp
+        nên trước đây bị quét lại ở MỌI khung, ăn hết thời gian AI.
+        """
         h_img, w_img = frame_shape[:2]
+        now_mono = time.monotonic() if now_mono is None else now_mono
         candidates = []
         for p_idx in in_zone_indices:
             if p_idx in claimed:
                 continue
+            tid = track_ids[p_idx] if track_ids is not None and p_idx < len(track_ids) else None
+            if tid is not None and tid >= 0:
+                entry = self.track_identity.get(tid)
+                if entry is not None and entry.get("person") is not None:
+                    continue
+                last = self._last_rescan.get(tid)
+                if last is not None and now_mono - last < FACE_RESCAN_COOLDOWN_S:
+                    continue
             x1, y1, x2, y2 = person_boxes[p_idx]
             width = x2 - x1
             if width <= 0 or width > FACE_RESCAN_MAX_WIDTH:
                 continue
             # Chỉ lấy phần thân trên, nơi có khuôn mặt, để tỉ lệ phóng to cao hơn
             pad = int(width * 0.25)
-            candidates.append((width, (
+            # Ưu tiên track lâu chưa được quét nhất, rồi tới box to (rõ mặt hơn)
+            waited = now_mono - self._last_rescan.get(tid, 0.0) if tid is not None else 1e9
+            candidates.append((waited, width, tid, (
                 max(0, x1 - pad),
                 max(0, y1 - pad),
                 min(w_img, x2 + pad),
                 min(h_img, y1 + int((y2 - y1) * 0.6))
             )))
 
-        candidates.sort(key=lambda c: c[0], reverse=True)
-        return [region for _w, region in candidates[:MAX_FACE_RESCANS]]
+        candidates.sort(key=lambda c: (c[0], c[1]), reverse=True)
+        chosen = candidates[:MAX_FACE_RESCANS]
+        for _waited, _w, tid, _region in chosen:
+            if tid is not None and tid >= 0:
+                self._last_rescan[tid] = now_mono
+        if len(self._last_rescan) > 1000:
+            for old in sorted(self._last_rescan, key=self._last_rescan.get)[:500]:
+                del self._last_rescan[old]
+        return [region for _waited, _w, _tid, region in chosen]
 
     def _remember_identity(self, track_id, person, similarity, now_mono) -> None:
         """Cộng dồn bằng chứng nhận diện cho một track; khoá cứng khi đủ điểm.
@@ -1300,7 +1329,8 @@ class VideoProcessor:
                 )
 
                 # 4b. Người trong vùng còn lại: cắt riêng vùng ảnh rồi quét lại.
-                regions = self._rescan_regions(person_boxes, in_zone_indices, claimed_boxes, frame.shape)
+                regions = self._rescan_regions(person_boxes, in_zone_indices, claimed_boxes, frame.shape,
+                                               track_ids, time.monotonic())
                 if regions:
                     rescanned = await asyncio.to_thread(
                         self.face_engine.recognize_in_regions, frame, regions
