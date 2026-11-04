@@ -1,0 +1,731 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review kỹ thuật Horus · Giám sát huấn luyện AI · 02/11/2026</title>
+<style>
+:root{
+  --navy:#2b4c93; --cyan:#29b6e8; --ink:#0b0b0b; --ink2:#52514e; --muted:#76746e;
+  --line:#e4e3df; --soft:#f6f6f4; --surface:#fcfcfb;
+  --good:#0ca30c; --good-ink:#006300; --warn:#fab219; --warn-ink:#8a5a00;
+  --serious:#ec835a; --serious-ink:#9a3d12; --crit:#d03b3b; --crit-ink:#a61f1f;
+}
+*{box-sizing:border-box}
+html{font-size:10.5pt}
+body{margin:0;font-family:"Be Vietnam Pro","DejaVu Sans",sans-serif;color:var(--ink);background:#fff;line-height:1.5;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+main{max-width:980px;margin:0 auto;padding:24px}
+h1,h2,h3,h4{font-weight:700;line-height:1.25;margin:0}
+h2{font-size:1.55rem;color:var(--navy);margin:0 0 .6rem;padding-bottom:.35rem;border-bottom:3px solid transparent;border-image:linear-gradient(90deg,var(--cyan),var(--navy)) 1}
+h3{font-size:1.12rem;margin:1.2rem 0 .45rem;color:var(--ink)}
+h4{font-size:.98rem;margin:.9rem 0 .3rem}
+h2,h3,h4{break-after:avoid}
+p{margin:.35rem 0 .6rem}
+ul,ol{margin:.3rem 0 .7rem;padding-left:1.3rem}
+li{margin:.15rem 0}
+code{font-family:"Noto Sans Mono","DejaVu Sans Mono",monospace;font-size:.86em;background:var(--soft);border:1px solid var(--line);border-radius:4px;padding:0 .25em;word-break:normal;overflow-wrap:anywhere}
+td code{white-space:normal}
+.loc td:nth-child(3){width:30%}
+pre{font-family:"Noto Sans Mono","DejaVu Sans Mono",monospace;font-size:.8rem;background:#0f1b33;color:#e6edf7;border-radius:8px;padding:.7rem .9rem;overflow-x:auto;white-space:pre-wrap;word-break:break-word}
+pre code{background:none;border:0;color:inherit;padding:0}
+section{margin-bottom:1.6rem}
+.page{break-before:page}
+table{width:100%;border-collapse:collapse;margin:.4rem 0 .9rem;font-size:.86rem}
+th,td{border-bottom:1px solid var(--line);padding:.36rem .45rem;text-align:left;vertical-align:top}
+th{background:#eef2f9;color:var(--navy);font-weight:700;font-size:.8rem;text-transform:uppercase;letter-spacing:.02em}
+tr{break-inside:avoid}
+.tbl-wrap{overflow-x:auto}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.small{font-size:.82rem;color:var(--ink2)}
+.muted{color:var(--muted)}
+figure{margin:.6rem 0 1rem;break-inside:avoid}
+figure svg{width:100%;height:auto;display:block;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:6px}
+figcaption{font-size:.8rem;color:var(--ink2);margin-top:.3rem}
+.callout{border-left:4px solid var(--navy);background:#f1f5fc;padding:.6rem .85rem;border-radius:0 8px 8px 0;margin:.6rem 0 .9rem;break-inside:avoid}
+.callout.crit{border-color:var(--crit);background:#fdf1f1}
+.callout.warn{border-color:var(--warn);background:#fff8e8}
+.callout.good{border-color:var(--good);background:#eff9ef}
+.callout b:first-child{display:block;margin-bottom:.15rem}
+.tag{display:inline-block;font-size:.72rem;font-weight:700;padding:.05rem .45rem;border-radius:999px;white-space:nowrap;border:1px solid}
+.tag.crit{color:var(--crit-ink);background:#fbe5e5;border-color:#f0b9b9}
+.tag.serious{color:var(--serious-ink);background:#fdece4;border-color:#f3c3ad}
+.tag.warn{color:var(--warn-ink);background:#fff3d6;border-color:#f3d48c}
+.tag.good{color:var(--good-ink);background:#e3f5e3;border-color:#a8dca8}
+.tag.info{color:var(--navy);background:#e7eefa;border-color:#b9c9ea}
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:.6rem;margin:.6rem 0 1rem}
+.tile{border:1px solid var(--line);border-radius:10px;padding:.6rem .7rem;background:#fff;break-inside:avoid}
+.tile .v{font-size:1.55rem;font-weight:700;color:var(--navy);line-height:1.1;font-variant-numeric:tabular-nums}
+.tile .v.bad{color:var(--crit-ink)}
+.tile .l{font-size:.78rem;color:var(--ink2);margin-top:.2rem}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+.cover{min-height:255mm;display:flex;flex-direction:column;justify-content:space-between;padding:10mm 4mm}
+.cover .logo{width:62mm}
+.cover h1{font-size:2.3rem;color:var(--navy);margin-top:30mm}
+.cover .sub{font-size:1.15rem;color:var(--ink2);margin-top:.6rem}
+.cover .band{height:6px;border-radius:3px;background:linear-gradient(90deg,var(--cyan),var(--navy));margin:10mm 0 6mm;width:60%}
+.cover dl{display:grid;grid-template-columns:42mm 1fr;gap:.3rem .8rem;font-size:.95rem;margin:0}
+.cover dt{color:var(--ink2)}
+.cover dd{margin:0;font-weight:600}
+.cover .conf{font-size:.8rem;color:var(--crit-ink);font-weight:700;border:1px solid #f0b9b9;background:#fdf1f1;border-radius:6px;padding:.4rem .6rem;display:inline-block}
+.toc ol{columns:2;column-gap:2rem;font-size:.95rem}
+.score td:first-child{font-weight:600;width:22%}
+.score td:nth-child(2){width:16%}
+table.req{font-size:.8rem}
+table.req th:nth-child(1){width:7%}
+table.req th:nth-child(2){width:5%}
+table.req td:nth-child(1){white-space:nowrap}
+table.req th:nth-child(3){width:6%}
+table.req th:nth-child(4){width:24%}
+table.req th:nth-child(5){width:12%}
+table.req tr.grp td{background:#f4f6fa;color:var(--navy)}
+table.req td ul{margin:.2rem 0 0;padding-left:1rem}
+.kbd{font-family:"Noto Sans Mono","DejaVu Sans Mono",monospace;font-size:.85em}
+@page{size:A4;margin:20mm 15mm 18mm 15mm}
+@page:first{margin:12mm 15mm}
+@media print{
+  html{font-size:9.6pt}
+  main{max-width:none;padding:0}
+  a{color:inherit;text-decoration:none}
+  .tbl-wrap{overflow:visible}
+}
+@media (max-width:760px){
+  main{padding:14px}
+  .tiles{grid-template-columns:repeat(2,1fr)}
+  .two{grid-template-columns:1fr}
+  .toc ol{columns:1}
+  .cover h1{font-size:1.7rem;margin-top:12mm}
+  .cover dl{grid-template-columns:1fr}
+  th,td{padding:.3rem}
+  table{font-size:.8rem}
+  table.req thead{display:none}
+  table.req tr{display:block;border-bottom:1px solid var(--line);padding:.35rem 0}
+  table.req td{display:block;border:0;padding:.12rem .3rem}
+  table.req td:nth-child(-n+3){display:inline-block;font-weight:700;color:var(--navy)}
+  table.req tr.grp td{display:block}
+}
+</style>
+</head>
+<body>
+<main>
+
+<!-- ============ BÌA ============ -->
+<section class="cover">
+  <div>
+    <img class="logo" src="assets/techainer-logo.svg" alt="Techainer">
+    <h1>Review kỹ thuật hệ thống<br>Horus · Giám sát huấn luyện AI</h1>
+    <div class="sub">Stream giật / trễ, độ phủ yêu cầu, tối ưu, chất lượng AI, vận hành, UI/UX responsive và lộ trình cải thiện</div>
+    <div class="band"></div>
+    <dl>
+      <dt>Ngày</dt><dd>02/11/2026</dd>
+      <dt>Repo</dt><dd><code>horus/military-attendance-check</code></dd>
+      <dt>Commit review</dt><dd>local <code>6fc2929</code> · đang deploy <code>ac6f28b</code> (chậm 3 commit, chỉ khác Docker và script probe; mã app giống nhau)</dd>
+      <dt>Môi trường đo</dt><dd><code>techainer-rtx3090-1</code> · https://military-attendance-dev.techainer.com</dd>
+      <dt>Yêu cầu đối chiếu</dt><dd>FunctionList_AI Giám Sát &amp; Chat Bot_v0.3.xlsx</dd>
+      <dt>Đối tượng đọc</dt><dd>Team dev nội bộ</dd>
+      <dt>Phương pháp</dt><dd>Đọc code, đo trực tiếp trên server (chỉ đọc), đo stream qua Cloudflare, chụp UI ở 3 kích thước màn hình</dd>
+    </dl>
+  </div>
+  <div><span class="conf">NỘI BỘ · Tài liệu có nêu lỗ hổng chưa vá — không gửi ra ngoài. Mọi mật khẩu/token đã được che.</span></div>
+</section>
+
+<!-- ============ MỤC LỤC + TÓM TẮT ============ -->
+<section class="page toc">
+  <h2>Mục lục</h2>
+  <ol>
+    <li>Tóm tắt điều hành</li>
+    <li>Bảo mật khẩn cấp</li>
+    <li>Stream: giật, đứng hình và trễ — số đo &amp; nguyên nhân</li>
+    <li>Kỹ thuật stream: có cần WebRTC?</li>
+    <li>Tối ưu: fix nhanh và tái kiến trúc</li>
+    <li>Đánh giá AI</li>
+    <li>Ma trận yêu cầu (FunctionList v0.3)</li>
+    <li>Vận hành, dữ liệu, triển khai</li>
+    <li>UI/UX &amp; responsive</li>
+    <li>Lộ trình &amp; tiêu chí nghiệm thu</li>
+    <li>Phụ lục: số liệu gốc &amp; cách đo</li>
+  </ol>
+
+  <h2 style="margin-top:1.4rem">1. Tóm tắt điều hành</h2>
+  <div class="tiles">
+    <div class="tile"><div class="v bad">0.15–0.25</div><div class="l">fps thực tới trình duyệt (camera phát 25 fps, cấu hình 5 fps)</div></div>
+    <div class="tile"><div class="v bad">3.0 s</div><div class="l">tuổi trung bình của hình khi tới trình duyệt (p95 5.4 s, max 6.0 s)</div></div>
+    <div class="tile"><div class="v bad">~13 s</div><div class="l">độ cũ tệ nhất người xem có thể thấy (tuổi frame + thời gian giữ hình)</div></div>
+    <div class="tile"><div class="v">19/28</div><div class="l">dòng AI Giám sát xong về chức năng; 9 một phần. Phân quyền chưa đạt. Chat Bot 0/63</div></div>
+  </div>
+
+  <p><b>Kết luận chính.</b> Stream giật <b>không do Cloudflare</b>: đo trên localhost của server ra cùng con số, tunnel chỉ cộng ~0.16 s. Gốc rễ nằm ở kiến trúc: <b>hình chỉ được phát ra sau khi AI xử lý xong frame đó</b>, trong một vòng lặp tuần tự / camera. AI lại đang chạy chủ yếu trên CPU (onnxruntime bản CPU, giải mã HEVC bằng CPU) trên một máy 8 core đang chạy chung job train của người khác (load ~22). Vì thế: fps thấp (giật), thỉnh thoảng đứng hẳn vài giây (ffmpeg ghi clip và ghi file chặn vòng lặp), và trễ 3–13 s (người đi qua rồi mới hiện).</p>
+
+  <table class="score">
+    <thead><tr><th>Hạng mục</th><th>Đánh giá</th><th>Nhận xét ngắn</th></tr></thead>
+    <tbody>
+      <tr><td>Bảo mật</td><td><span class="tag crit">Nghiêm trọng</span></td><td>API public không auth; <code>GET /api/v1/cameras</code> trả mật khẩu RTSP ra Internet; mọi API ghi/xoá mở; token frp nằm trong git.</td></tr>
+      <tr><td>Hiệu năng stream</td><td><span class="tag crit">Nghiêm trọng</span></td><td>0.15–0.25 fps, trễ 3 s trung bình, đứng hình 5–7 s. Video bị trói vào tốc độ AI.</td></tr>
+      <tr><td>Vận hành</td><td><span class="tag crit">Nghiêm trọng</span></td><td>Chạy tay trong tmux, không tự khởi động lại; <code>data/events</code> 166 GB, đĩa 91%, không có retention.</td></tr>
+      <tr><td>Chất lượng AI</td><td><span class="tag serious">Cần cải thiện</span></td><td>Pipeline hợp lý (YOLO11 + ByteTrack + SCRFD/ArcFace) nhưng: tracker cấu hình 30 fps khi chạy &lt;1 fps, ngưỡng mặt 0.30 quá thấp, không reconnect, xâm nhập không có dwell/hysteresis, không chống giả mạo ảnh.</td></tr>
+      <tr><td>Độ phủ yêu cầu</td><td><span class="tag warn">Khá</span> nếu Chat Bot ngoài phạm vi<br><span class="tag crit">Thấp</span> (19/91) nếu trong phạm vi</td><td>AI Giám sát: 19/28 xong về chức năng, 9 một phần (giám sát tự động theo lịch, khu vực là nhóm camera, khu vực trường bắn, màn tổng hợp quân số, tiến độ hoàn thành). Không dòng nào đạt phân quyền ở backend. Chat Bot: 0/63, chưa có code; cần xác nhận phạm vi.</td></tr>
+      <tr><td>UI/UX</td><td><span class="tag serious">Cần cải thiện</span></td><td>Desktop ổn; mobile/tablet vỡ (nội dung rộng tới 1359 px ở màn 375 px). Gần như không có a11y. Thiếu trạng thái "hình cũ/mất tín hiệu".</td></tr>
+      <tr><td>Chất lượng code &amp; test</td><td><span class="tag warn">Khá</span></td><td>Có 600+ check (API, AI logic, UI jsdom). Chưa test vòng video end-to-end; test ghi đè <code>data/*.json</code> thật; JSON storage không khoá.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>5 việc làm ngay (tuần này)</h3>
+  <ol>
+    <li><b>Khoá truy cập public</b>: bật Cloudflare Access cho domain, tắt đường frpc, ẩn <code>source_uri</code> khỏi API, <b>đổi mật khẩu 2 camera</b> và token frp.</li>
+    <li><b>Dọn &amp; đặt retention</b> cho <code>data/events</code> (166 GB, đĩa 91% — sắp đầy sẽ làm chết cả app lẫn job khác trên máy).</li>
+    <li><b>Fix nhanh stream</b>: phát hình thô ngay sau capture (không chờ AI), đẩy ffmpeg và ghi file ra nền, bỏ các model thừa, cho AI đọc luồng phụ thay vì 1080p. Máy thật của khách <b>chỉ có CPU</b>, nên dùng OpenVINO và cấu hình tự thích ứng phần cứng (mục 5.3–5.4). <code>onnxruntime-gpu</code> chỉ dành cho máy dev.</li>
+    <li><b>Chạy app bằng Docker/systemd</b> có restart, giới hạn CPU, tách khỏi job train (hoặc dời job train).</li>
+    <li><b>Bắt đầu PoC go2rtc</b> (WebRTC + fallback MSE qua WebSocket) và overlay vẽ phía trình duyệt — đây là lời giải dứt điểm cho giật và trễ.</li>
+  </ol>
+</section>
+
+<!-- ============ 2. BẢO MẬT ============ -->
+<section class="page">
+  <h2>2. Bảo mật khẩn cấp</h2>
+  <div class="callout crit"><b>Đang lộ ra Internet ngay lúc viết báo cáo</b>Đã kiểm chứng: gọi <code>GET https://military-attendance-dev.techainer.com/api/v1/cameras</code> không cần đăng nhập trả về <code>source_uri</code> dạng <code>rtsp://user:&lt;mật khẩu&gt;@192.168.1.x/...</code> cho cả 2 camera. Camera nằm trong LAN nên chưa bị truy cập trực tiếp từ ngoài, nhưng mật khẩu đã lộ và cần đổi.</div>
+  <table>
+    <thead><tr><th>#</th><th>Vấn đề</th><th>Bằng chứng</th><th>Mức</th><th>Cách xử lý</th></tr></thead>
+    <tbody>
+      <tr><td>S1</td><td>Lộ mật khẩu RTSP qua API</td><td><code>app/api.py:1343</code> <code>_camera_out</code> trả nguyên <code>**camera</code>; hàm <code>mask_credentials</code> có sẵn ở <code>video_processor.py:140</code> nhưng không dùng ở đây</td><td><span class="tag crit">P0</span></td><td>Che bằng <code>mask_credentials</code> khi trả ra; PATCH giữ mật khẩu cũ nếu client gửi bản đã che. Đổi mật khẩu camera.</td></tr>
+      <tr><td>S2</td><td>Không có auth phía server</td><td><code>app/auth.py:1-10</code> ghi rõ "không phải ranh giới bảo mật"; role chỉ lưu ở <code>localStorage</code> (<code>app.js:3317</code>) — sửa tay là thành quản trị</td><td><span class="tag crit">P0</span></td><td>Ngắn hạn: Cloudflare Access (SSO email @techainer). Dài hạn: token (JWT/cookie phiên) + dependency kiểm role trên từng router; SSE/MJPEG nhận token qua cookie.</td></tr>
+      <tr><td>S3</td><td>Mọi API ghi/xoá mở công khai</td><td>start/stop camera, đăng ký/xoá khuôn mặt, zone, lịch, ack sự kiện; ảnh khuôn mặt, ảnh/clip sự kiện tải tự do</td><td><span class="tag crit">P0</span></td><td>Như S2; static <code>/data/*</code> phải qua kiểm quyền.</td></tr>
+      <tr><td>S4</td><td>Cửa public thứ 2 qua frp</td><td>Container <code>military-attendance-check-frpc-1</code> publish cổng 8199 ra <code>tunnel.techainer.com</code></td><td><span class="tag crit">P0</span></td><td>Tắt nếu không dùng; nếu dùng thì cùng lớp bảo vệ.</td></tr>
+      <tr><td>S5</td><td>Token frp commit trong git</td><td><code>frpc.ini:4</code></td><td><span class="tag serious">P1</span></td><td>Rotate token, chuyển sang biến môi trường, xoá khỏi lịch sử nếu repo chia sẻ ra ngoài.</td></tr>
+      <tr><td>S6</td><td>Mật khẩu demo in trên màn đăng nhập</td><td><code>static/index.html:52</code> khối "Tài khoản demo"; README</td><td><span class="tag serious">P1</span></td><td>Bỏ khỏi UI; ép đổi mật khẩu lần đầu.</td></tr>
+      <tr><td>S7</td><td>Mật khẩu camera dạng chữ trong tài liệu trên server</td><td><code>docs/camera_ai_stream_guide.md</code> (file chưa track trên máy deploy)</td><td><span class="tag serious">P1</span></td><td>Che mật khẩu trong tài liệu; giữ creds trong secret store/.env.</td></tr>
+      <tr><td>S8</td><td>HSTS tắt, không giới hạn upload/rate</td><td>header <code>hsts max-age=0</code>; <code>/api/upload_chunk</code></td><td><span class="tag warn">P2</span></td><td>Bật HSTS ở Cloudflare; giới hạn kích thước &amp; tần suất.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============ 3. STREAM ============ -->
+<section class="page">
+  <h2>3. Stream: giật, đứng hình và trễ</h2>
+  <p>"Giật" mà người dùng báo thực chất là <b>3 triệu chứng khác nhau</b>, mỗi cái có nguyên nhân riêng:</p>
+  <table>
+    <thead><tr><th>Triệu chứng</th><th>Số đo</th><th>Nguyên nhân chính</th></tr></thead>
+    <tbody>
+      <tr><td><b>(a) FPS thấp</b> — hình nhảy cóc</td><td>0.15–0.25 fps; khoảng cách giữa 2 frame TB 4.1 s, min 2.0 s, max 7.3 s</td><td>Vòng xử lý tuần tự: YOLO@1280 + SCRFD@960 + quét lại ≤4 crop + vẽ + 4 lần encode + sleep, chạy chủ yếu trên CPU đang quá tải.</td></tr>
+      <tr><td><b>(b) Lâu lâu đứng hẳn</b></td><td>khoảng trống 5–7 s; đứng tới khi ffmpeg xong mỗi lần có sự kiện</td><td><code>await self._archive_clip()</code> (ffmpeg libx264 60 frame) ngay trong vòng (<code>video_processor.py:694, 807</code>); <code>events.emit</code> ghi ảnh + JSON trong event loop; <code>probe_stream</code> join 8 s và load YOLO khi bấm start (<code>api.py:1444, 1452</code>) làm treo <b>mọi</b> stream; mất RTSP thì đứng ở frame cũ vĩnh viễn.</td></tr>
+      <tr><td><b>(c) Trễ</b> — "đi qua rồi mới hiện"</td><td>tuổi hình khi tới: TB 3.0 s, p95 5.4 s; cộng thời gian giữ hình ⇒ cũ tới ~13 s</td><td>Hình được publish <b>sau</b> khi AI chạy xong; MJPEG poll 200 ms; sau đó hình đứng yên tới frame kế.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>3.1 Số đo thực tế (02/11/2026, 18:02–18:04, cam_01 "Sân tập trung")</h3>
+  <p class="small">Cách đo: kéo <code>stream.mjpg?overlay=1</code> qua Cloudflare 150 s, ghi giờ nhận từng frame; đọc đồng hồ OSD camera in trên hình. Đồng hồ camera đang <b>chậm 6 phút 42 giây</b> — đã hiệu chỉnh bằng cách lấy keyframe trực tiếp từ RTSP trên server (NTP đồng bộ cả 2 đầu). Sai số ±1 s do OSD chỉ có giây.</p>
+  <figure><svg viewBox='0 0 720 230' class='chart' role='img' font-family='Be Vietnam Pro, DejaVu Sans, sans-serif'><line x1='44' x2='708' y1='196.0' y2='196.0' stroke='#e4e3df' stroke-width='1'/><text x='38' y='200.0' text-anchor='end' font-size='10' fill='#52514e'>0 s</text><line x1='44' x2='708' y1='173.2' y2='173.2' stroke='#e4e3df' stroke-width='1'/><text x='38' y='177.2' text-anchor='end' font-size='10' fill='#52514e'>1 s</text><line x1='44' x2='708' y1='150.5' y2='150.5' stroke='#e4e3df' stroke-width='1'/><text x='38' y='154.5' text-anchor='end' font-size='10' fill='#52514e'>2 s</text><line x1='44' x2='708' y1='127.8' y2='127.8' stroke='#e4e3df' stroke-width='1'/><text x='38' y='131.8' text-anchor='end' font-size='10' fill='#52514e'>3 s</text><line x1='44' x2='708' y1='105.0' y2='105.0' stroke='#e4e3df' stroke-width='1'/><text x='38' y='109.0' text-anchor='end' font-size='10' fill='#52514e'>4 s</text><line x1='44' x2='708' y1='82.2' y2='82.2' stroke='#e4e3df' stroke-width='1'/><text x='38' y='86.2' text-anchor='end' font-size='10' fill='#52514e'>5 s</text><line x1='44' x2='708' y1='59.5' y2='59.5' stroke='#e4e3df' stroke-width='1'/><text x='38' y='63.5' text-anchor='end' font-size='10' fill='#52514e'>6 s</text><line x1='44' x2='708' y1='36.8' y2='36.8' stroke='#e4e3df' stroke-width='1'/><text x='38' y='40.8' text-anchor='end' font-size='10' fill='#52514e'>7 s</text><line x1='44' x2='708' y1='14.0' y2='14.0' stroke='#e4e3df' stroke-width='1'/><text x='38' y='18.0' text-anchor='end' font-size='10' fill='#52514e'>8 s</text><path d='M45.0,196.0 V122.7 Q45.0,118.7 49.0,118.7 H57.4 Q61.4,118.7 61.4,122.7 V196.0 Z' fill='#2a78d6'><title>#1: 3.4 s</title></path><text x='53.2' y='210' text-anchor='middle' font-size='9.5' fill='#52514e'>1</text><path d='M63.4,196.0 V76.9 Q63.4,72.9 67.4,72.9 H75.9 Q79.9,72.9 79.9,76.9 V196.0 Z' fill='#2a78d6'><title>#2: 5.4 s</title></path><path d='M81.9,196.0 V76.5 Q81.9,72.5 85.9,72.5 H94.3 Q98.3,72.5 98.3,76.5 V196.0 Z' fill='#2a78d6'><title>#3: 5.4 s</title></path><path d='M100.3,196.0 V113.5 Q100.3,109.5 104.3,109.5 H112.8 Q116.8,109.5 116.8,113.5 V196.0 Z' fill='#2a78d6'><title>#4: 3.8 s</title></path><path d='M118.8,196.0 V112.2 Q118.8,108.2 122.8,108.2 H131.2 Q135.2,108.2 135.2,112.2 V196.0 Z' fill='#2a78d6'><title>#5: 3.9 s</title></path><text x='127.0' y='210' text-anchor='middle' font-size='9.5' fill='#52514e'>5</text><path d='M137.2,196.0 V113.1 Q137.2,109.1 141.2,109.1 H149.7 Q153.7,109.1 153.7,113.1 V196.0 Z' fill='#2a78d6'><title>#6: 3.8 s</title></path><path d='M155.7,196.0 V99.7 Q155.7,95.7 159.7,95.7 H168.1 Q172.1,95.7 172.1,99.7 V196.0 Z' fill='#2a78d6'><title>#7: 4.4 s</title></path><path d='M174.1,196.0 V104.2 Q174.1,100.2 178.1,100.2 H186.6 Q190.6,100.2 190.6,104.2 V196.0 Z' fill='#2a78d6'><title>#8: 4.2 s</title></path><path d='M192.6,196.0 V85.1 Q192.6,81.1 196.6,81.1 H205.0 Q209.0,81.1 209.0,85.1 V196.0 Z' fill='#2a78d6'><title>#9: 5.0 s</title></path><path d='M211.0,196.0 V103.1 Q211.0,99.1 215.0,99.1 H223.4 Q227.4,99.1 227.4,103.1 V196.0 Z' fill='#2a78d6'><title>#10: 4.3 s</title></path><text x='219.2' y='210' text-anchor='middle' font-size='9.5' fill='#52514e'>10</text><path d='M229.4,196.0 V72.1 Q229.4,68.1 233.4,68.1 H241.9 Q245.9,68.1 245.9,72.1 V196.0 Z' fill='#2a78d6'><title>#11: 5.6 s</title></path><path d='M247.9,196.0 V94.4 Q247.9,90.4 251.9,90.4 H260.3 Q264.3,90.4 264.3,94.4 V196.0 Z' fill='#2a78d6'><title>#12: 4.6 s</title></path><path d='M266.3,196.0 V35.5 Q266.3,31.5 270.3,31.5 H278.8 Q282.8,31.5 282.8,35.5 V196.0 Z' fill='#2a78d6'><title>#13: 7.2 s</title></path><path d='M284.8,196.0 V117.0 Q284.8,113.0 288.8,113.0 H297.2 Q301.2,113.0 301.2,117.0 V196.0 Z' fill='#2a78d6'><title>#14: 3.6 s</title></path><path d='M303.2,196.0 V117.9 Q303.2,113.9 307.2,113.9 H315.7 Q319.7,113.9 319.7,117.9 V196.0 Z' fill='#2a78d6'><title>#15: 3.6 s</title></path><text x='311.4' y='210' text-anchor='middle' font-size='9.5' fill='#52514e'>15</text><path d='M321.7,196.0 V145.2 Q321.7,141.2 325.7,141.2 H334.1 Q338.1,141.2 338.1,145.2 V196.0 Z' fill='#2a78d6'><title>#16: 2.4 s</title></path><path d='M340.1,196.0 V126.3 Q340.1,122.3 344.1,122.3 H352.6 Q356.6,122.3 356.6,126.3 V196.0 Z' fill='#2a78d6'><title>#17: 3.2 s</title></path><path d='M358.6,196.0 V71.7 Q358.6,67.7 362.6,67.7 H371.0 Q375.0,67.7 375.0,71.7 V196.0 Z' fill='#2a78d6'><title>#18: 5.6 s</title></path><path d='M377.0,196.0 V80.6 Q377.0,76.6 381.0,76.6 H389.4 Q393.4,76.6 393.4,80.6 V196.0 Z' fill='#2a78d6'><title>#19: 5.2 s</title></path><path d='M395.4,196.0 V99.7 Q395.4,95.7 399.4,95.7 H407.9 Q411.9,95.7 411.9,99.7 V196.0 Z' fill='#2a78d6'><title>#20: 4.4 s</title></path><text x='403.7' y='210' text-anchor='middle' font-size='9.5' fill='#52514e'>20</text><path d='M413.9,196.0 V58.5 Q413.9,54.5 417.9,54.5 H426.3 Q430.3,54.5 430.3,58.5 V196.0 Z' fill='#2a78d6'><title>#21: 6.2 s</title></path><path d='M432.3,196.0 V95.1 Q432.3,91.1 436.3,91.1 H444.8 Q448.8,91.1 448.8,95.1 V196.0 Z' fill='#2a78d6'><title>#22: 4.6 s</title></path><path d='M450.8,196.0 V117.4 Q450.8,113.4 454.8,113.4 H463.2 Q467.2,113.4 467.2,117.4 V196.0 Z' fill='#2a78d6'><title>#23: 3.6 s</title></path><path d='M469.2,196.0 V99.0 Q469.2,95.0 473.2,95.0 H481.7 Q485.7,95.0 485.7,99.0 V196.0 Z' fill='#2a78d6'><title>#24: 4.4 s</title></path><path d='M487.7,196.0 V85.8 Q487.7,81.8 491.7,81.8 H500.1 Q504.1,81.8 504.1,85.8 V196.0 Z' fill='#2a78d6'><title>#25: 5.0 s</title></path><text x='495.9' y='210' text-anchor='middle' font-size='9.5' fill='#52514e'>25</text><path d='M506.1,196.0 V140.8 Q506.1,136.8 510.1,136.8 H518.6 Q522.6,136.8 522.6,140.8 V196.0 Z' fill='#2a78d6'><title>#26: 2.6 s</title></path><path d='M524.6,196.0 V109.0 Q524.6,105.0 528.6,105.0 H537.0 Q541.0,105.0 541.0,109.0 V196.0 Z' fill='#2a78d6'><title>#27: 4.0 s</title></path><path d='M543.0,196.0 V85.8 Q543.0,81.8 547.0,81.8 H555.4 Q559.4,81.8 559.4,85.8 V196.0 Z' fill='#2a78d6'><title>#28: 5.0 s</title></path><path d='M561.4,196.0 V34.6 Q561.4,30.6 565.4,30.6 H573.9 Q577.9,30.6 577.9,34.6 V196.0 Z' fill='#2a78d6'><title>#29: 7.3 s</title></path><path d='M579.9,196.0 V154.5 Q579.9,150.5 583.9,150.5 H592.3 Q596.3,150.5 596.3,154.5 V196.0 Z' fill='#2a78d6'><title>#30: 2.0 s</title></path><text x='588.1' y='210' text-anchor='middle' font-size='9.5' fill='#52514e'>30</text><path d='M598.3,196.0 V145.2 Q598.3,141.2 602.3,141.2 H610.8 Q614.8,141.2 614.8,145.2 V196.0 Z' fill='#2a78d6'><title>#31: 2.4 s</title></path><path d='M616.8,196.0 V149.9 Q616.8,145.9 620.8,145.9 H629.2 Q633.2,145.9 633.2,149.9 V196.0 Z' fill='#2a78d6'><title>#32: 2.2 s</title></path><path d='M635.2,196.0 V154.5 Q635.2,150.5 639.2,150.5 H647.7 Q651.7,150.5 651.7,154.5 V196.0 Z' fill='#2a78d6'><title>#33: 2.0 s</title></path><path d='M653.7,196.0 V131.8 Q653.7,127.8 657.7,127.8 H666.1 Q670.1,127.8 670.1,131.8 V196.0 Z' fill='#2a78d6'><title>#34: 3.0 s</title></path><path d='M672.1,196.0 V145.4 Q672.1,141.4 676.1,141.4 H684.6 Q688.6,141.4 688.6,145.4 V196.0 Z' fill='#2a78d6'><title>#35: 2.4 s</title></path><text x='680.3' y='210' text-anchor='middle' font-size='9.5' fill='#52514e'>35</text><path d='M690.6,196.0 V139.7 Q690.6,135.7 694.6,135.7 H703.0 Q707.0,135.7 707.0,139.7 V196.0 Z' fill='#2a78d6'><title>#36: 2.6 s</title></path><line x1='44' x2='708' y1='191.4' y2='191.4' stroke='#0ca30c' stroke-width='2' stroke-dasharray='6 4'/><text x='704' y='186.4' text-anchor='end' font-size='10.5' font-weight='600' fill='#0b0b0b' stroke='#fcfcfb' stroke-width='4' paint-order='stroke'>Mục tiêu 5 fps = 0.2 s</text><line x1='44' x2='708' y1='102.0' y2='102.0' stroke='#d03b3b' stroke-width='2' stroke-dasharray='6 4'/><text x='704' y='97.0' text-anchor='end' font-size='10.5' font-weight='600' fill='#0b0b0b' stroke='#fcfcfb' stroke-width='4' paint-order='stroke'>Trung bình đo được 4.1 s</text><text x='376.0' y='226' text-anchor='middle' font-size='10.5' fill='#52514e'>Thứ tự khoảng cách giữa 2 frame liên tiếp (36 khoảng, 150 s đo qua Cloudflare)</text></svg><figcaption>Hình 3.1 — Khoảng cách giữa 2 frame liên tiếp. Mục tiêu 0.2 s (5 fps); camera thật phát 0.04 s (25 fps) ⇒ trình duyệt chỉ thấy ~1/100 số frame.</figcaption></figure>
+  <figure><svg viewBox='0 0 720 230' class='chart' role='img' font-family='Be Vietnam Pro, DejaVu Sans, sans-serif'><line x1='44' x2='708' y1='196.0' y2='196.0' stroke='#e4e3df' stroke-width='1'/><text x='38' y='200.0' text-anchor='end' font-size='10' fill='#52514e'>0 s</text><line x1='44' x2='708' y1='170.0' y2='170.0' stroke='#e4e3df' stroke-width='1'/><text x='38' y='174.0' text-anchor='end' font-size='10' fill='#52514e'>1 s</text><line x1='44' x2='708' y1='144.0' y2='144.0' stroke='#e4e3df' stroke-width='1'/><text x='38' y='148.0' text-anchor='end' font-size='10' fill='#52514e'>2 s</text><line x1='44' x2='708' y1='118.0' y2='118.0' stroke='#e4e3df' stroke-width='1'/><text x='38' y='122.0' text-anchor='end' font-size='10' fill='#52514e'>3 s</text><line x1='44' x2='708' y1='92.0' y2='92.0' stroke='#e4e3df' stroke-width='1'/><text x='38' y='96.0' text-anchor='end' font-size='10' fill='#52514e'>4 s</text><line x1='44' x2='708' y1='66.0' y2='66.0' stroke='#e4e3df' stroke-width='1'/><text x='38' y='70.0' text-anchor='end' font-size='10' fill='#52514e'>5 s</text><line x1='44' x2='708' y1='40.0' y2='40.0' stroke='#e4e3df' stroke-width='1'/><text x='38' y='44.0' text-anchor='end' font-size='10' fill='#52514e'>6 s</text><line x1='44' x2='708' y1='14.0' y2='14.0' stroke='#e4e3df' stroke-width='1'/><text x='38' y='18.0' text-anchor='end' font-size='10' fill='#52514e'>7 s</text><path d='M45.0,196.0 V75.2 Q45.0,71.2 49.0,71.2 H56.9 Q60.9,71.2 60.9,75.2 V196.0 Z' fill='#eb6834'><title>#1: 4.8 s</title></path><text x='53.0' y='210' text-anchor='middle' font-size='9.5' fill='#52514e'>1</text><path d='M62.9,196.0 V116.8 Q62.9,112.8 66.9,112.8 H74.9 Q78.9,112.8 78.9,116.8 V196.0 Z' fill='#eb6834'><title>#2: 3.2 s</title></path><path d='M80.9,196.0 V80.4 Q80.9,76.4 84.9,76.4 H92.8 Q96.8,76.4 96.8,80.4 V196.0 Z' fill='#eb6834'><title>#3: 4.6 s</title></path><path d='M98.8,196.0 V96.0 Q98.8,92.0 102.8,92.0 H110.8 Q114.8,92.0 114.8,96.0 V196.0 Z' fill='#eb6834'><title>#4: 4.0 s</title></path><path d='M116.8,196.0 V127.2 Q116.8,123.2 120.8,123.2 H128.7 Q132.7,123.2 132.7,127.2 V196.0 Z' fill='#eb6834'><title>#5: 2.8 s</title></path><text x='124.8' y='210' text-anchor='middle' font-size='9.5' fill='#52514e'>5</text><path d='M134.7,196.0 V129.8 Q134.7,125.8 138.7,125.8 H146.7 Q150.7,125.8 150.7,129.8 V196.0 Z' fill='#eb6834'><title>#6: 2.7 s</title></path><path d='M152.7,196.0 V135.0 Q152.7,131.0 156.7,131.0 H164.6 Q168.6,131.0 168.6,135.0 V196.0 Z' fill='#eb6834'><title>#7: 2.5 s</title></path><path d='M170.6,196.0 V124.6 Q170.6,120.6 174.6,120.6 H182.6 Q186.6,120.6 186.6,124.6 V196.0 Z' fill='#eb6834'><title>#8: 2.9 s</title></path><path d='M188.6,196.0 V119.4 Q188.6,115.4 192.6,115.4 H200.5 Q204.5,115.4 204.5,119.4 V196.0 Z' fill='#eb6834'><title>#9: 3.1 s</title></path><path d='M206.5,196.0 V90.8 Q206.5,86.8 210.5,86.8 H218.5 Q222.5,86.8 222.5,90.8 V196.0 Z' fill='#eb6834'><title>#10: 4.2 s</title></path><text x='214.5' y='210' text-anchor='middle' font-size='9.5' fill='#52514e'>10</text><path d='M224.5,196.0 V109.0 Q224.5,105.0 228.5,105.0 H236.4 Q240.4,105.0 240.4,109.0 V196.0 Z' fill='#eb6834'><title>#11: 3.5 s</title></path><path d='M242.4,196.0 V93.4 Q242.4,89.4 246.4,89.4 H254.4 Q258.4,89.4 258.4,93.4 V196.0 Z' fill='#eb6834'><title>#12: 4.1 s</title></path><path d='M260.4,196.0 V103.8 Q260.4,99.8 264.4,99.8 H272.3 Q276.3,99.8 276.3,103.8 V196.0 Z' fill='#eb6834'><title>#13: 3.7 s</title></path><path d='M278.3,196.0 V46.6 Q278.3,42.6 282.3,42.6 H290.2 Q294.2,42.6 294.2,46.6 V196.0 Z' fill='#eb6834'><title>#14: 5.9 s</title></path><path d='M296.2,196.0 V132.4 Q296.2,128.4 300.2,128.4 H308.2 Q312.2,128.4 312.2,132.4 V196.0 Z' fill='#eb6834'><title>#15: 2.6 s</title></path><text x='304.2' y='210' text-anchor='middle' font-size='9.5' fill='#52514e'>15</text><path d='M314.2,196.0 V142.8 Q314.2,138.8 318.2,138.8 H326.1 Q330.1,138.8 330.1,142.8 V196.0 Z' fill='#eb6834'><title>#16: 2.2 s</title></path><path d='M332.1,196.0 V158.4 Q332.1,154.4 336.1,154.4 H344.1 Q348.1,154.4 348.1,158.4 V196.0 Z' fill='#eb6834'><title>#17: 1.6 s</title></path><path d='M350.1,196.0 V150.6 Q350.1,146.6 354.1,146.6 H362.0 Q366.0,146.6 366.0,150.6 V196.0 Z' fill='#eb6834'><title>#18: 1.9 s</title></path><path d='M368.0,196.0 V83.0 Q368.0,79.0 372.0,79.0 H380.0 Q384.0,79.0 384.0,83.0 V196.0 Z' fill='#eb6834'><title>#19: 4.5 s</title></path><path d='M386.0,196.0 V103.8 Q386.0,99.8 390.0,99.8 H397.9 Q401.9,99.8 401.9,103.8 V196.0 Z' fill='#eb6834'><title>#20: 3.7 s</title></path><text x='393.9' y='210' text-anchor='middle' font-size='9.5' fill='#52514e'>20</text><path d='M403.9,196.0 V116.8 Q403.9,112.8 407.9,112.8 H415.9 Q419.9,112.8 419.9,116.8 V196.0 Z' fill='#eb6834'><title>#21: 3.2 s</title></path><path d='M421.9,196.0 V59.6 Q421.9,55.6 425.9,55.6 H433.8 Q437.8,55.6 437.8,59.6 V196.0 Z' fill='#eb6834'><title>#22: 5.4 s</title></path><path d='M439.8,196.0 V122.0 Q439.8,118.0 443.8,118.0 H451.8 Q455.8,118.0 455.8,122.0 V196.0 Z' fill='#eb6834'><title>#23: 3.0 s</title></path><path d='M457.8,196.0 V132.4 Q457.8,128.4 461.8,128.4 H469.7 Q473.7,128.4 473.7,132.4 V196.0 Z' fill='#eb6834'><title>#24: 2.6 s</title></path><path d='M475.7,196.0 V119.4 Q475.7,115.4 479.7,115.4 H487.6 Q491.6,115.4 491.6,119.4 V196.0 Z' fill='#eb6834'><title>#25: 3.1 s</title></path><text x='483.7' y='210' text-anchor='middle' font-size='9.5' fill='#52514e'>25</text><path d='M493.6,196.0 V93.4 Q493.6,89.4 497.6,89.4 H505.6 Q509.6,89.4 509.6,93.4 V196.0 Z' fill='#eb6834'><title>#26: 4.1 s</title></path><path d='M511.6,196.0 V155.8 Q511.6,151.8 515.6,151.8 H523.5 Q527.5,151.8 527.5,155.8 V196.0 Z' fill='#eb6834'><title>#27: 1.7 s</title></path><path d='M529.5,196.0 V129.8 Q529.5,125.8 533.5,125.8 H541.5 Q545.5,125.8 545.5,129.8 V196.0 Z' fill='#eb6834'><title>#28: 2.7 s</title></path><path d='M547.5,196.0 V103.8 Q547.5,99.8 551.5,99.8 H559.4 Q563.4,99.8 563.4,103.8 V196.0 Z' fill='#eb6834'><title>#29: 3.7 s</title></path><path d='M565.4,196.0 V44.0 Q565.4,40.0 569.4,40.0 H577.4 Q581.4,40.0 581.4,44.0 V196.0 Z' fill='#eb6834'><title>#30: 6.0 s</title></path><text x='573.4' y='210' text-anchor='middle' font-size='9.5' fill='#52514e'>30</text><path d='M583.4,196.0 V174.0 Q583.4,170.0 587.4,170.0 H595.3 Q599.3,170.0 599.3,174.0 V196.0 Z' fill='#eb6834'><title>#31: 1.0 s</title></path><path d='M601.3,196.0 V163.6 Q601.3,159.6 605.3,159.6 H613.3 Q617.3,159.6 617.3,163.6 V196.0 Z' fill='#eb6834'><title>#32: 1.4 s</title></path><path d='M619.3,196.0 V184.4 Q619.3,180.4 623.3,180.4 H631.2 Q635.2,180.4 635.2,184.4 V196.0 Z' fill='#eb6834'><title>#33: 0.6 s</title></path><path d='M637.2,196.0 V184.4 Q637.2,180.4 641.2,180.4 H649.2 Q653.2,180.4 653.2,184.4 V196.0 Z' fill='#eb6834'><title>#34: 0.6 s</title></path><path d='M655.2,196.0 V158.4 Q655.2,154.4 659.2,154.4 H667.1 Q671.1,154.4 671.1,158.4 V196.0 Z' fill='#eb6834'><title>#35: 1.6 s</title></path><text x='663.1' y='210' text-anchor='middle' font-size='9.5' fill='#52514e'>35</text><path d='M673.1,196.0 V174.0 Q673.1,170.0 677.1,170.0 H685.1 Q689.1,170.0 689.1,174.0 V196.0 Z' fill='#eb6834'><title>#36: 1.0 s</title></path><path d='M691.1,196.0 V158.4 Q691.1,154.4 695.1,154.4 H703.0 Q707.0,154.4 707.0,158.4 V196.0 Z' fill='#eb6834'><title>#37: 1.6 s</title></path><line x1='44' x2='708' y1='170.0' y2='170.0' stroke='#0ca30c' stroke-width='2' stroke-dasharray='6 4'/><text x='704' y='165.0' text-anchor='end' font-size='10.5' font-weight='600' fill='#0b0b0b' stroke='#fcfcfb' stroke-width='4' paint-order='stroke'>Mục tiêu &lt; 1 s</text><line x1='44' x2='708' y1='118.0' y2='118.0' stroke='#d03b3b' stroke-width='2' stroke-dasharray='6 4'/><text x='704' y='113.0' text-anchor='end' font-size='10.5' font-weight='600' fill='#0b0b0b' stroke='#fcfcfb' stroke-width='4' paint-order='stroke'>Trung bình 3.0 s</text><text x='376.0' y='226' text-anchor='middle' font-size='10.5' fill='#52514e'>Thứ tự frame nhận được (37 frame) — tuổi của hình khi tới trình duyệt</text></svg><figcaption>Hình 3.2 — Tuổi của hình khi tới trình duyệt (glass-to-glass, chưa tính thời gian hình đứng chờ frame kế).</figcaption></figure>
+  <table>
+    <thead><tr><th>Chặng</th><th class="num">TB</th><th class="num">Trung vị</th><th class="num">p95</th><th class="num">Max</th></tr></thead>
+    <tbody>
+      <tr><td>Camera chụp → xong AI (timestamp app vẽ ở <code>video_processor.py:551</code>)</td><td class="num">1.7 s</td><td class="num">2.0 s</td><td class="num">3.0 s</td><td class="num">5.0 s</td></tr>
+      <tr><td>Xong AI → trình duyệt nhận (vẽ, encode, poll, Cloudflare)</td><td class="num">1.3 s</td><td class="num">1.1 s</td><td class="num">2.7 s</td><td class="num">5.0 s</td></tr>
+      <tr><td><b>Glass-to-glass</b></td><td class="num"><b>3.0 s</b></td><td class="num">3.0 s</td><td class="num">5.4 s</td><td class="num">6.0 s</td></tr>
+      <tr><td>Khoảng cách giữa 2 frame</td><td class="num">4.1 s</td><td class="num">4.1 s</td><td class="num">6.2 s</td><td class="num">7.3 s</td></tr>
+    </tbody>
+  </table>
+  <div class="callout"><b>Cloudflare không phải thủ phạm</b>Đo song song trên <code>localhost:8199</code> của server: 0.15 fps, khoảng cách 6.5 s ± 2.3 s — giống hệt qua Cloudflare. TTFB qua tunnel chỉ +0.16 s. Băng thông ~120 kbps/stream (frame ~100 KB ở 960 px, q65).</div>
+
+  <h3>3.2 Vì sao "người đi qua rồi mới hiện"</h3>
+  <figure><svg viewBox='0 0 760 220' class='chart' role='img' font-family='Be Vietnam Pro, DejaVu Sans, sans-serif'><defs><marker id='ah' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#52514e'/></marker></defs><line x1='170.0' x2='170.0' y1='10' y2='192' stroke='#e4e3df'/><text x='170.0' y='208' text-anchor='middle' font-size='10' fill='#52514e'>0 s</text><line x1='251.4' x2='251.4' y1='10' y2='192' stroke='#e4e3df'/><text x='251.4' y='208' text-anchor='middle' font-size='10' fill='#52514e'>2 s</text><line x1='332.9' x2='332.9' y1='10' y2='192' stroke='#e4e3df'/><text x='332.9' y='208' text-anchor='middle' font-size='10' fill='#52514e'>4 s</text><line x1='414.3' x2='414.3' y1='10' y2='192' stroke='#e4e3df'/><text x='414.3' y='208' text-anchor='middle' font-size='10' fill='#52514e'>6 s</text><line x1='495.7' x2='495.7' y1='10' y2='192' stroke='#e4e3df'/><text x='495.7' y='208' text-anchor='middle' font-size='10' fill='#52514e'>8 s</text><line x1='577.1' x2='577.1' y1='10' y2='192' stroke='#e4e3df'/><text x='577.1' y='208' text-anchor='middle' font-size='10' fill='#52514e'>10 s</text><line x1='658.6' x2='658.6' y1='10' y2='192' stroke='#e4e3df'/><text x='658.6' y='208' text-anchor='middle' font-size='10' fill='#52514e'>12 s</text><line x1='740.0' x2='740.0' y1='10' y2='192' stroke='#e4e3df'/><text x='740.0' y='208' text-anchor='middle' font-size='10' fill='#52514e'>14 s</text><text x='162' y='35' text-anchor='end' font-size='10.5' font-weight='600' fill='#0b0b0b'>Thực tế: người đi qua vùng</text><text x='162' y='100' text-anchor='end' font-size='10.5' font-weight='600' fill='#0b0b0b'>Màn hình hiện tại (MJPEG)</text><text x='162' y='165' text-anchor='end' font-size='10.5' font-weight='600' fill='#0b0b0b'>Đề xuất (WebRTC + overlay)</text><rect x='210.7' y='20' width='122.1' height='20' rx='4' fill='#2a78d6'><title>Người ở trong vùng 1–4 s</title></rect><text x='338.9' y='34' font-size='10' fill='#52514e'>trong vùng 1 s → 4 s</text><rect x='170.0' y='85' width='164.9' height='20' rx='4' fill='#d9d7d1'><title>Tới lúc 0.0 s, hình chụp lúc -3.0 s</title></rect><text x='174.0' y='99' font-size='9.5' fill='#0b0b0b'>ảnh từ trước</text><rect x='336.9' y='85' width='181.2' height='20' rx='4' fill='#eb6834'><title>Tới lúc 4.1 s, hình chụp lúc 1.2 s</title></rect><text x='340.9' y='99' font-size='9.5' fill='#ffffff'>ảnh lúc 1.2 s</text><rect x='520.1' y='85' width='152.7' height='20' rx='4' fill='#d9d7d1'><title>Tới lúc 8.6 s, hình chụp lúc 5.2 s</title></rect><text x='524.1' y='99' font-size='9.5' fill='#0b0b0b'>ảnh lúc 5.2 s</text><rect x='674.9' y='85' width='63.1' height='20' rx='4' fill='#d9d7d1'><title>Tới lúc 12.4 s, hình chụp lúc 9.4 s</title></rect><text x='678.9' y='99' font-size='9.5' fill='#0b0b0b'>ảnh lúc 9.4 s</text><text x='170.0' y='122' font-size='10' fill='#d03b3b' font-weight='600'>Lúc người thật trong vùng (1–4 s) màn hình chưa thấy ai.</text><text x='170.0' y='135' font-size='10' fill='#d03b3b' font-weight='600'>Chỉ thấy 1 ảnh đứng yên từ 4.1 s → 8.6 s, khi người đã đi khỏi.</text><rect x='231.1' y='150' width='122.1' height='20' rx='4' fill='#1baf7a'><title>Video trễ ~0.5 s, liên tục 15–25 fps</title></rect><text x='359.2' y='164' font-size='10' fill='#52514e'>hiện 1.5 s → 4.5 s (trễ ~0.5 s, chạy mượt)</text></svg><figcaption>Hình 3.3 — Minh hoạ dựa trên số đo (frame cách nhau ~4 s, tuổi ~3 s). Với MJPEG hiện tại, một người đi qua vùng trong 3 s có thể chỉ xuất hiện trên 1 tấm hình đứng yên, và tấm đó hiện ra sau khi người đã rời đi.</figcaption></figure>
+</section>
+
+<section>
+  <h3>3.3 Kiến trúc hiện tại: video bị trói vào AI</h3>
+  <figure><svg viewBox='0 0 760 330' class='diagram' role='img' font-family='Be Vietnam Pro, DejaVu Sans, sans-serif'><defs><marker id='ah' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#52514e'/></marker></defs><rect x='10' y='120' width='110' height='64' rx='8' fill='#ffffff' stroke='#2b4c93' stroke-width='1.5'/><text x='65.0' y='143.5' text-anchor='middle' font-size='12' font-weight='700' fill='#0b0b0b'>Camera</text><text x='65.0' y='158.5' text-anchor='middle' font-size='10' fill='#52514e'>HEVC 1080p25</text><text x='65.0' y='171.5' text-anchor='middle' font-size='10' fill='#52514e'>kênh 101 (chính)</text><rect x='150' y='120' width='120' height='64' rx='8' fill='#ffffff' stroke='#2b4c93' stroke-width='1.5'/><text x='210.0' y='143.5' text-anchor='middle' font-size='12' font-weight='700' fill='#0b0b0b'>Thread đọc RTSP</text><text x='210.0' y='158.5' text-anchor='middle' font-size='10' fill='#52514e'>OpenCV giải mã</text><text x='210.0' y='171.5' text-anchor='middle' font-size='10' fill='#52514e'>HEVC bằng CPU</text><line x1='120' y1='152' x2='150' y2='152' stroke='#52514e' stroke-width='1.6' marker-end='url(#ah)'/><rect x='292' y='22' width='300' height='286' rx='10' fill='#fdf1ef' stroke='#d03b3b' stroke-width='1.5' stroke-dasharray='6 4'/><text x='442' y='40' text-anchor='middle' font-size='11.5' font-weight='700' fill='#d03b3b'>1 vòng async / camera — chạy tuần tự</text><rect x='305' y='50' width='274' height='36' rx='8' fill='#ffffff' stroke='#c9c7c1' stroke-width='1.5'/><text x='442.0' y='65.2' text-anchor='middle' font-size='10.5' font-weight='700' fill='#0b0b0b'>YOLO11s @1280 ∥ SCRFD @960</text><text x='442.0' y='78.8' text-anchor='middle' font-size='10' fill='#52514e'>torch CPU/GPU  ·  onnxruntime CPU</text><line x1='442' y1='86' x2='442' y2='94' stroke='#52514e' stroke-width='1.6' marker-end='url(#ah)'/><rect x='305' y='94' width='274' height='36' rx='8' fill='#ffffff' stroke='#c9c7c1' stroke-width='1.5'/><text x='442.0' y='109.2' text-anchor='middle' font-size='10.5' font-weight='700' fill='#0b0b0b'>Quét lại mặt ≤ 4 crop @960</text><text x='442.0' y='122.8' text-anchor='middle' font-size='10' fill='#52514e'>+ ArcFace + 3 model thừa</text><line x1='442' y1='130' x2='442' y2='138' stroke='#52514e' stroke-width='1.6' marker-end='url(#ah)'/><rect x='305' y='138' width='274' height='36' rx='8' fill='#ffffff' stroke='#c9c7c1' stroke-width='1.5'/><text x='442.0' y='153.2' text-anchor='middle' font-size='10.5' font-weight='700' fill='#0b0b0b'>Vẽ overlay (Pillow)</text><text x='442.0' y='166.8' text-anchor='middle' font-size='10' fill='#52514e'>copy cả frame mỗi zone</text><line x1='442' y1='174' x2='442' y2='182' stroke='#52514e' stroke-width='1.6' marker-end='url(#ah)'/><rect x='305' y='182' width='274' height='36' rx='8' fill='#ffffff' stroke='#c9c7c1' stroke-width='1.5'/><text x='442.0' y='197.2' text-anchor='middle' font-size='10.5' font-weight='700' fill='#0b0b0b'>Encode JPEG ×4 + base64</text><text x='442.0' y='210.8' text-anchor='middle' font-size='10' fill='#52514e'>2×1080p q85, 2×960p q65</text><line x1='442' y1='218' x2='442' y2='226' stroke='#52514e' stroke-width='1.6' marker-end='url(#ah)'/><rect x='305' y='226' width='274' height='36' rx='8' fill='#ffffff' stroke='#d03b3b' stroke-width='1.5'/><text x='442.0' y='241.2' text-anchor='middle' font-size='10.5' font-weight='700' fill='#0b0b0b'>Sự kiện: ffmpeg clip + ghi JSON</text><text x='442.0' y='254.8' text-anchor='middle' font-size='10' fill='#52514e'>await ngay trong vòng ⇒ đứng hình</text><line x1='442' y1='262' x2='442' y2='270' stroke='#52514e' stroke-width='1.6' marker-end='url(#ah)'/><rect x='305' y='270' width='274' height='36' rx='8' fill='#ffffff' stroke='#c9c7c1' stroke-width='1.5'/><text x='442.0' y='285.2' text-anchor='middle' font-size='10.5' font-weight='700' fill='#0b0b0b'>sleep(1/fps) = 200 ms</text><text x='442.0' y='298.8' text-anchor='middle' font-size='10' fill='#52514e'>cộng thêm, không phải deadline</text><line x1='270' y1='152' x2='305' y2='152' stroke='#52514e' stroke-width='1.6' marker-end='url(#ah)'/><rect x='620' y='70' width='130' height='60' rx='8' fill='#ffffff' stroke='#2b4c93' stroke-width='1.5'/><text x='685.0' y='91.5' text-anchor='middle' font-size='12' font-weight='700' fill='#0b0b0b'>publish_frame</text><text x='685.0' y='106.5' text-anchor='middle' font-size='10' fill='#52514e'>1 slot / camera</text><text x='685.0' y='119.5' text-anchor='middle' font-size='10' fill='#52514e'>+ revision</text><line x1='579' y1='200' x2='620' y2='110' stroke='#52514e' stroke-width='1.6' marker-end='url(#ah)'/><rect x='620' y='170' width='130' height='64' rx='8' fill='#ffffff' stroke='#2b4c93' stroke-width='1.5'/><text x='685.0' y='193.5' text-anchor='middle' font-size='12' font-weight='700' fill='#0b0b0b'>MJPEG generator</text><text x='685.0' y='208.5' text-anchor='middle' font-size='10' fill='#52514e'>poll mỗi 200 ms</text><text x='685.0' y='221.5' text-anchor='middle' font-size='10' fill='#52514e'>/ mỗi client</text><line x1='685' y1='130' x2='685' y2='170' stroke='#52514e' stroke-width='1.6' marker-end='url(#ah)'/><rect x='620' y='262' width='130' height='52' rx='8' fill='#eef4fb' stroke='#2b4c93' stroke-width='1.5'/><text x='685.0' y='286.0' text-anchor='middle' font-size='12' font-weight='700' fill='#0b0b0b'>cloudflared → &lt;img&gt;</text><text x='685.0' y='301.0' text-anchor='middle' font-size='10' fill='#52514e'>~100 KB/frame</text><line x1='685' y1='234' x2='685' y2='262' stroke='#52514e' stroke-width='1.6' marker-end='url(#ah)'/></svg><figcaption>Hình 3.4 — Luồng hiện tại. Mọi bước trong khung đỏ chạy nối tiếp trong 1 coroutine / camera trên 1 event loop chung với API, SSE và MJPEG.</figcaption></figure>
+  <figure><svg viewBox='0 0 760 200' class='chart' role='img' font-family='Be Vietnam Pro, DejaVu Sans, sans-serif'><line x1='210.0' x2='210.0' y1='8' y2='174' stroke='#e4e3df'/><text x='210.0' y='190' text-anchor='middle' font-size='10' fill='#52514e'>0 s</text><line x1='265.8' x2='265.8' y1='8' y2='174' stroke='#e4e3df'/><text x='265.8' y='190' text-anchor='middle' font-size='10' fill='#52514e'>1 s</text><line x1='321.6' x2='321.6' y1='8' y2='174' stroke='#e4e3df'/><text x='321.6' y='190' text-anchor='middle' font-size='10' fill='#52514e'>2 s</text><line x1='377.4' x2='377.4' y1='8' y2='174' stroke='#e4e3df'/><text x='377.4' y='190' text-anchor='middle' font-size='10' fill='#52514e'>3 s</text><line x1='433.2' x2='433.2' y1='8' y2='174' stroke='#e4e3df'/><text x='433.2' y='190' text-anchor='middle' font-size='10' fill='#52514e'>4 s</text><line x1='488.9' x2='488.9' y1='8' y2='174' stroke='#e4e3df'/><text x='488.9' y='190' text-anchor='middle' font-size='10' fill='#52514e'>5 s</text><line x1='544.7' x2='544.7' y1='8' y2='174' stroke='#e4e3df'/><text x='544.7' y='190' text-anchor='middle' font-size='10' fill='#52514e'>6 s</text><line x1='600.5' x2='600.5' y1='8' y2='174' stroke='#e4e3df'/><text x='600.5' y='190' text-anchor='middle' font-size='10' fill='#52514e'>7 s</text><line x1='656.3' x2='656.3' y1='8' y2='174' stroke='#e4e3df'/><text x='656.3' y='190' text-anchor='middle' font-size='10' fill='#52514e'>8 s</text><line x1='712.1' x2='712.1' y1='8' y2='174' stroke='#e4e3df'/><text x='712.1' y='190' text-anchor='middle' font-size='10' fill='#52514e'>9 s</text><text x='202' y='27' text-anchor='end' font-size='10.5' fill='#0b0b0b'>Đợi YOLO ∥ SCRFD full-frame</text><rect x='210.0' y='16' width='111.6' height='16' rx='4' fill='#2a78d6' stroke='#ffffff' stroke-width='0'><title>Đợi YOLO ∥ SCRFD full-frame: 2.0 s (ước tính)</title></rect><text x='202' y='53' text-anchor='end' font-size='10.5' fill='#0b0b0b'>Quét lại mặt trên crop (≤4 lần)</text><rect x='321.6' y='42' width='66.9' height='16' rx='4' fill='#2a78d6' stroke='#ffffff' stroke-width='0'><title>Quét lại mặt trên crop (≤4 lần): 1.2 s (ước tính)</title></rect><text x='202' y='79' text-anchor='end' font-size='10.5' fill='#0b0b0b'>Vẽ overlay + 4× encode + base64</text><rect x='388.5' y='68' width='16.7' height='16' rx='4' fill='#eb6834' stroke='#ffffff' stroke-width='0'><title>Vẽ overlay + 4× encode + base64: 0.3 s (ước tính)</title></rect><text x='202' y='105' text-anchor='end' font-size='10.5' fill='#0b0b0b'>Poll MJPEG (0–200 ms) + mạng</text><rect x='405.3' y='94' width='22.3' height='16' rx='4' fill='#1baf7a' stroke='#ffffff' stroke-width='0'><title>Poll MJPEG (0–200 ms) + mạng: 0.4 s (ước tính)</title></rect><text x='202' y='131' text-anchor='end' font-size='10.5' fill='#0b0b0b'>sleep(1/fps)</text><rect x='427.6' y='120' width='11.2' height='16' rx='4' fill='#8a8984' stroke='#ffffff' stroke-width='0'><title>sleep(1/fps): 0.2 s (ước tính)</title></rect><text x='202' y='157' text-anchor='end' font-size='10.5' fill='#0b0b0b'>Khi có sự kiện: ffmpeg clip 60 frame</text><rect x='438.7' y='146' width='273.4' height='16' rx='4' fill='#d03b3b' stroke='#ffffff' stroke-width='0'><title>Khi có sự kiện: ffmpeg clip 60 frame: 4.9 s (ước tính)</title></rect></svg><figcaption>Hình 3.5 — Một vòng xử lý (ước tính, chia từ chu kỳ đo được ~4.1 s; chưa có instrument trong code — xem đề xuất đo ở mục 5). Thanh đỏ chỉ xuất hiện khi có sự kiện, là nguyên nhân các lần đứng hình dài.</figcaption></figure>
+
+  <h3>3.4 Nguyên nhân xếp theo ảnh hưởng</h3>
+  <table class="loc">
+    <thead><tr><th>#</th><th>Nguyên nhân</th><th>Vị trí</th><th>Ảnh hưởng</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Publish hình nằm cuối vòng AI tuần tự; <code>sleep(1/fps)</code> cộng thêm thay vì deadline</td><td><code>video_processor.py:480–570, 753–760, 823</code></td><td><span class="tag crit">FPS + trễ</span></td></tr>
+      <tr><td>2</td><td>InsightFace chạy CPU: venv cài <code>onnxruntime</code> (CPU), log xác nhận <code>Applied providers: ['CPUExecutionProvider']</code>; <code>pyproject.toml</code> pin <code>onnxruntime</code></td><td><code>face_engine.py:31-41</code>, <code>pyproject.toml:17</code></td><td><span class="tag crit">FPS</span></td></tr>
+      <tr><td>3</td><td>Mô hình nặng không cần thiết: YOLO <code>imgsz=1280</code>; SCRFD <code>det_size=960</code> trên cả frame <b>và</b> ≤4 crop phóng lên 960; buffalo_l chạy cả 3 model thừa (landmark 2D/3D, giới tính/tuổi) do thiếu <code>allowed_modules</code></td><td><code>detector.py:38</code>, <code>face_engine.py:40</code>, <code>video_processor.py:566</code></td><td><span class="tag crit">FPS</span></td></tr>
+      <tr><td>4</td><td>Giải mã HEVC 1080p25 bằng CPU (OpenCV/FFmpeg), dù chỉ dùng ~0.2 frame/s; NVDEC đang 0%</td><td><code>video_processor.py:147-151, 222-234</code></td><td><span class="tag serious">CPU</span></td></tr>
+      <tr><td>5</td><td>ffmpeg ghi clip được <code>await</code> ngay trong vòng; <code>events.emit</code> ghi ảnh + JSON đồng bộ</td><td><code>video_processor.py:694, 807</code>; <code>events.py:141, 185-200</code></td><td><span class="tag crit">Đứng hình</span></td></tr>
+      <tr><td>6</td><td>Hàm chặn trong handler async: <code>probe_stream</code> (join 8 s), khởi tạo YOLO</td><td><code>api.py:1444, 1452</code>; <code>video_processor.py:175</code></td><td><span class="tag serious">Đứng toàn server</span></td></tr>
+      <tr><td>7</td><td>Không giới hạn thread: torch + ORT mỗi bên dùng tất cả core, nhân theo số camera; máy 8 core load ~22 (chung job train PaddleOCR)</td><td>không có <code>set_num_threads</code>/<code>SessionOptions</code></td><td><span class="tag serious">Jitter</span></td></tr>
+      <tr><td>8</td><td>4 lần encode JPEG + base64 full-res mỗi vòng, broadcast WS mà frontend không còn dùng</td><td><code>video_processor.py:753-780</code>, <code>api.py:135-150</code></td><td><span class="tag warn">CPU</span></td></tr>
+      <tr><td>9</td><td>MJPEG generator poll 200 ms thay vì chờ sự kiện frame mới</td><td><code>api.py:1259-1269</code></td><td><span class="tag warn">+0–200 ms jitter</span></td></tr>
+      <tr><td>10</td><td>Không reconnect RTSP; khi đọc lỗi <code>self.frame</code> giữ nguyên ⇒ đứng ở frame cũ mãi, cảnh báo "mất tín hiệu" không bao giờ bật</td><td><code>video_processor.py:222-234, 454-461</code></td><td><span class="tag serious">Đứng hình</span></td></tr>
+      <tr><td>11</td><td>ByteTrack cấu hình mặc định 30 fps khi chạy 0.2 fps ⇒ đổi ID, hộp nhảy lung tung (cảm giác giật)</td><td><code>detector.py:85-93</code></td><td><span class="tag warn">Cảm nhận</span></td></tr>
+      <tr><td>12</td><td>MJPEG qua HTTP/2 + cloudflared: không có backpressure, dồn buffer rồi xả cục</td><td>kiến trúc</td><td><span class="tag warn">Burst</span></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============ 4. STREAM TECHNIQUE ============ -->
+<section class="page">
+  <h2>4. Kỹ thuật stream: có cần WebRTC?</h2>
+  <p><b>Có — cho phần xem live.</b> Nhưng WebRTC chỉ giải quyết được phần <i>truyền video</i>. Nếu vẫn bắt video chờ AI như hiện nay thì đổi sang WebRTC cũng không hết giật. Điều kiện tiên quyết là <b>tách video khỏi AI</b>: video đi thẳng từ camera tới trình duyệt, kết quả AI đi đường riêng dưới dạng dữ liệu (toạ độ hộp + timestamp) và được vẽ đè ở trình duyệt.</p>
+
+  <h3>4.1 Hiện trạng nguồn camera (ffprobe trên server)</h3>
+  <table>
+    <thead><tr><th>Camera</th><th>Luồng</th><th>Codec</th><th>Độ phân giải</th><th>FPS</th><th>Ghi chú</th></tr></thead>
+    <tbody>
+      <tr><td rowspan="2">cam_01 Hikvision (192.168.1.5)</td><td><code>Channels/101</code> (app đang dùng)</td><td>HEVC Main</td><td>1920×1080</td><td>25</td><td>giải mã CPU</td></tr>
+      <tr><td><code>Channels/102</code></td><td>HEVC Main</td><td>640×360</td><td>25</td><td>đủ cho detect người ở gần/vừa</td></tr>
+      <tr><td>i-PRO WV-S66600-Z3L (192.168.1.113)</td><td><code>stream_1..4</code></td><td>HEVC</td><td>6MP / 1080p / 720p / 360p</td><td>15</td><td>có AI trên camera + ONVIF Profile M metadata; hiện <b>không tới được</b> từ server (No route to host)</td></tr>
+    </tbody>
+  </table>
+  <div class="callout warn"><b>HEVC là rào cản cho trình duyệt</b>WebRTC/MSE với H.265 chỉ chạy trên Safari và Chrome/Edge bản mới có giải mã phần cứng; Firefox và nhiều máy Windows không có. Khuyến nghị <b>chuyển luồng dùng để xem sang H.264</b> trong cấu hình camera (cả Hikvision lẫn i-PRO cho chọn codec theo từng luồng). Nếu không đổi được, transcode bằng NVENC trên RTX 3090 (go2rtc gọi ffmpeg <code>h264_nvenc</code>, ~1–2% GPU / luồng 1080p).</div>
+
+  <h3>4.2 So sánh phương thức truyền</h3>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>Phương thức</th><th>Độ trễ</th><th>Băng thông 1080p</th><th>Qua cloudflared</th><th>HEVC</th><th>Độ phức tạp</th><th>Đánh giá</th></tr></thead>
+    <tbody>
+      <tr><td>MJPEG (hiện tại)</td><td>= tốc độ server</td><td>rất cao (~4 Mbps @5 fps 960p)</td><td>được, nhưng burst</td><td>—</td><td>thấp</td><td><span class="tag serious">giữ làm fallback cuối</span></td></tr>
+      <tr><td>HLS / LL-HLS</td><td>2–6 s / ~1–2 s</td><td>thấp (H.264 copy)</td><td>tốt (HTTP thường, cache được)</td><td>Safari</td><td>thấp</td><td><span class="tag warn">xem lại / ghi hình</span></td></tr>
+      <tr><td>MSE qua WebSocket (fMP4, go2rtc)</td><td>0.5–1 s</td><td>thấp</td><td><b>tốt</b> (WebSocket qua tunnel)</td><td>Chrome/Safari có HW</td><td>thấp (go2rtc có sẵn player)</td><td><span class="tag good">fallback chính</span></td></tr>
+      <tr><td>WebRTC (WHEP, go2rtc)</td><td><b>0.2–0.5 s</b></td><td>thấp</td><td><b>không trực tiếp</b> — media đi UDP; cần TURN (Cloudflare Realtime TURN hoặc coturn trên VPS public) hoặc mở UDP</td><td>Safari, Chrome mới</td><td>trung bình (TURN, ICE)</td><td><span class="tag good">chính cho live</span></td></tr>
+    </tbody>
+  </table></div>
+  <p><b>Khuyến nghị:</b> dùng <b>go2rtc</b> (một binary, có Docker image): nhận RTSP từ camera, <b>không encode lại</b>, phát đồng thời WebRTC + MSE/WebSocket + HLS + MJPEG; player <code>&lt;video-stream&gt;</code> của go2rtc tự thử WebRTC rồi lùi về MSE. Khi đi qua cloudflared mà chưa có TURN, người dùng vẫn được MSE ~0.5–1 s — đã tốt hơn hiện tại ~10 lần. Có thể dùng mediamtx thay thế; go2rtc gọn hơn cho trường hợp này.</p>
+</section>
+
+<section class="page">
+  <h3>4.3 Kiến trúc đề xuất</h3>
+  <figure><svg viewBox='0 0 760 360' class='diagram' role='img' font-family='Be Vietnam Pro, DejaVu Sans, sans-serif'><defs><marker id='ah' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#52514e'/></marker></defs><rect x='10' y='40' width='120' height='60' rx='8' fill='#ffffff' stroke='#2b4c93' stroke-width='1.5'/><text x='70.0' y='61.5' text-anchor='middle' font-size='12' font-weight='700' fill='#0b0b0b'>Camera</text><text x='70.0' y='76.5' text-anchor='middle' font-size='10' fill='#52514e'>luồng chính H.264</text><text x='70.0' y='89.5' text-anchor='middle' font-size='10' fill='#52514e'>(xem live)</text><rect x='10' y='230' width='120' height='60' rx='8' fill='#ffffff' stroke='#2b4c93' stroke-width='1.5'/><text x='70.0' y='251.5' text-anchor='middle' font-size='12' font-weight='700' fill='#0b0b0b'>Camera</text><text x='70.0' y='266.5' text-anchor='middle' font-size='10' fill='#52514e'>luồng phụ 720p/360p</text><text x='70.0' y='279.5' text-anchor='middle' font-size='10' fill='#52514e'>(cho AI) + ONVIF meta</text><rect x='175' y='40' width='150' height='60' rx='8' fill='#eef7f2' stroke='#0ca30c' stroke-width='1.5'/><text x='250.0' y='61.5' text-anchor='middle' font-size='12' font-weight='700' fill='#0b0b0b'>go2rtc</text><text x='250.0' y='76.5' text-anchor='middle' font-size='10' fill='#52514e'>copy luồng, không encode</text><text x='250.0' y='89.5' text-anchor='middle' font-size='10' fill='#52514e'>WebRTC · MSE/WS · HLS</text><line x1='130' y1='70' x2='175' y2='70' stroke='#52514e' stroke-width='1.6' marker-end='url(#ah)'/><text x='152.5' y='65.0' text-anchor='middle' font-size='9.5' fill='#52514e'>RTSP</text><rect x='175' y='130' width='150' height='50' rx='8' fill='#eef7f2' stroke='#0ca30c' stroke-width='1.5'/><text x='250.0' y='152.5' text-anchor='middle' font-size='11' font-weight='700' fill='#0b0b0b'>Ghi segment 10 s</text><text x='250.0' y='166.5' text-anchor='middle' font-size='10' fill='#52514e'>clip sự kiện cắt từ đây</text><line x1='250' y1='100' x2='250' y2='130' stroke='#52514e' stroke-width='1.6' marker-end='url(#ah)'/><rect x='175' y='215' width='150' height='90' rx='8' fill='#eef4fb' stroke='#2a78d6' stroke-width='1.5'/><text x='250.0' y='245.0' text-anchor='middle' font-size='12' font-weight='700' fill='#0b0b0b'>AI worker (process)</text><text x='250.0' y='260.0' text-anchor='middle' font-size='10' fill='#52514e'>giải mã HW nếu có (VAAPI/QSV)</text><text x='250.0' y='273.0' text-anchor='middle' font-size='10' fill='#52514e'>OpenVINO, model theo hw_profile</text><text x='250.0' y='286.0' text-anchor='middle' font-size='10' fill='#52514e'>fps thích ứng, gắn pts</text><line x1='130' y1='260' x2='175' y2='260' stroke='#52514e' stroke-width='1.6' marker-end='url(#ah)'/><text x='152.5' y='255.0' text-anchor='middle' font-size='9.5' fill='#52514e'>RTSP</text><rect x='370' y='215' width='150' height='90' rx='8' fill='#eef4fb' stroke='#2a78d6' stroke-width='1.5'/><text x='445.0' y='245.0' text-anchor='middle' font-size='12' font-weight='700' fill='#0b0b0b'>Face worker</text><text x='445.0' y='260.0' text-anchor='middle' font-size='10' fill='#52514e'>chỉ track chưa có danh tính</text><text x='445.0' y='273.0' text-anchor='middle' font-size='10' fill='#52514e'>crop độ phân giải cao</text><text x='445.0' y='286.0' text-anchor='middle' font-size='10' fill='#52514e'>ArcFace (OpenVINO)</text><line x1='325' y1='260' x2='370' y2='260' stroke='#52514e' stroke-width='1.6' marker-end='url(#ah)'/><text x='347.5' y='255.0' text-anchor='middle' font-size='9.5' fill='#52514e'>crop</text><rect x='370' y='130' width='150' height='50' rx='8' fill='#ffffff' stroke='#2b4c93' stroke-width='1.5'/><text x='445.0' y='152.5' text-anchor='middle' font-size='11' font-weight='700' fill='#0b0b0b'>Rules / Events</text><text x='445.0' y='166.5' text-anchor='middle' font-size='10' fill='#52514e'>dwell, hysteresis, SQLite</text><line x1='445' y1='215' x2='445' y2='180' stroke='#52514e' stroke-width='1.6' marker-end='url(#ah)'/><rect x='565' y='20' width='185' height='110' rx='8' fill='#fdf8ec' stroke='#fab219' stroke-width='1.5'/><text x='657.5' y='53.5' text-anchor='middle' font-size='12' font-weight='700' fill='#0b0b0b'>Trình duyệt</text><text x='657.5' y='68.5' text-anchor='middle' font-size='10' fill='#52514e'>&lt;video&gt; WebRTC (TURN)</text><text x='657.5' y='81.5' text-anchor='middle' font-size='10' fill='#52514e'>fallback MSE qua WebSocket</text><text x='657.5' y='94.5' text-anchor='middle' font-size='10' fill='#52514e'>+ &lt;canvas&gt; overlay</text><text x='657.5' y='107.5' text-anchor='middle' font-size='10' fill='#52514e'>đồng bộ theo pts (rVFC)</text><line x1='325' y1='60' x2='565' y2='60' stroke='#52514e' stroke-width='1.6' marker-end='url(#ah)'/><text x='445.0' y='54' text-anchor='middle' font-size='9.5' fill='#52514e'>media ~0.3–0.8 s</text><line x1='520' y1='250' x2='640' y2='130' stroke='#52514e' stroke-width='1.6' marker-end='url(#ah)'/><text x='600' y='215' text-anchor='start' font-size='9.5' fill='#52514e'>JSON boxes + pts (WS/SSE)</text><line x1='520' y1='155' x2='565' y2='110' stroke='#52514e' stroke-width='1.6' marker-end='url(#ah)'/><text x='380.0' y='348' text-anchor='middle' font-size='10.5' fill='#52514e'>Video không bao giờ chờ AI. AI chậm (CPU yếu) chỉ làm khung overlay cập nhật thưa hơn, hình vẫn chạy 15–25 fps.</text></svg><figcaption>Hình 4.1 — Tách 2 đường: <b>video</b> (camera → go2rtc → trình duyệt) và <b>AI</b> (luồng phụ → worker GPU → JSON có timestamp → canvas). Clip sự kiện cắt từ bản ghi segment, không giữ 60 frame base64 trong RAM.</figcaption></figure>
+  <h4>Đồng bộ overlay với video</h4>
+  <ul>
+    <li>AI worker gắn <code>pts</code> (RTP timestamp / thời điểm capture) vào mỗi kết quả: <code>{camera_id, pts, tracks:[{id, box, label, identity, zone_state}]}</code>, đẩy qua WebSocket (hoặc SSE hiện có).</li>
+    <li>Trình duyệt dùng <code>video.requestVideoFrameCallback()</code> (có <code>mediaTime</code>, với WebRTC có cả <code>rtpTimestamp</code>) để chọn kết quả AI khớp frame đang hiển thị; nếu kết quả tới sau video, nội suy/dự đoán vị trí hộp theo vận tốc track (Kalman đơn giản) — mắt người không thấy độ lệch &lt;150 ms.</li>
+    <li>Ảnh bằng chứng/snapshot sự kiện vẫn render overlay phía server (chỉ khi có sự kiện), không cần cho mỗi frame.</li>
+  </ul>
+  <h4>Tận dụng AI trên camera i-PRO (PoC)</h4>
+  <p>Camera i-PRO đã chạy sẵn phát hiện người + tracking ID và AI-VMD (xâm nhập, vượt rào ảo, lảng vãng), xuất <b>ONVIF Profile M metadata</b> trong cùng phiên RTSP (<code>?analytics=1</code>), cùng đồng hồ RTP với video. Nếu PoC đạt độ chính xác chấp nhận được (dev đã có <code>scripts/probe_ai_camera.py</code>), server chỉ còn làm <b>nhận diện khuôn mặt</b> cho track mới ⇒ giảm phần lớn tải GPU/CPU và overlay gần như không trễ. Cần giữ đường YOLO cho camera không có AI (Hikvision hiện tại).</p>
+  <figure><svg viewBox='0 0 760 180' class='chart' role='img' font-family='Be Vietnam Pro, DejaVu Sans, sans-serif'><line x1='150.0' x2='150.0' y1='8' y2='118' stroke='#e4e3df'/><text x='150.0' y='132' text-anchor='middle' font-size='10' fill='#52514e'>0 s</text><line x1='195.4' x2='195.4' y1='8' y2='118' stroke='#e4e3df'/><text x='195.4' y='132' text-anchor='middle' font-size='10' fill='#52514e'>1 s</text><line x1='240.8' x2='240.8' y1='8' y2='118' stroke='#e4e3df'/><text x='240.8' y='132' text-anchor='middle' font-size='10' fill='#52514e'>2 s</text><line x1='286.2' x2='286.2' y1='8' y2='118' stroke='#e4e3df'/><text x='286.2' y='132' text-anchor='middle' font-size='10' fill='#52514e'>3 s</text><line x1='331.5' x2='331.5' y1='8' y2='118' stroke='#e4e3df'/><text x='331.5' y='132' text-anchor='middle' font-size='10' fill='#52514e'>4 s</text><line x1='376.9' x2='376.9' y1='8' y2='118' stroke='#e4e3df'/><text x='376.9' y='132' text-anchor='middle' font-size='10' fill='#52514e'>5 s</text><line x1='422.3' x2='422.3' y1='8' y2='118' stroke='#e4e3df'/><text x='422.3' y='132' text-anchor='middle' font-size='10' fill='#52514e'>6 s</text><line x1='467.7' x2='467.7' y1='8' y2='118' stroke='#e4e3df'/><text x='467.7' y='132' text-anchor='middle' font-size='10' fill='#52514e'>7 s</text><line x1='513.1' x2='513.1' y1='8' y2='118' stroke='#e4e3df'/><text x='513.1' y='132' text-anchor='middle' font-size='10' fill='#52514e'>8 s</text><line x1='558.5' x2='558.5' y1='8' y2='118' stroke='#e4e3df'/><text x='558.5' y='132' text-anchor='middle' font-size='10' fill='#52514e'>9 s</text><line x1='603.8' x2='603.8' y1='8' y2='118' stroke='#e4e3df'/><text x='603.8' y='132' text-anchor='middle' font-size='10' fill='#52514e'>10 s</text><line x1='649.2' x2='649.2' y1='8' y2='118' stroke='#e4e3df'/><text x='649.2' y='132' text-anchor='middle' font-size='10' fill='#52514e'>11 s</text><line x1='694.6' x2='694.6' y1='8' y2='118' stroke='#e4e3df'/><text x='694.6' y='132' text-anchor='middle' font-size='10' fill='#52514e'>12 s</text><line x1='740.0' x2='740.0' y1='8' y2='118' stroke='#e4e3df'/><text x='740.0' y='132' text-anchor='middle' font-size='10' fill='#52514e'>13 s</text><text x='142' y='33' text-anchor='end' font-size='11' font-weight='600' fill='#0b0b0b'>Hiện tại (đo)</text><rect x='151.0' y='20' width='75.2' height='20' rx='4' fill='#2a78d6'><title>Chụp → xong AI: 1.7 s</title></rect><rect x='228.2' y='20' width='57.0' height='20' rx='4' fill='#eb6834'><title>Vẽ+encode+poll+mạng: 1.3 s</title></rect><rect x='287.2' y='20' width='93.3' height='20' rx='4' fill='#ec835a'><title>Hình đứng chờ frame sau (TB): 2.1 s</title></rect><rect x='382.5' y='20' width='356.5' height='20' rx='4' fill='#f2d3c7'><title>Tệ nhất thêm: 7.9 s</title></rect><text x='142' y='73' text-anchor='end' font-size='11' font-weight='600' fill='#0b0b0b'>Mục tiêu</text><rect x='151.0' y='60' width='20.7' height='20' rx='4' fill='#1baf7a'><title>Encode camera + go2rtc + WebRTC: 0.5 s</title></rect><rect x='173.7' y='60' width='4.8' height='20' rx='4' fill='#2a78d6'><title>Overlay lệch video: 0.15 s</title></rect><rect x='20' y='145' width='10' height='10' rx='2' fill='#2a78d6'/><text x='34' y='154' font-size='9.5' fill='#52514e'>Chụp → xong AI 1.7 s</text><rect x='265' y='145' width='10' height='10' rx='2' fill='#eb6834'/><text x='279' y='154' font-size='9.5' fill='#52514e'>Vẽ + encode + poll + mạng 1.3 s</text><rect x='510' y='145' width='10' height='10' rx='2' fill='#ec835a'/><text x='524' y='154' font-size='9.5' fill='#52514e'>Hình đứng chờ frame kế (TB 2.1 s)</text><rect x='20' y='159' width='10' height='10' rx='2' fill='#f2d3c7'/><text x='34' y='168' font-size='9.5' fill='#52514e'>Tệ nhất ~13 s</text><rect x='265' y='159' width='10' height='10' rx='2' fill='#1baf7a'/><text x='279' y='168' font-size='9.5' fill='#52514e'>Mục tiêu video 0.5 s</text><rect x='510' y='159' width='10' height='10' rx='2' fill='#2a78d6'/><text x='524' y='168' font-size='9.5' fill='#52514e'>Overlay lệch ≤ 0.15 s</text></svg><figcaption>Hình 4.2 — Ngân sách độ trễ: hiện tại (đo) so với mục tiêu. Mục tiêu: video p95 &lt; 1 s, overlay lệch video ≤ 200 ms.</figcaption></figure>
+</section>
+
+<!-- ============ 5. TỐI ƯU ============ -->
+<section class="page">
+  <h2>5. Tối ưu: fix nhanh và tái kiến trúc</h2>
+  <p>Hiện code đã có một số điểm tốt: thread đọc RTSP chỉ giữ frame mới nhất (tự bỏ frame cũ), MJPEG encode 1 lần và chia sẻ cho mọi client, YOLO và nhận diện mặt chạy song song bằng <code>to_thread</code>. Chưa tối ưu ở: dùng sai phần cứng, chọn kích thước model, và trói video vào AI.</p>
+  <h3>5.1 Fix nhanh (P0, 2–4 ngày công, chưa đổi kiến trúc)</h3>
+  <table>
+    <thead><tr><th>#</th><th>Thay đổi</th><th>Chỗ sửa</th><th>Kỳ vọng</th></tr></thead>
+    <tbody>
+      <tr><td>Q1</td><td><b>Tách 2 nhịp</b>: một task 10–15 fps lấy frame mới nhất từ reader, vẽ <i>kết quả AI gần nhất</i>, encode 1 lần ở 960 px rồi publish; vòng AI chạy riêng và chỉ cập nhật kết quả</td><td><code>video_processor.py</code> (tách phần 493–760 khỏi 480–570)</td><td>stream 10–15 fps ngay cả khi AI 1 fps; trễ video ~0.3–0.6 s</td></tr>
+      <tr><td>Q2</td><td>Runtime theo phần cứng: máy thật CPU-only dùng <b>OpenVINO</b> (mục 5.3); máy dev có GPU thì dùng <code>onnxruntime-gpu</code>. Khi khởi động, log rõ đang chạy trên thiết bị nào</td><td><code>pyproject.toml</code>, <code>Dockerfile</code>, <code>face_engine.py</code></td><td>CPU: R50 nhanh khoảng 3× so với ORT CPU (đo). GPU: nhanh khoảng 10–20×</td></tr>
+      <tr><td>Q3</td><td><code>FaceAnalysis(allowed_modules=['detection','recognition'])</code>; <code>FACE_DET_SIZE=640</code> cho cả frame, 320–480 cho crop; rescan tối đa 1–2 và chỉ cho track chưa có danh tính</td><td><code>face_engine.py:66</code>, <code>video_processor.py:120, 336-357</code></td><td>bớt 3 model/mặt, bớt ~50–70% thời gian face</td></tr>
+      <tr><td>Q4</td><td>YOLO11<b>s</b> chạy 640 trên <b>ROI</b> thay vì 1280 trên cả khung hình. <b>Không hạ xuống YOLO11n</b> với camera góc rộng: đo được chỉ còn bắt 18% số người (hình 5.2). 1 model dùng chung cho mọi camera</td><td><code>detector.py:38, 85</code></td><td>Nhanh khoảng 6× (642 → 96 ms ở mức AVX2)</td></tr>
+      <tr><td>Q5</td><td>AI đọc luồng phụ (102 / stream_3); giải mã phần cứng nếu máy có (VAAPI/QSV, máy dev thì NVDEC). Chỉ kéo luồng chính khi cần crop mặt độ phân giải cao, ví dụ trong cửa sổ điểm danh</td><td>cấu hình camera, <code>open_stream_capture</code></td><td>H.265 1080p 0.17 → 360p 0.018 nhân (đo, ban đêm)</td></tr>
+      <tr><td>Q6</td><td><code>_archive_clip</code>, <code>events.emit</code>, ghi JSON, <code>monitor</code> chạy nền (<code>asyncio.create_task(asyncio.to_thread(...))</code>); <code>probe_stream</code> và khởi tạo <code>CameraRuntime</code> qua <code>to_thread</code></td><td><code>video_processor.py:694, 807</code>; <code>api.py:1444, 1452</code></td><td>hết đứng hình theo sự kiện</td></tr>
+      <tr><td>Q7</td><td>Giới hạn thread: <code>torch.set_num_threads(2)</code>, ORT <code>intra_op_num_threads=2</code>, <code>OMP_NUM_THREADS</code>; giới hạn CPU cho container</td><td>khởi tạo model</td><td>giảm jitter, không giẫm nhau</td></tr>
+      <tr><td>Q8</td><td>Bỏ encode full-res + base64 mỗi frame và broadcast <code>frame_update</code> qua WS; clip buffer lưu bytes JPEG 960 px</td><td><code>video_processor.py:753-780</code>; <code>api.py:135-150</code></td><td>bớt CPU, RAM clip từ ~25 MB → ~6 MB / camera</td></tr>
+      <tr><td>Q9</td><td>MJPEG chờ <code>asyncio.Event</code> / condition khi có frame mới thay vì poll</td><td><code>api.py:1259-1269</code></td><td>bớt 0–200 ms jitter</td></tr>
+      <tr><td>Q10</td><td>Reader: số thứ tự frame, xoá frame khi đọc lỗi, timeout "hình cũ" theo thời gian, reconnect có backoff</td><td><code>video_processor.py:189-247</code></td><td>hết đứng ở frame cũ; báo mất tín hiệu đúng</td></tr>
+      <tr><td>Q11</td><td>Đo đạc: log/expose <code>capture_fps, infer_ms (p50/p95), publish_fps, frame_age_ms</code> mỗi camera trên <code>/api/v1/system/health</code></td><td><code>api.py:1593</code></td><td>có số để nghiệm thu</td></tr>
+    </tbody>
+  </table>
+  <h3>5.2 Tái kiến trúc (P1–P2)</h3>
+  <ol>
+    <li><b>AI worker là process riêng</b> (multiprocessing hoặc service riêng) để tránh GIL với API/stream; giao tiếp qua shared memory / ZeroMQ / Redis.</li>
+    <li><b>Runtime theo phần cứng</b>: máy thật CPU-only dùng OpenVINO, INT8 khi CPU có VNNI/AMX (mục 5.3–5.4); máy có GPU NVIDIA dùng TensorRT. Gộp frame của nhiều camera vào một lần chạy.</li>
+    <li><b>go2rtc</b> cho video + <b>overlay canvas</b> phía client (mục 4).</li>
+    <li><b>Lưu trữ</b>: JSON → SQLite (WAL) cho events/logs/schedules; clip lấy từ ghi segment.</li>
+  </ol>
+</section>
+
+<section>
+  <h3>5.3 Hôm nay chạy CPU, sau này thêm GPU: phương án tự thích ứng phần cứng</h3>
+  <div class="callout"><b>Bối cảnh</b>Máy production hiện <b>chỉ có CPU</b>, chưa biết kiến trúc, số camera chưa chốt. <b>Sau này có thể lắp GPU</b>, nhiều khả năng là NVIDIA L4. Máy dev <code>techainer-rtx3090-1</code> đang chạy bản demo và có GPU, nhưng không đại diện cho production. Yêu cầu: <b>một codebase tự thích ứng</b>. Hôm nay tối ưu cho CPU; khi có GPU thì tự nhận và mở rộng (mục 5.5), không phải viết lại. Mọi phần "GPU / TensorRT / NVDEC" ở các mục trên là nhánh GPU của cùng thiết kế này.</div>
+
+  <h4>Số đo thật trên CPU (02/11/2026)</h4>
+  <p class="small">Môi trường đo:
+  <ul class="small">
+    <li>Máy: Xeon Gold 6226R, ghim 4–8 nhân vật lý. Máy đang có tải nền (load ~22–31) nên số đo dao động khoảng ±30%; mỗi ô lấy best-of-3.</li>
+    <li>Phần mềm: OpenVINO 2026.4, NNCF 3.4 (INT8 lượng tử hoá sau huấn luyện, hiệu chỉnh bằng 138 frame camera thật).</li>
+    <li>Giả lập CPU đời cũ (AVX2, giống i7-9700K của máy dev) bằng <code>ONEDNN_MAX_CPU_ISA=AVX2</code>.</li>
+    <li>Giải mã và mã hoá đo bằng ffmpeg 1 luồng, trên clip 20 s ghi từ <code>cam_01</code>.</li>
+  </ul></p>
+  <figure><svg viewBox='0 0 760 340' class='chart' role='img' font-family='Be Vietnam Pro, DejaVu Sans, sans-serif'><line x1='190.0' x2='190.0' y1='26' y2='306' stroke='#e4e3df'/><text x='190.0' y='320' text-anchor='middle' font-size='10' fill='#52514e'>0 ms</text><line x1='261.4' x2='261.4' y1='26' y2='306' stroke='#e4e3df'/><text x='261.4' y='320' text-anchor='middle' font-size='10' fill='#52514e'>100 ms</text><line x1='332.9' x2='332.9' y1='26' y2='306' stroke='#e4e3df'/><text x='332.9' y='320' text-anchor='middle' font-size='10' fill='#52514e'>200 ms</text><line x1='404.3' x2='404.3' y1='26' y2='306' stroke='#e4e3df'/><text x='404.3' y='320' text-anchor='middle' font-size='10' fill='#52514e'>300 ms</text><line x1='475.7' x2='475.7' y1='26' y2='306' stroke='#e4e3df'/><text x='475.7' y='320' text-anchor='middle' font-size='10' fill='#52514e'>400 ms</text><line x1='547.1' x2='547.1' y1='26' y2='306' stroke='#e4e3df'/><text x='547.1' y='320' text-anchor='middle' font-size='10' fill='#52514e'>500 ms</text><line x1='618.6' x2='618.6' y1='26' y2='306' stroke='#e4e3df'/><text x='618.6' y='320' text-anchor='middle' font-size='10' fill='#52514e'>600 ms</text><line x1='690.0' x2='690.0' y1='26' y2='306' stroke='#e4e3df'/><text x='690.0' y='320' text-anchor='middle' font-size='10' fill='#52514e'>700 ms</text><text x='182' y='45' text-anchor='end' font-size='10.5' fill='#0b0b0b'>YOLO11s@1280 (hiện tại)</text><rect x='190' y='32' width='458.6' height='10' rx='3' fill='#2a78d6'><title>YOLO11s@1280 (hiện tại) FP32: 642 ms</title></rect><text x='652.6' y='41' font-size='9' fill='#52514e'>642</text><rect x='190' y='44' width='360.7' height='10' rx='3' fill='#eb6834'><title>YOLO11s@1280 (hiện tại) INT8: 505 ms</title></rect><text x='554.7' y='53' font-size='9' fill='#52514e'>505</text><text x='182' y='75' text-anchor='end' font-size='10.5' fill='#0b0b0b'>YOLO11s@960</text><rect x='190' y='62' width='211.4' height='10' rx='3' fill='#2a78d6'><title>YOLO11s@960 FP32: 296 ms</title></rect><text x='405.4' y='71' font-size='9' fill='#52514e'>296</text><rect x='190' y='74' width='177.9' height='10' rx='3' fill='#eb6834'><title>YOLO11s@960 INT8: 249 ms</title></rect><text x='371.9' y='83' font-size='9' fill='#52514e'>249</text><text x='182' y='105' text-anchor='end' font-size='10.5' fill='#0b0b0b'>YOLO11s@640</text><rect x='190' y='92' width='68.6' height='10' rx='3' fill='#2a78d6'><title>YOLO11s@640 FP32: 96 ms</title></rect><text x='262.6' y='101' font-size='9' fill='#52514e'>96</text><rect x='190' y='104' width='54.3' height='10' rx='3' fill='#eb6834'><title>YOLO11s@640 INT8: 76 ms</title></rect><text x='248.3' y='113' font-size='9' fill='#52514e'>76</text><text x='182' y='135' text-anchor='end' font-size='10.5' fill='#0b0b0b'>YOLO11n@640</text><rect x='190' y='122' width='24.3' height='10' rx='3' fill='#2a78d6'><title>YOLO11n@640 FP32: 34 ms</title></rect><text x='218.3' y='131' font-size='9' fill='#52514e'>34</text><rect x='190' y='134' width='24.3' height='10' rx='3' fill='#eb6834'><title>YOLO11n@640 INT8: 34 ms</title></rect><text x='218.3' y='143' font-size='9' fill='#52514e'>34</text><text x='182' y='165' text-anchor='end' font-size='10.5' fill='#0b0b0b'>SCRFD-10G@960 (hiện tại)</text><rect x='190' y='152' width='260.7' height='10' rx='3' fill='#2a78d6'><title>SCRFD-10G@960 (hiện tại) FP32: 365 ms</title></rect><text x='454.7' y='161' font-size='9' fill='#52514e'>365</text><rect x='190' y='164' width='160.0' height='10' rx='3' fill='#eb6834'><title>SCRFD-10G@960 (hiện tại) INT8: 224 ms</title></rect><text x='354.0' y='173' font-size='9' fill='#52514e'>224</text><text x='182' y='195' text-anchor='end' font-size='10.5' fill='#0b0b0b'>SCRFD-10G@640</text><rect x='190' y='182' width='63.6' height='10' rx='3' fill='#2a78d6'><title>SCRFD-10G@640 FP32: 89 ms</title></rect><text x='257.6' y='191' font-size='9' fill='#52514e'>89</text><rect x='190' y='194' width='45.0' height='10' rx='3' fill='#eb6834'><title>SCRFD-10G@640 INT8: 63 ms</title></rect><text x='239.0' y='203' font-size='9' fill='#52514e'>63</text><text x='182' y='225' text-anchor='end' font-size='10.5' fill='#0b0b0b'>SCRFD-500M@640</text><rect x='190' y='212' width='6.6' height='10' rx='3' fill='#2a78d6'><title>SCRFD-500M@640 FP32: 9.3 ms</title></rect><text x='200.6' y='221' font-size='9' fill='#52514e'>9.3</text><rect x='190' y='224' width='6.2' height='10' rx='3' fill='#eb6834'><title>SCRFD-500M@640 INT8: 8.7 ms</title></rect><text x='200.2' y='233' font-size='9' fill='#52514e'>8.7</text><text x='182' y='255' text-anchor='end' font-size='10.5' fill='#0b0b0b'>ArcFace R50 (hiện tại)</text><rect x='190' y='242' width='43.6' height='10' rx='3' fill='#2a78d6'><title>ArcFace R50 (hiện tại) FP32: 61 ms</title></rect><text x='237.6' y='251' font-size='9' fill='#52514e'>61</text><rect x='190' y='254' width='36.4' height='10' rx='3' fill='#eb6834'><title>ArcFace R50 (hiện tại) INT8: 51 ms</title></rect><text x='230.4' y='263' font-size='9' fill='#52514e'>51</text><text x='182' y='285' text-anchor='end' font-size='10.5' fill='#0b0b0b'>ArcFace MBF</text><rect x='190' y='272' width='3.4' height='10' rx='3' fill='#2a78d6'><title>ArcFace MBF FP32: 4.7 ms</title></rect><text x='197.4' y='281' font-size='9' fill='#52514e'>4.7</text><rect x='190' y='284' width='2.8' height='10' rx='3' fill='#eb6834'><title>ArcFace MBF INT8: 3.9 ms</title></rect><text x='196.8' y='293' font-size='9' fill='#52514e'>3.9</text><rect x='190' y='8' width='10' height='10' rx='2' fill='#2a78d6'/><text x='204' y='17' font-size='10' fill='#52514e'>FP32</text><rect x='250' y='8' width='10' height='10' rx='2' fill='#eb6834'/><text x='264' y='17' font-size='10' fill='#52514e'>INT8 (NNCF)</text><text x='690' y='336' text-anchor='end' font-size='9.5' fill='#52514e'>Xeon 6226R giả lập AVX2 (ONEDNN_MAX_CPU_ISA), 4 nhân, OpenVINO 2026.4</text></svg><figcaption>Hình 5.1 — Độ trễ mỗi lần chạy model trên CPU ở mức AVX2, 4 luồng. Cấu hình hiện tại (YOLO11s@1280 + SCRFD-10G@960, cộng tối đa 4 lần quét lại, cộng R50 cho từng mặt) cộng lại khoảng <b>2–3 s/frame</b>, khớp với 2–4 s/vòng đo trên server.</figcaption></figure>
+
+  <table>
+    <thead><tr><th>Câu hỏi</th><th>Kết quả đo</th><th>Kết luận</th></tr></thead>
+    <tbody>
+      <tr><td>FP8?</td><td>CPU không có phép tính FP8. OpenVINO trên CPU hỗ trợ FP32, BF16/FP16 (chỉ khi có AMX/AVX512-FP16) và INT8.</td><td><span class="tag crit">Không dùng</span></td></tr>
+      <tr><td>INT8 nhanh hơn bao nhiêu?</td><td><b>CPU có VNNI</b> (AVX512-VNNI / AVX-VNNI / AMX): model lớn nhanh 1.6–3×, ví dụ SCRFD-10G 101→33 ms, R50 46→15 ms, YOLO11s@640 89→54 ms. <b>CPU chỉ có AVX2</b>: chỉ nhanh 1.0–1.6×; model nhỏ (YOLO11n, SCRFD-500M, MBF) gần như không đổi.</td><td><span class="tag warn">Tuỳ CPU</span>: bật khi máy đích có VNNI/AMX <b>và</b> qua kiểm độ chính xác</td></tr>
+      <tr><td>INT8 có làm sai lệch kết quả?</td><td>YOLO PTQ cấu hình mặc định: INT8 chỉ bắt lại 89–92% hộp của FP32, và YOLO11s INT8 sinh thêm 15% hộp. ArcFace: cosine giữa embedding FP32 và INT8 là 0.970 (R50), 0.988 (MBF).</td><td>Lượng tử hoá YOLO phải bỏ qua phần đầu ra (head), theo cách Ultralytics export. ArcFace INT8 lệch khoảng 0.03, xấp xỉ biên 0.05 của luật khớp, nên phải đo lại trên ảnh đăng ký thật trước khi dùng.</td></tr>
+      <tr><td>OpenVINO hay ONNX Runtime?</td><td>OpenVINO nhanh hơn ở đa số model (R50 32 so với 97 ms, YOLO11n@640 24 so với 43 ms), nhưng trong lần đo này ORT nhanh hơn ở YOLO11s@640 (75 so với 90 ms).</td><td>Không chốt cứng: <b>đo trên máy đích và chọn theo từng model</b></td></tr>
+      <tr><td>Hạ xuống model nhỏ được không?</td><td>Xem hình 5.2: cảnh góc rộng, người nhỏ, YOLO11n@640 chỉ còn bắt <b>18%</b> số người.</td><td><span class="tag crit">Không hạ bừa</span>: giữ độ phân giải ở vùng cần giám sát (cắt ROI), tiết kiệm bằng cách khác</td></tr>
+    </tbody>
+  </table>
+  <figure><svg viewBox='0 0 760 220' class='chart' role='img' font-family='Be Vietnam Pro, DejaVu Sans, sans-serif'><line x1='130.0' x2='130.0' y1='10' y2='190' stroke='#e4e3df'/><text x='130.0' y='204' text-anchor='middle' font-size='10' fill='#52514e'>0%</text><line x1='247.5' x2='247.5' y1='10' y2='190' stroke='#e4e3df'/><text x='247.5' y='204' text-anchor='middle' font-size='10' fill='#52514e'>25%</text><line x1='365.0' x2='365.0' y1='10' y2='190' stroke='#e4e3df'/><text x='365.0' y='204' text-anchor='middle' font-size='10' fill='#52514e'>50%</text><line x1='482.5' x2='482.5' y1='10' y2='190' stroke='#e4e3df'/><text x='482.5' y='204' text-anchor='middle' font-size='10' fill='#52514e'>75%</text><line x1='600.0' x2='600.0' y1='10' y2='190' stroke='#e4e3df'/><text x='600.0' y='204' text-anchor='middle' font-size='10' fill='#52514e'>100%</text><text x='122' y='27' text-anchor='end' font-size='10.5' fill='#0b0b0b'>YOLO11s@1280</text><rect x='130' y='16' width='470.0' height='16' rx='4' fill='#1baf7a'><title>YOLO11s@1280: 100%</title></rect><text x='605.0' y='28' font-size='10' font-weight='600' fill='#0b0b0b'>100%</text><text x='754' y='28' text-anchor='end' font-size='10' fill='#52514e'>~640 ms (AVX2)</text><text x='122' y='53' text-anchor='end' font-size='10.5' fill='#0b0b0b'>YOLO11s@960</text><rect x='130' y='42' width='347.8' height='16' rx='4' fill='#1baf7a'><title>YOLO11s@960: 74%</title></rect><text x='482.8' y='54' font-size='10' font-weight='600' fill='#0b0b0b'>74%</text><text x='754' y='54' text-anchor='end' font-size='10' fill='#52514e'>~300 ms (AVX2)</text><text x='122' y='79' text-anchor='end' font-size='10.5' fill='#0b0b0b'>YOLO11s@640</text><rect x='130' y='68' width='305.5' height='16' rx='4' fill='#fab219'><title>YOLO11s@640: 65%</title></rect><text x='440.5' y='80' font-size='10' font-weight='600' fill='#0b0b0b'>65%</text><text x='754' y='80' text-anchor='end' font-size='10' fill='#52514e'>~96 ms (AVX2)</text><text x='122' y='105' text-anchor='end' font-size='10.5' fill='#0b0b0b'>YOLO11n@640</text><rect x='130' y='94' width='84.6' height='16' rx='4' fill='#d03b3b'><title>YOLO11n@640: 18%</title></rect><text x='219.6' y='106' font-size='10' font-weight='600' fill='#0b0b0b'>18%</text><text x='754' y='106' text-anchor='end' font-size='10' fill='#52514e'>~34 ms (AVX2)</text><text x='122' y='131' text-anchor='end' font-size='10.5' fill='#0b0b0b'>YOLO11n@480</text><rect x='130' y='120' width='37.6' height='16' rx='4' fill='#d03b3b'><title>YOLO11n@480: 8%</title></rect><text x='172.6' y='132' font-size='10' font-weight='600' fill='#0b0b0b'>8%</text><text x='754' y='132' text-anchor='end' font-size='10' fill='#52514e'>~20 ms (AVX2)</text><text x='122' y='157' text-anchor='end' font-size='10.5' fill='#0b0b0b'>YOLO11n@320</text><rect x='130' y='146' width='2.0' height='16' rx='4' fill='#d03b3b'><title>YOLO11n@320: 0%</title></rect><text x='135.0' y='158' font-size='10' font-weight='600' fill='#0b0b0b'>0%</text><text x='754' y='158' text-anchor='end' font-size='10' fill='#52514e'>~10 ms (AVX2)</text></svg><figcaption>Hình 5.2 — Tỉ lệ hộp người còn bắt được so với YOLO11s@1280 (tham chiếu, không phải nhãn thật), trên 37 frame ban ngày của <code>cam_01</code>. Cột phải là độ trễ ở mức AVX2.</figcaption></figure>
+
+  <h4>Giải mã và mã hoá video trên CPU (1 luồng)</h4>
+  <table>
+    <thead><tr><th>Việc</th><th class="num">Số nhân / camera</th><th>Ghi chú</th></tr></thead>
+    <tbody>
+      <tr><td>Chuyển tiếp luồng (go2rtc, <code>-c copy</code>)</td><td class="num">~0</td><td>Cách xem live chính</td></tr>
+      <tr><td>Giải mã H.265 1080p25 → BGR</td><td class="num">0.17</td><td>Clip ban đêm, bitrate 0.68 Mbps. Ban ngày có thể gấp 2–3 lần.</td></tr>
+      <tr><td>Giải mã H.265 360p25 → BGR</td><td class="num">0.018</td><td>Luồng phụ cho AI, rẻ hơn khoảng 10 lần</td></tr>
+      <tr><td>Chỉ giải mã keyframe (1080p, GOP 50)</td><td class="num">0.015</td><td>Chế độ tối thiểu khi máy quá tải (~0.5 fps)</td></tr>
+      <tr><td>Chuyển mã H.265 → H.264 1080p25 (x264 ultrafast)</td><td class="num">0.37</td><td>Chỉ dùng khi trình duyệt không xem được HEVC và camera không xuất được H.264</td></tr>
+      <tr><td>Chuyển mã 360p25</td><td class="num">0.04</td><td>Fallback rẻ khi xem nhiều ô camera nhỏ</td></tr>
+      <tr><td>Bộ mã hoá JPEG hiện tại mỗi frame (4 lần mã hoá + base64)</td><td class="num">20 ms/frame</td><td>Bỏ đi khi overlay chuyển sang vẽ ở trình duyệt</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h3>5.4 Thiết kế 3 lớp tự thích ứng</h3>
+  <table>
+    <thead><tr><th>Lớp</th><th>Khi nào</th><th>Làm gì</th></tr></thead>
+    <tbody>
+      <tr><td><b>1. Hồ sơ phần cứng</b></td><td>Lúc cài đặt, hoặc khi phát hiện CPU đổi</td><td><code>scripts/bench_hw.py</code> (đã viết; nhánh CPU đã chạy thử, nhánh GPU chưa được chạy trên GPU thật):
+        <ul>
+          <li>Dò CPU (model, số nhân thật tôn trọng taskset/cgroup, cờ AVX2 / AVX512-VNNI / AVX-VNNI / AMX), GPU NVIDIA (<code>nvidia-smi</code>, ONNX Runtime CUDA/TensorRT), GPU Intel (OpenVINO GPU), cùng giải mã và mã hoá phần cứng (NVDEC/NVENC, QSV, VAAPI).</li>
+          <li>Đo từng model trên <b>mọi backend có sẵn</b>: OpenVINO CPU FP32/INT8, ORT CPU, ORT CUDA, TensorRT FP16, OpenVINO iGPU FP16. Đo giải mã luồng mẫu bằng phần mềm và bằng phần cứng.</li>
+          <li>Với từng tầng, thử mọi cách gán thành phần vào backend, có tính ngân sách riêng cho CPU và GPU, rồi chọn cách cho nhiều camera nhất. Ví dụ ở lần đo này, tầng C tự chọn ORT cho phát hiện người và mặt, OpenVINO cho ArcFace.</li>
+          <li>Tính số nhân cần cho mỗi camera theo từng tầng cấu hình, rồi ra <b>số camera tối đa</b>.</li>
+          <li>Ghi <code>data/hw_profile.json</code> kèm <b>chữ ký phần cứng</b>. App đọc file này khi khởi động; nếu chữ ký đổi (ví dụ vừa cắm GPU) thì tự đo lại rồi chọn tầng mới.</li>
+        </ul></td></tr>
+      <tr><td><b>2. Hồ sơ từng camera</b></td><td>Khi thêm camera, và tự kiểm định kỳ</td><td>
+        <ul>
+          <li>Dò các luồng (ONVIF/ffprobe: codec, độ phân giải, fps).</li>
+          <li>Luồng xem: ưu tiên H.264 để go2rtc chuyển thẳng. Nếu chỉ có HEVC thì phát HEVC cho trình duyệt hỗ trợ, chuyển mã 360p cho trình duyệt còn lại. Giải mã bằng phần cứng khi có.</li>
+          <li>Luồng AI: chọn luồng nhỏ nhất vẫn đủ <b>cỡ người</b> (đo trung vị chiều cao hộp người trong vài phút đầu).</li>
+          <li>Chỉ chạy AI trên <b>vùng ROI</b> (bao của các zone), không chạy cả khung hình. Nếu ROI vẫn lớn thì chia ô (tiling).</li>
+          <li><b>Tự kiểm chất lượng</b>: cứ 5 phút chạy model tham chiếu (YOLO11s@1280) trên 1 frame và so với cấu hình đang chạy. Còn bắt được dưới 90% số người thì nâng cấp; trên 98% liên tục 1 giờ thì thử hạ một bậc.</li>
+        </ul></td></tr>
+      <tr><td><b>3. Điều khiển lúc chạy</b></td><td>Mỗi giây</td><td>
+        <ul>
+          <li>Bộ lập lịch chung có <b>ngân sách nhân CPU</b> (lấy từ lớp 1).</li>
+          <li><b>Chỉ chạy AI khi có chuyển động</b>: so khác biệt frame trên ảnh thu nhỏ 160 px trong ROI, tốn khoảng 0.1 ms. Vùng tĩnh thì 1 fps; có chuyển động thì nâng lên fps của tầng.</li>
+          <li><b>Thứ tự ưu tiên</b>: vùng cấm đang có buổi bắn → cửa sổ điểm danh đầu/cuối buổi → camera có chuyển động → camera tĩnh.</li>
+          <li>Nhận diện mặt có hạn mức riêng: chỉ cho track chưa có danh tính, ưu tiên mặt to.</li>
+          <li>Khi frame chờ quá 1 s, hạ dần theo thứ tự: giảm fps → giảm hạn mức nhận diện mặt → hạ tầng model. Chỉ nâng lại sau 60 s ổn định, để không nhảy qua lại.</li>
+          <li>Thêm camera vượt năng lực thì <b>báo ngay trên UI</b>, không để cả hệ thống chậm đi mà không ai biết.</li>
+        </ul></td></tr>
+    </tbody>
+  </table>
+
+  <h4>Thang cấu hình và năng lực ước tính khi chỉ có CPU (8 nhân AVX2, tương đương i7-9700K)</h4>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>Tầng</th><th>Người</th><th>Tìm mặt</th><th>Nhận diện mặt</th><th>fps khi có chuyển động</th><th class="num">Camera tối đa (luôn chuyển động)</th><th class="num">Camera tối đa (chuyển động 30%)</th></tr></thead>
+    <tbody>
+      <tr><td>S (dành cho GPU)</td><td>YOLO11s@1280</td><td>SCRFD-10G@960</td><td>R50</td><td>10</td><td class="num">0</td><td class="num">0</td></tr>
+      <tr><td>A</td><td>YOLO11s@960</td><td>SCRFD-10G@640</td><td>R50</td><td>5</td><td class="num">0</td><td class="num">1–2</td></tr>
+      <tr><td>B</td><td>YOLO11s@640 (ROI)</td><td>SCRFD-10G@640</td><td>MBF</td><td>5</td><td class="num">1</td><td class="num">3–4</td></tr>
+      <tr><td>C</td><td>YOLO11s@640 (ROI)</td><td>SCRFD-500M@640</td><td>MBF</td><td>3</td><td class="num">3</td><td class="num">6–8</td></tr>
+      <tr><td>D (chỉ camera gần)</td><td>YOLO11n@640</td><td>SCRFD-500M@640</td><td>MBF</td><td>3</td><td class="num">8</td><td class="num">11–15</td></tr>
+    </tbody>
+  </table></div>
+  <p class="small">Số liệu do <code>bench_hw.py</code> tính:
+  <ul class="small">
+    <li>Đo trên 8 nhân Xeon 2.9 GHz đang có tải nền, giả lập AVX2. Cột "chuyển động 30%" ghi khoảng giá trị từ 2 lần chạy, vì máy đo dao động.</li>
+    <li>Ngân sách là (số nhân − 1.5) × 70%.</li>
+    <li>i7-9700K có xung nhịp cao hơn nên có thể được hơn khoảng 1.3–1.5 lần.</li>
+    <li>CPU có VNNI/AMX cộng INT8 thì tầng A/B rẻ đi 2–3 lần.</li>
+    <li>Đây là trần trên ước tính tuyến tính. <b>Phải chạy script trên máy đích</b> để chốt.</li>
+  </ul></p>
+<pre><code># Chạy trên máy đích (không cần torch)
+uv run --with openvino --with nncf python scripts/bench_hw.py \
+    --models models/ --cameras 4 --duty 0.3 --clip luong_phu_360p.mp4 --out data/hw_profile.json
+# Máy có GPU NVIDIA: thêm --with onnxruntime-gpu (và tensorrt-cu12 để đo TensorRT)
+# --near: cho phép tầng D khi camera đặt gần; --duty: tỉ lệ thời gian vùng có chuyển động; --cpu-only: bỏ qua GPU</code></pre>
+
+  <h4>Việc cần làm cho nhánh CPU (làm ngay)</h4>
+  <ol>
+    <li>Đổi runtime sang <b>OpenVINO</b> (export YOLO <code>format=openvino</code>; SCRFD/ArcFace đọc ONNX bằng OpenVINO). Giữ ORT làm phương án dự phòng; chọn runtime theo số đo trong <code>hw_profile</code>.</li>
+    <li>Gói sẵn bộ IR INT8 đã kiểm độ chính xác: YOLO lượng tử hoá bỏ qua phần head; ArcFace thì đo TAR/FAR trên ảnh đăng ký thật. App chỉ bật INT8 khi CPU có VNNI/AMX.</li>
+    <li>Chạy AI trên ROI hoặc chia ô, chỉ chạy khi có chuyển động, và có bộ lập lịch theo ngân sách CPU (lớp 3).</li>
+    <li>go2rtc chuyển thẳng luồng xem; chỉnh camera sang H.264 nếu được. AI đọc luồng phụ.</li>
+    <li>Ghim số luồng, ví dụ <code>INFERENCE_NUM_THREADS</code> = 2–4 cho mỗi worker, và ghim worker AI vào các nhân riêng (cpuset). Đo trên Xeon cho thấy 2→4 luồng chỉ nhanh thêm 1.2–1.9 lần, nên nhiều worker 2 luồng hiệu quả hơn một worker dùng hết nhân.</li>
+    <li>Theo dõi trên <code>/api/v1/system/health</code>: tầng đang chạy, fps AI, tuổi frame, ngân sách CPU còn lại.</li>
+  </ol>
+
+  <h3>5.5 Khi có GPU (dự kiến NVIDIA L4): mở rộng trên cùng codebase</h3>
+  <p>Mọi thứ đi qua một lớp backend chung, kiểu <code>Detector.infer(batch)</code>, có 3 cách cài: OpenVINO, ONNX Runtime, TensorRT. Model gốc chỉ có một bộ ONNX; artifact riêng cho từng backend (IR INT8, engine TensorRT) được build lúc cài đặt và cache theo chữ ký phần cứng. Khi có GPU, chỉ đổi cấu hình, không đổi code nghiệp vụ.</p>
+  <table>
+    <thead><tr><th>Thành phần</th><th>Hôm nay (CPU)</th><th>Khi có GPU NVIDIA (L4)</th></tr></thead>
+    <tbody>
+      <tr><td>Runtime model</td><td>OpenVINO / ORT CPU, chọn theo số đo; INT8 chỉ khi CPU có VNNI/AMX</td><td>TensorRT FP16 (qua ORT TensorRT EP hoặc engine riêng); INT8 TensorRT sau khi hiệu chỉnh và kiểm độ chính xác</td></tr>
+      <tr><td>FP8</td><td>Không có trên CPU</td><td>L4 (kiến trúc Ada) có FP8 trong TensorRT, nhưng lợi chủ yếu cho transformer. Với CNN (YOLO, SCRFD, ArcFace) thì FP16/INT8 đã đủ; chỉ dùng FP8 nếu đo ra nhanh hơn mà không giảm độ chính xác</td></tr>
+      <tr><td>Tầng cấu hình</td><td>B/C: YOLO11s@640 trên ROI, 3–5 fps khi có chuyển động</td><td>S/A: YOLO11s@960–1280 (hoặc lớn hơn), 10 fps; nhận diện mặt bằng R50</td></tr>
+      <tr><td>Gom batch</td><td>Không cần (CPU ít lợi)</td><td>Gom frame của nhiều camera vào một lần chạy để tận dụng GPU</td></tr>
+      <tr><td>Giải mã luồng AI</td><td>CPU, luồng phụ 360p/720p</td><td>NVDEC (L4 có 4 bộ giải mã), giải mã thẳng vào bộ nhớ GPU, đọc được luồng chính độ phân giải cao</td></tr>
+      <tr><td>Luồng xem</td><td>go2rtc chuyển tiếp; nếu phải chuyển mã thì libx264 360p</td><td>Vẫn chuyển tiếp; nếu phải chuyển mã thì dùng NVENC, đủ cả 1080p</td></tr>
+      <tr><td>Ngân sách</td><td>Nhân CPU</td><td>% GPU + nhân CPU cho tiền xử lý và hậu xử lý; script tính cả hai</td></tr>
+      <tr><td>Khi GPU lỗi hoặc bận</td><td>—</td><td>Tự lùi về tầng CPU và báo trên UI; vẫn giữ giám sát vùng cấm</td></tr>
+    </tbody>
+  </table>
+  <p class="small">Chưa có số đo GPU cho production: chưa có máy L4, và không dùng số của một GPU khác để suy ra. Khi có máy L4 thì chạy <code>bench_hw.py</code> để có số thật. Muốn kiểm nhánh GPU sớm thì có thể chạy trên <code>techainer-rtx3090-1</code> (Ampere, cùng hệ CUDA/TensorRT), nhưng máy này đang chạy app và job train, nên cần lịch chạy riêng.</p>
+</section>
+
+<!-- ============ 6. AI ============ -->
+<section class="page">
+  <h2>6. Đánh giá AI</h2>
+  <table>
+    <thead><tr><th>Thành phần</th><th>Hiện trạng</th><th>Rủi ro</th><th>Đề xuất</th></tr></thead>
+    <tbody>
+      <tr><td>Phát hiện người</td><td>YOLO11s COCO, chỉ class person, conf 0.25, imgsz 1280 (<code>detector.py</code>)</td><td>Tốt cho người nhỏ/xa nhưng đắt. Hộp "giữ lại khi bị che" 5 s vẫn được tính vào quân số và <b>có thể kích hoạt xâm nhập</b> (<code>video_processor.py:552</code>).</td><td>Giữ YOLO11s, chạy trên ROI hoặc chia ô (YOLO11n mất phần lớn người, hình 5.2); OpenVINO trên CPU; loại hộp held khỏi luật xâm nhập.</td></tr>
+      <tr><td>Tracking</td><td>ByteTrack cấu hình mặc định (<code>frame_rate=30</code>, <code>track_buffer=30</code>)</td><td>Chạy &lt;1 fps ⇒ người di chuyển xa giữa 2 frame, đổi ID liên tục.</td><td>Đặt <code>frame_rate</code> = fps AI thật; sau khi tách pipeline chạy AI ≥10 fps.</td></tr>
+      <tr><td>Nhận diện mặt</td><td>buffalo_l: SCRFD-10G + ArcFace R50 (comment ghi nhầm "ResNet100", <code>face_engine.py:30</code>); cosine, ngưỡng mặc định 0.36, <b>deploy đặt 0.30</b>; yêu cầu cách người thứ 2 ≥ 0.05</td><td>0.30 thấp cho ArcFace trên ảnh CCTV ⇒ dễ nhận nhầm khi danh sách lớn. Gán mặt → người kiểu tham lam theo thứ tự.</td><td>Hiệu chỉnh ngưỡng trên dữ liệu thật (mục tiêu FAR ≤ 0.1%), thường rơi 0.40–0.50; gán Hungarian theo độ tương đồng.</td></tr>
+      <tr><td>Đăng ký mặt</td><td>1 ảnh/người, lấy mặt lớn nhất, không kiểm chất lượng; đăng ký lại thì thay thế</td><td>Ảnh chính diện khớp kém với góc CCTV từ trên cao.</td><td>3–5 ảnh nhiều góc, gallery/trung bình embedding; chặn ảnh mờ, nhỏ, nghiêng (det_score, kích thước, độ nét, yaw).</td></tr>
+      <tr><td>Gắn danh tính vào track</td><td>Cộng dồn điểm, bind ở 0.7 (~2 lần khớp), TTL 20 s, không bao giờ gỡ</td><td>Sau khi ByteTrack đổi ID, <b>người sai vẫn được ghi có mặt</b>.</td><td>Gỡ/đổi danh tính khi có khớp mạnh trái chiều; ghi log xung đột.</td></tr>
+      <tr><td>Chống giả mạo</td><td>Không có</td><td>Giơ ảnh/điện thoại có mặt người khác là điểm danh hộ được.</td><td>Thêm anti-spoof (MiniFASNet/Silent-Face) cho các lần khớp dùng để điểm danh.</td></tr>
+      <tr><td>Điểm danh / presence</td><td><code>MIN_SIGHTINGS=3</code> tính theo <b>số frame</b> (<code>presence.py:15</code>, <code>attendance.py:19</code>); xử lý ca qua đêm đúng</td><td>Frame trùng lặp (reader trả lại frame cũ) hoặc vài frame nhận nhầm liên tiếp ⇒ có mặt giả.</td><td>≥3 lần thấy trên ≥2 s và frame khác nhau.</td></tr>
+      <tr><td>An toàn (vùng cấm, vạch)</td><td>Điểm chân trong polygon; đổi dấu tích chéo cho vạch; cooldown 20 s/zone; <code>dwell_seconds</code> có tính nhưng không dùng làm điều kiện; <code>detect_object</code> lưu nhưng không dùng</td><td>Nhiễu chân hộp sát biên, hộp held, đổi ID ⇒ báo động đỏ ngay frame đầu. Log có <b>157 INTRUSION</b> trong một buổi.</td><td>Dwell tối thiểu 1–2 s hoặc N frame liên tiếp; vùng đệm hysteresis; lọc hướng cho vạch; áp dụng <code>detect_object</code> hoặc bỏ khỏi UI.</td></tr>
+      <tr><td>Giám sát quân số</td><td>Trung vị 5 lần đếm, cảnh báo sau 30 s, cooldown 60 s</td><td>Thông điệp dùng số đếm thô thay vì số đã làm mượt (<code>video_processor.py:793</code>).</td><td>Dùng số làm mượt trong thông điệp.</td></tr>
+      <tr><td>Nhiều camera</td><td>1 YOLO / camera; chung 1 event loop</td><td>Tải tăng tuyến tính, camera này làm chậm camera kia.</td><td>Model dùng chung + batch, worker riêng.</td></tr>
+    </tbody>
+  </table>
+  <div class="callout"><b>Thiếu bộ đánh giá AI</b>Hiện không có cách đo độ chính xác khi đổi ngưỡng/model. Đề xuất: quay 3–5 clip thật tại thao trường (sáng/chiều, đông/thưa, đi ngang vùng cấm), gán nhãn (người, ID, danh tính, thời điểm vào vùng), viết script chạy offline ra các chỉ số: <b>precision/recall phát hiện người</b>, <b>IDF1</b> cho tracking, <b>TAR@FAR=0.1%</b> cho nhận diện mặt, <b>tỉ lệ báo động giả/giờ</b> cho xâm nhập, <b>độ chính xác điểm danh</b> theo buổi. Chạy trong CI mỗi khi đổi tham số.</div>
+</section>
+
+<!-- ============ 7. YÊU CẦU ============ -->
+<section class="page">
+  <h2>7. Ma trận yêu cầu (FunctionList v0.3)</h2>
+  <figure><svg viewBox='0 0 760 120' class='chart' role='img' font-family='Be Vietnam Pro, DejaVu Sans, sans-serif'><text x='112' y='27' text-anchor='end' font-size='11.5' font-weight='600' fill='#0b0b0b'>AI Giám sát</text><rect x='121.0' y='14' width='391.6' height='22' rx='4' fill='#0ca30c'><title>Xong: 19</title></rect><text x='316.8' y='29' text-anchor='middle' font-size='10.5' font-weight='700' fill='#0b0b0b'>Xong 19</text><rect x='514.6' y='14' width='184.4' height='22' rx='4' fill='#fab219'><title>Một phần: 9</title></rect><text x='606.8' y='29' text-anchor='middle' font-size='10.5' font-weight='700' fill='#0b0b0b'>Một phần 9</text><text x='708' y='29' font-size='10.5' fill='#52514e'>28 dòng</text><text x='112' y='67' text-anchor='end' font-size='11.5' font-weight='600' fill='#0b0b0b'>Chat Bot</text><rect x='121.0' y='54' width='578.0' height='22' rx='4' fill='#d03b3b'><title>Chưa có: 63</title></rect><text x='410.0' y='69' text-anchor='middle' font-size='10.5' font-weight='700' fill='#0b0b0b'>Chưa có 63</text><text x='708' y='69' font-size='10.5' fill='#52514e'>63 dòng</text><text x='120' y='112' font-size='9.5' fill='#52514e'>Độ dài thanh = tỉ lệ trong sheet. &quot;Xong&quot; = xong về chức năng; phân quyền backend chưa đạt ở mọi dòng.</text></svg><figcaption>Hình 7.1 — Độ phủ theo sheet, đếm theo từng dòng giao dịch. Sheet không có cột ưu tiên hay tiêu chí nghiệm thu, nên chấm theo câu chữ của từng dòng.</figcaption></figure>
+
+  <h3>7.1 Tiêu chí chấm</h3>
+  <ul>
+    <li><span class="tag good">Xong</span>: người dùng làm được trọn thao tác mà dòng yêu cầu, trên UI, với dữ liệu thật từ backend, và có bằng chứng trong code. Đây là <b>"xong về chức năng"</b>. Không bao gồm:
+      <ul>
+        <li><b>Phân quyền.</b> Mọi dòng đều ghi actor (CBQH hoặc QTHT), nhưng backend không kiểm role (<code>app/auth.py:1-10</code>). Role chỉ quyết định menu nào hiện trên UI. Vì vậy cột "Phân quyền" là <b>Chưa đạt cho cả 28 dòng</b>. Nặng nhất ở phân hệ III: thao tác của QTHT gọi được thẳng qua API mà không cần đăng nhập.</li>
+        <li><b>Chất lượng.</b> Một dòng "Xong" vẫn có thể có lỗi. Ví dụ R17: luật vùng cấm chạy được nhưng chưa có dwell hay hysteresis, và log một buổi có 157 cảnh báo xâm nhập (mục 6). Những dòng như vậy có đánh dấu ⚠ kèm ghi chú.</li>
+      </ul></li>
+    <li><span class="tag warn">Một phần</span>: có một phần hành vi, hoặc chỉ đạt theo một cách hiểu hẹp, hoặc thiếu một thành phần mà câu chữ yêu cầu rõ (ví dụ "khu vực" là nhóm camera, "giám sát tự động theo cấu hình").</li>
+    <li><span class="tag crit">Chưa có</span>: không có code liên quan.</li>
+    <li><span class="tag info">Cần KH xác nhận</span>: câu chữ hiểu được theo 2 cách và kết quả chấm phụ thuộc vào cách hiểu.</li>
+  </ul>
+  <p class="small">Toàn bộ trích dẫn <code>file:line</code> theo commit <code>6fc2929</code>. Mã app giống hệt bản đang deploy <code>ac6f28b</code>: <code>git diff --stat ac6f28b 6fc2929</code> chỉ đổi <code>.dockerignore</code>, <code>.env.example</code>, <code>Dockerfile</code>, <code>docker-compose*.yml</code> và <code>scripts/probe_ai_camera.py</code>. Cột TT ghi theo UC trong sheet (UC1-1 là dòng giao dịch thứ 1 của UC 1). Cột "Dòng" là số dòng trong Excel.</p>
+
+  <h3>7.2 Sheet "AI Giám sát": 28 dòng</h3>
+  <p class="small"><b>Phân quyền: Chưa đạt cho cả 28 dòng</b> (xem mục 7.1). Cột Actor ghi vai trò mà sheet yêu cầu.</p>
+  <div class="tbl-wrap"><table class="req">
+    <thead><tr><th>TT</th><th>Dòng</th><th>Actor</th><th>Yêu cầu (trích)</th><th>Trạng thái</th><th>Bằng chứng / còn thiếu</th></tr></thead>
+    <tbody>
+      <tr class="grp"><td colspan="6"><b>I. Tổ chức thực hiện HL đào tạo</b>, UC 1: Theo dõi tiến độ HL đào tạo</td></tr>
+      <tr><td>UC1-1</td><td>R5</td><td>CBQH</td><td>Tổng hợp thông tin lịch HL đào tạo</td><td><span class="tag good">Xong</span></td><td><code>#view-schedule-progress</code>; <code>GET /api/v1/summary/training</code> (<code>api.py:1034</code>) lọc theo loại, ngày, ca, trạng thái; <code>loadTrainingSchedule</code> (<code>app.js:2453</code>)</td></tr>
+      <tr><td>UC1-2</td><td>R6</td><td>CBQH</td><td>Theo dõi chi tiết lịch HL</td><td><span class="tag good">Xong</span></td><td><code>#view-session-detail</code>; <code>openSessionDetail</code> (<code>app.js:2524</code>)</td></tr>
+      <tr><td>UC1-3</td><td>R7</td><td>CBQH</td><td>Theo dõi tiến độ HL hiện tại</td><td><span class="tag good">Xong</span></td><td><code>time_progress_pct</code>; thanh tiến độ ở <code>app.js:2486</code></td></tr>
+      <tr><td>UC1-4</td><td>R8</td><td>CBQH</td><td>Theo dõi tiến độ <b>hoàn thành</b> HL</td><td><span class="tag warn">Một phần</span></td><td>Chỉ có tiến độ theo từng buổi. Thẻ tổng đã bị bỏ có chủ đích. <code>overall_progress_pct</code> vẫn được tính (<code>api.py:1147</code>) nhưng <code>app.js</code> không dùng. Chưa có tiến độ theo chương trình hay kế hoạch.</td></tr>
+
+      <tr class="grp"><td colspan="6">UC 2: Giám sát quân số thao trường HL đào tạo</td></tr>
+      <tr><td>UC2-1</td><td>R10</td><td>CBQH</td><td>Màn tổng hợp giám sát quân số HL đào tạo</td><td><span class="tag warn">Một phần</span></td><td>Không có màn riêng. Cột "Quân số" chỉ hiện số yêu cầu. <code>present_start</code> và <code>present_end</code> có trong API (<code>api.py:1120</code>) nhưng <code>app.js</code> không dùng.</td></tr>
+      <tr><td>UC2-2</td><td>R11</td><td>CBQH</td><td>Kết quả tham gia theo lịch: không tham gia / chậm / "chưa hết giờ đã kết thúc HL"</td><td><span class="tag good">Xong</span> <span class="tag info">Cần KH xác nhận</span></td><td>Chấm theo <b>cách hiểu cấp cá nhân</b>: vắng, đến muộn, về sớm của từng người (<code>presence.py:19, 120</code>; sự kiện LATE ở <code>attendance.py:566</code>, EARLY_LEAVE ở <code>attendance.py:592</code>; danh sách theo người qua <code>GET /api/v1/sessions/{id}/attendance</code>). Nếu "chưa hết giờ đã kết thúc" nghĩa là <b>cả buổi hoặc cả đơn vị kết thúc trước giờ</b> thì code chưa có, và dòng này chỉ là Một phần. Lưu ý: "không tham gia" chỉ hiện trong danh sách điểm danh, <b>không phát sự kiện ABSENT theo người</b>. <code>TYPE_ABSENT</code> ở <code>video_processor.py:791</code> là cảnh báo quân số tụt dưới sĩ số chuẩn, không phải vắng theo người.</td></tr>
+      <tr><td>UC2-3</td><td>R12</td><td>CBQH</td><td>Quân số đầu buổi và cuối buổi</td><td><span class="tag good">Xong</span></td><td><code>#sd-checks-tbody</code>; <code>GET /api/v1/sessions/{id}/checks</code> (<code>api.py:1531</code>)</td></tr>
+      <tr><td>UC2-4</td><td>R13</td><td>CBQH</td><td>Hình ảnh điểm danh đầu và cuối buổi</td><td><span class="tag good">Xong</span></td><td><code>_save_evidence</code> (<code>attendance.py:416</code>); thumbnail trong <code>renderSessionChecks</code> (<code>app.js:2630</code>)</td></tr>
+
+      <tr class="grp"><td colspan="6">UC 3: Giám sát an toàn HL đào tạo bắn đạn thật</td></tr>
+      <tr><td>UC3-1</td><td>R15</td><td>CBQH</td><td>Màn giám sát an toàn bắn đạn thật</td><td><span class="tag good">Xong</span></td><td><code>#view-safety</code>; <code>GET /api/v1/summary/safety</code> (<code>api.py:918</code>)</td></tr>
+      <tr><td>UC3-2</td><td>R16</td><td>CBQH</td><td>Phát hiện đối tượng vào <b>khu vực trường bắn</b> khi đang HL</td><td><span class="tag warn">Một phần</span></td><td>Có thể vẽ một <code>restricted_area</code> bao quanh cả trường bắn, nên phần phát hiện kỹ thuật là có. Còn thiếu 2 thứ:
+        <ul>
+          <li>Không có <b>loại vùng riêng "khu vực trường bắn"</b>. Hiện chỉ có <code>restricted_area</code> và <code>crossing_line</code> (<code>safety.py:20-21</code>), nên không tách được với "vùng cấm (khối chắn)" khi hiển thị và thống kê.</li>
+          <li>Luật <b>không gắn với buổi bắn theo lịch</b>: chạy 24/7, không kiểm có buổi đang diễn ra (<code>video_processor.py:552</code>).</li>
+        </ul>
+        Ngoài ra chỉ phát hiện người: <code>detect_object</code> được lưu nhưng không dùng.</td></tr>
+      <tr><td>UC3-3</td><td>R17</td><td>CBQH</td><td>Phát hiện đối tượng vào <b>vùng cấm (khối chắn)</b></td><td><span class="tag good">Xong</span> ⚠</td><td><code>RULE_RESTRICTED</code> và <code>_inside_polygon</code> (<code>safety.py:20, 240</code>); banner đỏ và nút xác nhận xử lý. ⚠ Chất lượng: không có dwell hay hysteresis, hộp "giữ lại khi bị che" vẫn kích hoạt được luật; 157 cảnh báo trong một buổi (mục 6).</td></tr>
+      <tr><td>UC3-4</td><td>R18</td><td>CBQH</td><td>Hình ảnh vi phạm an toàn</td><td><span class="tag good">Xong</span></td><td>Ảnh chụp và clip mp4 10 s (<code>GET /api/v1/events/{id}/clip</code>, <code>api.py:839</code>)</td></tr>
+
+      <tr class="grp"><td colspan="6"><b>II. Quản lý giám sát HL chiến đấu</b>, UC 4: Giám sát quân số thao trường HLCĐ</td></tr>
+      <tr><td>UC4-1</td><td>R21</td><td>CBQH</td><td>Màn tổng hợp giám sát quân số HLCĐ</td><td><span class="tag warn">Một phần</span></td><td>Giống UC2-1</td></tr>
+      <tr><td>UC4-2</td><td>R22</td><td>CBQH</td><td>Không tham gia / chậm / "chưa hết giờ đã kết thúc" HLCĐ</td><td><span class="tag good">Xong</span> <span class="tag info">Cần KH xác nhận</span></td><td>Giống UC2-2, cùng cách hiểu cấp cá nhân</td></tr>
+      <tr><td>UC4-3</td><td>R23</td><td>CBQH</td><td>Quân số đầu buổi và cuối buổi HLCĐ</td><td><span class="tag good">Xong</span></td><td>Giống UC2-3</td></tr>
+      <tr><td>UC4-4</td><td>R24</td><td>CBQH</td><td>Hình ảnh điểm danh HLCĐ</td><td><span class="tag good">Xong</span></td><td>Giống UC2-4</td></tr>
+
+      <tr class="grp"><td colspan="6">UC 5: Giám sát an toàn HLCĐ bắn đạn thật</td></tr>
+      <tr><td>UC5-1</td><td>R26</td><td>CBQH</td><td>Màn giám sát an toàn HLCĐ</td><td><span class="tag good">Xong</span> ⚠</td><td>Dùng chung màn với UC3-1, lọc bằng nút <code>chien_dau</code> (<code>index.html:719-722</code>; <code>setTrainingFilter</code> ở <code>app.js:2414</code>; lọc camera ở <code>app.js:2771</code>). ⚠ Rủi ro phân loại: xem mục 7.3.</td></tr>
+      <tr><td>UC5-2</td><td>R27</td><td>CBQH</td><td>Vào khu vực trường bắn HLCĐ</td><td><span class="tag warn">Một phần</span></td><td>Giống UC3-2</td></tr>
+      <tr><td>UC5-3</td><td>R28</td><td>CBQH</td><td>Vào vùng cấm (khối chắn) HLCĐ</td><td><span class="tag good">Xong</span> ⚠</td><td>Giống UC3-3</td></tr>
+      <tr><td>UC5-4</td><td>R29</td><td>CBQH</td><td>Hình ảnh vi phạm HLCĐ</td><td><span class="tag good">Xong</span></td><td>Giống UC3-4</td></tr>
+
+      <tr class="grp"><td colspan="6"><b>III. Phân hệ Quản trị giám sát khu vực</b>, UC 6: Cấu hình khung giờ và quy tắc kích hoạt tự động</td></tr>
+      <tr><td>UC6-1</td><td>R32</td><td>QTHT</td><td>Xem cấu hình khung giờ và quy tắc kích hoạt</td><td><span class="tag good">Xong</span></td><td><code>#view-schedule</code>; <code>GET /api/v1/schedules</code> (<code>api.py:1468</code>)</td></tr>
+      <tr><td>UC6-2</td><td>R33</td><td>QTHT</td><td>Cập nhật cấu hình và <b>giám sát tự động theo cấu hình đã lưu</b></td><td><span class="tag warn">Một phần</span></td><td>CRUD lịch đủ (<code>api.py:1482/1501/1521</code>). Thiếu phần tự động:
+        <ul>
+          <li>Điểm danh chỉ tự mở <b>khi camera đã đang chạy</b> (<code>maybe_open_scheduled</code>, <code>attendance.py:662</code>). Không có cơ chế tự bật hay tắt camera theo lịch.</li>
+          <li>Cờ <code>enabled</code> bị bỏ qua: <code>_load_schedules</code> (<code>attendance.py:369-386</code>) chỉ lọc theo <code>camera_id</code> (<code>:382-383</code>), không lọc <code>enabled</code>. Cờ này chỉ dùng để lọc danh sách ở API (<code>api.py:1477-1478</code>) và không có trên UI.</li>
+          <li>Vùng an toàn không có khung giờ.</li>
+          <li>Route cũ <code>POST /api/schedules</code> (<code>api.py:402</code>) không validate.</li>
+        </ul></td></tr>
+
+      <tr class="grp"><td colspan="6">UC 7: Quản lý khu vực giám sát</td></tr>
+      <tr><td>UC7-1</td><td>R35</td><td>QTHT</td><td>Xem danh sách khu vực giám sát → "danh sách camera giám sát khu vực tương ứng"</td><td><span class="tag warn">Một phần</span></td><td>Theo câu chữ, khu vực là <b>một nhóm camera</b>. Code không có thực thể khu vực, chỉ có <code>area_name</code> dạng chữ trên từng camera. Không có màn danh sách khu vực hay danh sách camera theo khu vực. Sự kiện còn ghi cứng "Thao trường số 1" (<code>events.py:26-27</code>).</td></tr>
+      <tr><td>UC7-2</td><td>R36</td><td>QTHT</td><td>Cập nhật thông tin khu vực giám sát</td><td><span class="tag warn">Một phần</span></td><td>Cùng chuẩn với UC7-1: <b>zone không phải khu vực</b>. Zone là polygon hay vạch trên một camera (<code>PATCH /api/v1/zones/{id}</code>, <code>api.py:1201</code>). Chỉ sửa được khu vực gián tiếp, bằng cách đổi <code>area_name</code> trong form camera.</td></tr>
+      <tr><td>UC7-3</td><td>R37</td><td>QTHT</td><td>Xoá khu vực giám sát</td><td><span class="tag warn">Một phần</span></td><td>Như UC7-2. Chỉ xoá được zone (<code>DELETE /api/v1/zones/{id}</code>, <code>api.py:1227</code>), không có thao tác xoá khu vực.</td></tr>
+
+      <tr class="grp"><td colspan="6">UC 8: Quản lý thiết bị camera giám sát khu vực</td></tr>
+      <tr><td>UC8-1</td><td>R39</td><td>QTHT</td><td>Danh sách thiết bị camera</td><td><span class="tag good">Xong</span></td><td><code>#cameras-tbody</code>; <code>GET /api/v1/cameras</code> (<code>api.py:1362</code>). ⚠ Bảo mật: trả về mật khẩu RTSP (mục 2).</td></tr>
+      <tr><td>UC8-2</td><td>R40</td><td>QTHT</td><td>Cập nhật thông tin camera, kiểm tra và lưu</td><td><span class="tag good">Xong</span></td><td><code>PATCH /api/v1/cameras/{id}</code> (<code>api.py:1389</code>) validate bằng <code>CameraPatch</code></td></tr>
+      <tr><td>UC8-3</td><td>R41</td><td>QTHT</td><td>Xoá camera</td><td><span class="tag good">Xong</span></td><td><code>DELETE /api/v1/cameras/{id}</code> (<code>api.py:1404</code>): trả 409 khi camera đang chạy, xoá luôn các zone của camera</td></tr>
+    </tbody>
+  </table></div>
+  <p><b>Tổng:</b> 19 Xong (3 dòng có ⚠ chất lượng, 2 dòng cần KH xác nhận cách hiểu) · 9 Một phần (R8, R10, R16, R21, R27, R33, R35, R36, R37) · 0 Chưa có. Nếu KH chọn cách hiểu cấp buổi cho R11/R22 thì còn 17 Xong và 11 Một phần.</p>
+
+  <h3>7.3 Phân hệ II: phân loại sự kiện theo loại huấn luyện</h3>
+  <p>Phân hệ II không có màn riêng. Nó dùng lại màn của phân hệ I, lọc bằng nút "Huấn luyện chiến đấu":</p>
+  <ul>
+    <li>Lịch và tiến độ: <code>index.html:542-545</code> gửi tham số <code>training_type</code> lên API (<code>app.js:2459</code>).</li>
+    <li>An toàn: <code>index.html:719-722</code> lọc danh sách camera ngay trên trình duyệt (<code>app.js:2771</code>).</li>
+  </ul>
+  <p>Đã kiểm cách sự kiện an toàn được xếp loại:</p>
+  <ul>
+    <li><b>Bản thân sự kiện xâm nhập không mang <code>training_type</code>.</b> Loại được suy ra lúc hiển thị, từ ca đang gắn với camera, qua <code>_schedule_of_camera</code> (<code>api.py:903-915</code>): ưu tiên ca đang chạy, nếu không có thì lấy ca có giờ bắt đầu sớm nhất.</li>
+    <li><b>Camera chưa gắn ca nào</b> có <code>training_type = null</code>, nên bị ẩn ở cả 2 bộ lọc "đào tạo" và "chiến đấu". Sự kiện của camera đó chỉ thấy được ở chế độ "Tất cả".</li>
+    <li><b>Camera dùng chung cho cả 2 loại ca:</b> ngoài giờ ca, camera được xếp theo ca bắt đầu sớm nhất. Vì vậy một vi phạm lúc đang tập chiến đấu có thể hiện dưới loại "đào tạo" khi xem lại. Loại hiển thị đổi theo thời điểm xem, không theo thời điểm xảy ra.</li>
+    <li><b>Đèn trạng thái và banner báo động không theo bộ lọc:</b> <code>state</code> và <code>active_intrusion</code> tính trên mọi sự kiện INTRUSION (<code>api.py:924-934</code>; <code>app.js:2741-2749</code>). Đang ở bộ lọc "chiến đấu" vẫn có thể thấy báo động của camera "đào tạo".</li>
+  </ul>
+  <p><b>Đề xuất:</b> ghi <code>training_type</code> và <code>schedule_id</code> vào sự kiện ngay lúc phát; nếu không có ca nào đang chạy thì ghi "ngoài giờ HL". Đèn trạng thái và banner tính theo bộ lọc đang chọn.</p>
+
+  <h3>7.4 Sheet "Chat Bot": 26 use case, 63 dòng, chưa có code</h3>
+  <p>Trong repo không có code LLM hay RAG, không có endpoint chat, UI chat hay dependency liên quan. Các UC gồm:</p>
+  <ul>
+    <li>Tra cứu: tham mưu tác chiến, mốc khống chế pháo binh, CTĐ-CTCT, quân khí, bằng lái xe.</li>
+    <li>Xe-máy: 9 chức năng tra cứu, kế hoạch công tác xe-máy, hồ sơ đưa đi sửa chữa.</li>
+    <li>Huấn luyện: chương trình, kế hoạch, quân số, kết quả, tổng hợp đánh giá, tư liệu, thiết bị phục vụ HL.</li>
+    <li>Tài liệu số hoá, vật tư kỹ thuật, quân y (2 UC), cán bộ (2 UC), HL mô phỏng (4 UC).</li>
+    <li>Quản trị Chatbot: thống kê đánh giá (biểu đồ, xuất Excel/ảnh) và câu hỏi chưa trả lời được (danh sách, tìm kiếm, chi tiết, xuất Excel).</li>
+  </ul>
+  <table>
+    <thead><tr><th>UC Chat Bot</th><th>Dữ liệu sẵn có trong hệ thống này</th><th>Mức đáp ứng nếu làm</th></tr></thead>
+    <tbody>
+      <tr><td>9–10: Chương trình và kế hoạch HL</td><td><code>schedules.json</code>: bài học, loại HL, đơn vị, ca, khoảng ngày, thứ trong tuần</td><td>Một phần. Có lịch, không có "chương trình" theo nghĩa nội dung đào tạo.</td></tr>
+      <tr><td>11: Quân số HL</td><td><code>attendance_logs.json</code>: điểm danh theo buổi và theo người</td><td>Gần như đủ</td></tr>
+      <tr><td>12–13: Kết quả và tổng hợp đánh giá HL</td><td><code>attendance_logs.json</code>: tỉ lệ có mặt, muộn, về sớm</td><td>Một phần. Chỉ có kết quả chuyên cần, không có điểm hay kết quả huấn luyện.</td></tr>
+      <tr><td>Các UC còn lại (1–8, 14–24)</td><td>Không có</td><td>Cần nguồn dữ liệu mới</td></tr>
+      <tr><td>25–26: Quản trị Chatbot</td><td>Không có (phát sinh từ chính Chatbot)</td><td>Làm cùng Chatbot</td></tr>
+    </tbody>
+  </table>
+  <div class="callout warn"><b>Cần xác nhận phạm vi; chưa ước lượng được công</b>Nếu Chat Bot thuộc sản phẩm hoặc repo khác thì đánh dấu ngoài phạm vi repo này. Nếu thuộc repo này, <b>hiện chưa ước lượng được công</b> vì công phụ thuộc vào 3 giả định chưa có câu trả lời:
+    <ul>
+      <li>Số miền dữ liệu được cấp, có thể lên tới 19 miền tra cứu.</li>
+      <li>Dữ liệu nguồn đã số hoá và có cấu trúc chưa, hay phải số hoá hoặc OCR.</li>
+      <li>Ràng buộc triển khai: LLM chạy on-prem (cỡ model và GPU) hay được dùng API ngoài.</li>
+    </ul>
+    Có câu trả lời thì mới ước lượng theo từng miền được. Có thể bắt đầu bằng UC 9–13, dùng dữ liệu đã có ở bảng trên.</div>
+</section>
+
+<!-- ============ 8. VẬN HÀNH ============ -->
+<section class="page">
+  <h2>8. Vận hành, dữ liệu, triển khai</h2>
+  <h3>8.1 Hiện trạng trên <code>techainer-rtx3090-1</code></h3>
+  <table>
+    <thead><tr><th>Hạng mục</th><th>Hiện trạng</th><th>Mức</th></tr></thead>
+    <tbody>
+      <tr><td>Cách chạy</td><td><code>uv run main.py</code> trong tmux của user <code>martin</code>, thư mục <code>/mnt/ssd/martin/project/military-attendance-check</code>, cổng 8199. Không systemd/Docker, không restart khi chết. Cloudflared log có ~1.450 lần "connection refused" khi app chết (30/10, 01–02/11).</td><td><span class="tag crit">Cao</span></td></tr>
+      <tr><td>Phiên bản</td><td>Deploy <code>ac6f28b</code>; local đã có <code>6fc2929</code> (đóng gói Docker CPU/GPU) chưa deploy. Tham số chạy chỉ qua command line (<code>FACE_SIM_THRESHOLD=0.3</code>), không có <code>.env</code>.</td><td><span class="tag serious">TB</span></td></tr>
+      <tr><td>Tài nguyên</td><td>8 core / 62 GB RAM / RTX 3090 24 GB. Load ~22, CPU idle 0%. App ~540% CPU, ~2 GB RAM, chỉ giữ 664 MB VRAM, gần như không dùng GPU. Job train PaddleOCR của người khác chiếm 12.7 GB VRAM và nhiều CPU.</td><td><span class="tag crit">Cao</span></td></tr>
+      <tr><td>Đĩa</td><td><code>data/events</code>: 119.135 file, <b>166 GB</b>; mỗi sự kiện ~470 KB ảnh + 9.5–20 MB mp4. Đĩa <code>/</code> 91% (còn 42 GB). Không có cơ chế dọn.</td><td><span class="tag crit">Cao</span></td></tr>
+      <tr><td>Camera</td><td><code>cam_1790514775112</code> (192.168.1.113) không tới được (No route to host) — log lặp "Stream timeout 30000 ms" mỗi 30 s trước khi restart; người dùng bấm stop 6 lần liên tiếp (nút không phản hồi rõ). Cả 2 camera ghi <code>source_type: "file"</code> dù là RTSP.</td><td><span class="tag serious">TB</span></td></tr>
+      <tr><td>Lưu trữ</td><td>Toàn bộ là file JSON đọc/ghi cả file, không khoá; nhiều camera ghi cùng lúc có thể ghi đè nhau; sự kiện giới hạn 500 bản ghi; bộ đếm ID sự kiện reset sau restart (<code>_57707</code> → <code>_5</code>).</td><td><span class="tag serious">TB</span></td></tr>
+      <tr><td>Tunnel</td><td>2 container cloudflared (token, QUIC, edge HKG), bản 2026.9.1 đã cũ; thêm frpc là cửa thứ 2.</td><td><span class="tag warn">Thấp</span></td></tr>
+      <tr><td>Log</td><td>Chỉ còn trong scrollback tmux; FutureWarning numpy in mỗi lần align mặt gây nhiễu.</td><td><span class="tag warn">Thấp</span></td></tr>
+    </tbody>
+  </table>
+  <h3>8.2 Đề xuất</h3>
+  <ol>
+    <li><b>Docker Compose</b> (đã có ở <code>6fc2929</code>) với <code>restart: unless-stopped</code>; image mặc định CPU dùng OpenVINO, profile GPU (chỉ máy dev) dùng <code>onnxruntime-gpu</code>, <code>cpus:</code>/<code>cpuset</code> giới hạn, healthcheck gọi <code>/api/v1/system/health</code>. Thêm service go2rtc cùng compose.</li>
+    <li><b>Cô lập tài nguyên</b> với job train: ghim CPU (cpuset), chia GPU (hoặc dời job train sang 3090-2).</li>
+    <li><b>Retention</b>: giữ ảnh 30 ngày, clip 7 ngày (tham số hoá), job dọn hằng giờ; cảnh báo khi đĩa &gt;80%. Mp4 ở 960 px/CRF 28 thay vì full-res: giảm ~5–10× dung lượng. Dọn 166 GB hiện có sau khi xác nhận với người dùng.</li>
+    <li><b>SQLite (WAL)</b> cho events/logs/schedules/cameras; ID sự kiện tăng dần bền vững.</li>
+    <li><b>Quan sát</b>: log ra stdout (Docker), metrics fps/độ trễ/frame cũ mỗi camera, cảnh báo khi camera mất tín hiệu &gt;30 s.</li>
+    <li><b>Test</b>: chạy test trên thư mục data tạm (đừng ghi đè <code>data/*.json</code> thật), thêm test end-to-end cho vòng video với video mẫu, test chống hồi quy độ trễ (frame_age &lt; ngưỡng).</li>
+  </ol>
+</section>
+
+<!-- ============ 9. UI/UX ============ -->
+<section class="page">
+  <h2>9. UI/UX &amp; responsive</h2>
+  <p>Đã chụp trang live ở 3 kích thước (375×812, 768×1024, 1440×900) và đo độ rộng nội dung thực tế. Desktop gọn, nhất quán, màu xanh quân sự dễ chịu. Mobile và tablet chưa dùng được.</p>
+  <table>
+    <thead><tr><th>Màn hình</th><th class="num">375 px (mobile)</th><th class="num">768 px (tablet)</th><th class="num">1440 px</th></tr></thead>
+    <tbody>
+      <tr><td>Lịch &amp; Tiến độ</td><td class="num">1140 px</td><td class="num">1140 px</td><td class="num">vừa</td></tr>
+      <tr><td>An toàn bắn đạn thật</td><td class="num">717 px</td><td class="num">vừa</td><td class="num">vừa</td></tr>
+      <tr><td>Nhật ký điểm danh</td><td class="num">1216 px</td><td class="num">1216 px</td><td class="num">vừa</td></tr>
+      <tr><td>Giám sát trực tiếp</td><td class="num">1019 px</td><td class="num">1019 px</td><td class="num">vừa</td></tr>
+      <tr><td>Thiết bị camera</td><td class="num">737 px</td><td class="num">vừa</td><td class="num">vừa</td></tr>
+      <tr><td>Vùng giám sát</td><td class="num">1255 px</td><td class="num">1255 px</td><td class="num">vừa</td></tr>
+      <tr><td>Đăng ký khuôn mặt</td><td class="num">1359 px</td><td class="num">1359 px</td><td class="num">vừa</td></tr>
+    </tbody>
+  </table>
+  <p class="small">Giá trị là <code>document.scrollWidth</code>; "vừa" = không vượt màn hình. Phần vượt bị <code>body{overflow-x:hidden}</code> (<code>style.css:43</code>) cắt mất nên người dùng không cuộn ngang được.</p>
+  <figure><svg viewBox='0 0 760 420' class='diagram' role='img' font-family='Be Vietnam Pro, DejaVu Sans, sans-serif'><g transform='translate(40,20)'><rect width='190' height='360' rx='22' fill='#ffffff' stroke='#52514e' stroke-width='2'/><rect x='70' y='8' width='50' height='6' rx='3' fill='#e4e3df'/><text x='95' y='-8' text-anchor='middle' font-size='11.5' font-weight='700' fill='#0b0b0b'>Hiện tại · 375px</text><rect x='6' y='22' width='129' height='330' fill='#eef7f2'/><rect x='14' y='40' width='101' height='12' rx='3' fill='#cfe6d9'/><rect x='14' y='66' width='101' height='12' rx='3' fill='#cfe6d9'/><rect x='14' y='92' width='101' height='12' rx='3' fill='#cfe6d9'/><rect x='14' y='118' width='101' height='12' rx='3' fill='#cfe6d9'/><rect x='14' y='144' width='101' height='12' rx='3' fill='#cfe6d9'/><rect x='14' y='170' width='101' height='12' rx='3' fill='#cfe6d9'/><rect x='14' y='196' width='101' height='12' rx='3' fill='#cfe6d9'/><rect x='14' y='222' width='101' height='12' rx='3' fill='#cfe6d9'/><rect x='14' y='248' width='101' height='12' rx='3' fill='#cfe6d9'/><rect x='139' y='30' width='49' height='300' fill='#ffffff' stroke='#e4e3df'/><rect x='143' y='40' width='39' height='8' rx='2' fill='#c9c7c1'/><rect x='143' y='54' width='39' height='8' rx='2' fill='#c9c7c1'/><rect x='143' y='68' width='39' height='8' rx='2' fill='#c9c7c1'/><rect x='143' y='82' width='39' height='8' rx='2' fill='#c9c7c1'/><rect x='143' y='96' width='39' height='8' rx='2' fill='#c9c7c1'/><rect x='143' y='110' width='39' height='8' rx='2' fill='#c9c7c1'/><rect x='143' y='124' width='39' height='8' rx='2' fill='#c9c7c1'/><rect x='143' y='138' width='39' height='8' rx='2' fill='#c9c7c1'/><rect x='143' y='152' width='39' height='8' rx='2' fill='#c9c7c1'/><rect x='143' y='166' width='39' height='8' rx='2' fill='#c9c7c1'/><rect x='143' y='180' width='39' height='8' rx='2' fill='#c9c7c1'/><rect x='143' y='194' width='39' height='8' rx='2' fill='#c9c7c1'/><rect x='143' y='208' width='39' height='8' rx='2' fill='#c9c7c1'/><rect x='143' y='222' width='39' height='8' rx='2' fill='#c9c7c1'/><rect x='143' y='236' width='39' height='8' rx='2' fill='#c9c7c1'/><rect x='143' y='250' width='39' height='8' rx='2' fill='#c9c7c1'/><rect x='143' y='264' width='39' height='8' rx='2' fill='#c9c7c1'/><rect x='143' y='278' width='39' height='8' rx='2' fill='#c9c7c1'/><rect x='139' y='30' width='49' height='300' fill='none' stroke='#d03b3b' stroke-width='2' stroke-dasharray='4 3'/><text x='95' y='374' text-anchor='middle' font-size='9.5' fill='#d03b3b' font-weight='600'>sidebar 255px chiếm 68%</text><text x='95' y='387' text-anchor='middle' font-size='9.5' fill='#d03b3b' font-weight='600'>nội dung rộng tới 1359px bị cắt</text></g><g transform='translate(285,20)'><rect width='190' height='360' rx='22' fill='#ffffff' stroke='#52514e' stroke-width='2'/><rect x='70' y='8' width='50' height='6' rx='3' fill='#e4e3df'/><text x='95' y='-8' text-anchor='middle' font-size='11.5' font-weight='700' fill='#0b0b0b'>Đề xuất · 375px</text><rect x='6' y='22' width='178' height='30' fill='#eef7f2'/><rect x='14' y='31' width='18' height='3' fill='#0b0b0b'/><rect x='14' y='37' width='18' height='3' fill='#0b0b0b'/><rect x='14' y='43' width='18' height='3' fill='#0b0b0b'/><text x='40' y='42' font-size='10' font-weight='700' fill='#0b0b0b'>Lịch &amp; Tiến độ</text><circle cx='168' cy='37' r='8' fill='#d03b3b'/><rect x='14' y='62' width='162' height='64' rx='8' fill='#ffffff' stroke='#e4e3df'/><rect x='22' y='70' width='90' height='8' rx='2' fill='#9a988f'/><rect x='22' y='84' width='140' height='6' rx='2' fill='#d9d7d1'/><rect x='22' y='96' width='120' height='6' rx='2' fill='#d9d7d1'/><rect x='130' y='70' width='38' height='12' rx='6' fill='#d8f0d8'/><rect x='14' y='134' width='162' height='64' rx='8' fill='#ffffff' stroke='#e4e3df'/><rect x='22' y='142' width='90' height='8' rx='2' fill='#9a988f'/><rect x='22' y='156' width='140' height='6' rx='2' fill='#d9d7d1'/><rect x='22' y='168' width='120' height='6' rx='2' fill='#d9d7d1'/><rect x='130' y='142' width='38' height='12' rx='6' fill='#fdebc8'/><rect x='14' y='206' width='162' height='64' rx='8' fill='#ffffff' stroke='#e4e3df'/><rect x='22' y='214' width='90' height='8' rx='2' fill='#9a988f'/><rect x='22' y='228' width='140' height='6' rx='2' fill='#d9d7d1'/><rect x='22' y='240' width='120' height='6' rx='2' fill='#d9d7d1'/><rect x='130' y='214' width='38' height='12' rx='6' fill='#d8f0d8'/><rect x='14' y='278' width='162' height='64' rx='8' fill='#ffffff' stroke='#e4e3df'/><rect x='22' y='286' width='90' height='8' rx='2' fill='#9a988f'/><rect x='22' y='300' width='140' height='6' rx='2' fill='#d9d7d1'/><rect x='22' y='312' width='120' height='6' rx='2' fill='#d9d7d1'/><rect x='130' y='286' width='38' height='12' rx='6' fill='#f7d6d6'/><rect x='6' y='318' width='178' height='34' fill='#ffffff' stroke='#e4e3df'/><circle cx='30' cy='335' r='7' fill='#2b4c93'/><circle cx='74' cy='335' r='7' fill='#c9c7c1'/><circle cx='118' cy='335' r='7' fill='#c9c7c1'/><circle cx='162' cy='335' r='7' fill='#c9c7c1'/><text x='95' y='374' text-anchor='middle' font-size='9.5' fill='#0ca30c' font-weight='600'>top bar + hamburger</text><text x='95' y='387' text-anchor='middle' font-size='9.5' fill='#0ca30c' font-weight='600'>bảng thành thẻ · tab dưới</text></g><g transform='translate(520,20)'><rect width='230' height='300' rx='14' fill='#ffffff' stroke='#52514e' stroke-width='2'/><text x='115' y='-8' text-anchor='middle' font-size='11.5' font-weight='700' fill='#0b0b0b'>Đề xuất · 768px</text><rect x='6' y='10' width='34' height='280' fill='#eef7f2'/><circle cx='23' cy='30' r='7' fill='#2b4c93'/><circle cx='23' cy='58' r='7' fill='#9cc7b0'/><circle cx='23' cy='86' r='7' fill='#9cc7b0'/><circle cx='23' cy='114' r='7' fill='#9cc7b0'/><circle cx='23' cy='142' r='7' fill='#9cc7b0'/><circle cx='23' cy='170' r='7' fill='#9cc7b0'/><circle cx='23' cy='198' r='7' fill='#9cc7b0'/><circle cx='23' cy='226' r='7' fill='#9cc7b0'/><rect x='48' y='18' width='84' height='62' rx='6' fill='#ffffff' stroke='#e4e3df'/><rect x='54' y='26' width='50' height='7' rx='2' fill='#9a988f'/><rect x='138' y='18' width='84' height='62' rx='6' fill='#ffffff' stroke='#e4e3df'/><rect x='144' y='26' width='50' height='7' rx='2' fill='#9a988f'/><rect x='48' y='88' width='84' height='62' rx='6' fill='#ffffff' stroke='#e4e3df'/><rect x='54' y='96' width='50' height='7' rx='2' fill='#9a988f'/><rect x='138' y='88' width='84' height='62' rx='6' fill='#ffffff' stroke='#e4e3df'/><rect x='144' y='96' width='50' height='7' rx='2' fill='#9a988f'/><rect x='48' y='158' width='84' height='62' rx='6' fill='#ffffff' stroke='#e4e3df'/><rect x='54' y='166' width='50' height='7' rx='2' fill='#9a988f'/><rect x='138' y='158' width='84' height='62' rx='6' fill='#ffffff' stroke='#e4e3df'/><rect x='144' y='166' width='50' height='7' rx='2' fill='#9a988f'/><rect x='48' y='228' width='84' height='62' rx='6' fill='#ffffff' stroke='#e4e3df'/><rect x='54' y='236' width='50' height='7' rx='2' fill='#9a988f'/><rect x='138' y='228' width='84' height='62' rx='6' fill='#ffffff' stroke='#e4e3df'/><rect x='144' y='236' width='50' height='7' rx='2' fill='#9a988f'/><text x='115' y='318' text-anchor='middle' font-size='10' fill='#0ca30c' font-weight='600'>sidebar thu thành rail icon 56px</text></g></svg><figcaption>Hình 9.1 — Wireframe hiện tại so với đề xuất. Hiện tại sidebar 255 px chiếm 68% màn hình 375 px, tiêu đề bị bẻ từng chữ; đề xuất: top bar + menu off-canvas, bảng chuyển thành thẻ, tablet dùng rail icon.</figcaption></figure>
+</section>
+
+<section class="page">
+  <h3>9.1 Vấn đề</h3>
+  <table>
+    <thead><tr><th>#</th><th>Vấn đề</th><th>Vị trí</th><th>Mức</th></tr></thead>
+    <tbody>
+      <tr><td>U1</td><td>Chỉ 1 breakpoint (<code>max-width:1180px</code>); sidebar cố định 255 px, <code>height:100vh</code>, không thu gọn</td><td><code>style.css:53-54, 1933</code></td><td><span class="tag crit">Cao</span></td></tr>
+      <tr><td>U2</td><td>Nút thu gọn sidebar <code>‹</code> không có handler</td><td><code>index.html:79</code></td><td><span class="tag serious">TB</span></td></tr>
+      <tr><td>U3</td><td>Grid cột cứng: <code>1fr 380px</code>, <code>420px 1fr</code>, form <code>1fr 1fr</code>; camera wall <code>minmax(320px,1fr)</code></td><td><code>style.css:355, 792, 849, 1298, 2165</code></td><td><span class="tag crit">Cao</span></td></tr>
+      <tr><td>U4</td><td>Không có trạng thái stream: không báo "hình cũ X giây", không fps, khi lỗi chỉ xoá <code>src</code> → icon ảnh vỡ (thấy ở "Sân 2"); 409 "camera chưa chạy" không giải thích</td><td><code>app.js:500-508</code></td><td><span class="tag crit">Cao</span></td></tr>
+      <tr><td>U5</td><td>Đồng hồ lệch giả: <code>/api/time</code> trả giờ không kèm múi giờ (<code>2026-11-02T18:08:50</code>); máy không ở GMT+7 hiện "⚠ Máy trạm lệch 420 phút" và đồng hồ sai 7 giờ. Nên dùng <code>clock.iso()</code> (có offset)</td><td><code>api.py:676</code>, <code>app.js:66-83</code></td><td><span class="tag serious">TB</span></td></tr>
+      <tr><td>U6</td><td>Chuông thông báo không có handler; breadcrumb mặc định "Giám sát trực tiếp" dù trang chủ là Lịch &amp; Tiến độ; giờ placeholder cứng "23:18:13 17/08/2026"; reload không giữ tab (không đọc hash)</td><td><code>index.html:151, 167, 171</code>; <code>app.js:146, 3266</code></td><td><span class="tag warn">Thấp</span></td></tr>
+      <tr><td>U7</td><td>Accessibility: 0 thuộc tính <code>aria-*</code>, 14/61 label có <code>for</code>, 5 <code>div</code> bấm được không dùng được bằng bàn phím, không có <code>:focus-visible</code>, icon emoji không <code>aria-hidden</code></td><td><code>index.html</code></td><td><span class="tag serious">TB</span></td></tr>
+      <tr><td>U8</td><td>Tương phản &lt; 4.5:1: chữ trắng trên nút xanh <code>#0a8f4c</code> (4.16), badge đỏ (3.76), chữ cam cảnh báo <code>#d97706</code> (3.19), subtitle 10 px (3.79); 20 rule cỡ chữ 10–11 px; vùng chạm 26–36 px</td><td><code>style.css</code></td><td><span class="tag warn">Thấp</span></td></tr>
+      <tr><td>U9</td><td>Lỗi hiển thị bằng <code>alert()</code>; trang an toàn chỉ <code>console.error</code>; không có skeleton khi tải camera</td><td><code>app.js:318, 1044, 2752</code></td><td><span class="tag warn">Thấp</span></td></tr>
+      <tr><td>U10</td><td>Chính tả không thống nhất: khoá/khóa, xoá/xóa, hoá/hóa, Hủy; tiêu đề tiếng Anh "HORUS AI WEB · MILITARY EDITION" giữa giao diện tiếng Việt</td><td>toàn bộ</td><td><span class="tag warn">Thấp</span></td></tr>
+      <tr><td>U11</td><td>Polling song song: trạng thái 2 s, an toàn 15 s, lịch 30 s — trùng với SSE đã có</td><td><code>app.js:789</code></td><td><span class="tag warn">Thấp</span></td></tr>
+    </tbody>
+  </table>
+  <h3>9.2 Đề xuất</h3>
+  <ul>
+    <li><b>Breakpoint</b>: ≤1280 sidebar thu thành rail icon 56 px (nút <code>‹</code> hoạt động, nhớ trạng thái); ≤768 sidebar thành menu off-canvas + top bar có hamburger; ≤480 mọi grid 1 cột, header pills gom vào menu.</li>
+    <li><b>Bảng</b>: ≤768 chuyển thành thẻ (mỗi dòng là card, cột quan trọng lên đầu) hoặc ít nhất bỏ <code>overflow-x:hidden</code> trên <code>body</code> để <code>.table-responsive</code> cuộn được.</li>
+    <li><b>Camera wall</b>: <code>grid-template-columns:repeat(auto-fill,minmax(min(100%,320px),1fr))</code>; ô video giữ <code>aspect-ratio:16/9</code>.</li>
+    <li><b>Trạng thái stream</b>: badge LIVE (xanh) / TRỄ (cam, hiện tuổi hình) / MẤT TÍN HIỆU (đỏ) dựa trên <code>frame_age_ms</code> từ server; placeholder + nút thử lại thay icon ảnh vỡ; nút Dừng/Chạy có trạng thái đang xử lý.</li>
+    <li><b>A11y</b>: <code>label for</code>, <code>aria-label</code> cho nút icon, <code>button</code> thay <code>div</code> bấm được, <code>:focus-visible</code>, nâng màu nút chính lên <code>#087a41</code> (≥4.5:1), chữ tối thiểu 12 px, vùng chạm ≥ 40 px.</li>
+    <li><b>Thông báo</b>: toast thay <code>alert()</code>; chuông mở danh sách sự kiện chưa xử lý (dùng lại SSE).</li>
+    <li>Kiểm thử responsive tự động: thêm vào <code>test_ui.mjs</code> (hoặc Playwright) kiểm <code>scrollWidth ≤ innerWidth</code> ở 375/768/1440 cho mọi view.</li>
+  </ul>
+</section>
+
+<!-- ============ 10. ROADMAP ============ -->
+<section class="page">
+  <h2>10. Lộ trình &amp; tiêu chí nghiệm thu</h2>
+  <figure><svg viewBox='0 0 760 380' class='chart' role='img' font-family='Be Vietnam Pro, DejaVu Sans, sans-serif'><line x1='250.0' x2='250.0' y1='16' y2='374' stroke='#e4e3df'/><text x='280.9' y='11' text-anchor='middle' font-size='10' fill='#52514e'>Tuần 1</text><line x1='311.8' x2='311.8' y1='16' y2='374' stroke='#e4e3df'/><text x='342.6' y='11' text-anchor='middle' font-size='10' fill='#52514e'>Tuần 2</text><line x1='373.5' x2='373.5' y1='16' y2='374' stroke='#e4e3df'/><text x='404.4' y='11' text-anchor='middle' font-size='10' fill='#52514e'>Tuần 3</text><line x1='435.2' x2='435.2' y1='16' y2='374' stroke='#e4e3df'/><text x='466.1' y='11' text-anchor='middle' font-size='10' fill='#52514e'>Tuần 4</text><line x1='497.0' x2='497.0' y1='16' y2='374' stroke='#e4e3df'/><text x='527.9' y='11' text-anchor='middle' font-size='10' fill='#52514e'>Tuần 5</text><line x1='558.8' x2='558.8' y1='16' y2='374' stroke='#e4e3df'/><text x='589.6' y='11' text-anchor='middle' font-size='10' fill='#52514e'>Tuần 6</text><line x1='620.5' x2='620.5' y1='16' y2='374' stroke='#e4e3df'/><text x='651.4' y='11' text-anchor='middle' font-size='10' fill='#52514e'>Tuần 7</text><line x1='682.2' x2='682.2' y1='16' y2='374' stroke='#e4e3df'/><text x='713.1' y='11' text-anchor='middle' font-size='10' fill='#52514e'>Tuần 8</text><line x1='744.0' x2='744.0' y1='16' y2='374' stroke='#e4e3df'/><text x='242' y='35' text-anchor='end' font-size='10' fill='#0b0b0b'>P0 · Khoá public, ẩn RTSP, đổi mật khẩu</text><rect x='251.0' y='24' width='22.7' height='15' rx='4' fill='#d03b3b'><title>P0 · Khoá public, ẩn RTSP, đổi mật khẩu: tuần 1.0 → 0.4</title></rect><text x='242' y='58' text-anchor='end' font-size='10' fill='#0b0b0b'>P0 · Retention data/events, giải phóng đĩa</text><rect x='251.0' y='47' width='35.1' height='15' rx='4' fill='#d03b3b'><title>P0 · Retention data/events, giải phóng đĩa: tuần 1.0 → 0.6</title></rect><text x='242' y='81' text-anchor='end' font-size='10' fill='#0b0b0b'>P0 · Fix nhanh stream (Q1–Q11)</text><rect x='263.4' y='70' width='47.4' height='15' rx='4' fill='#d03b3b'><title>P0 · Fix nhanh stream (Q1–Q11): tuần 1.2 → 1.0</title></rect><text x='242' y='104' text-anchor='end' font-size='10' fill='#0b0b0b'>P1 · Tách pipeline capture / AI / render</text><rect x='312.8' y='93' width='96.8' height='15' rx='4' fill='#ec835a'><title>P1 · Tách pipeline capture / AI / render: tuần 2.0 → 2.6</title></rect><text x='242' y='127' text-anchor='end' font-size='10' fill='#0b0b0b'>P1 · Docker + restart, cô lập CPU/GPU, giám sát</text><rect x='312.8' y='116' width='72.1' height='15' rx='4' fill='#ec835a'><title>P1 · Docker + restart, cô lập CPU/GPU, giám sát: tuần 2.0 → 2.2</title></rect><text x='242' y='150' text-anchor='end' font-size='10' fill='#0b0b0b'>P1 · OpenVINO + hw_profile + điều khiển thích ứng</text><rect x='337.4' y='139' width='96.8' height='15' rx='4' fill='#ec835a'><title>P1 · OpenVINO + hw_profile + điều khiển thích ứng: tuần 2.4 → 3.0</title></rect><text x='242' y='173' text-anchor='end' font-size='10' fill='#0b0b0b'>P1 · Auth thật (token + phân quyền API)</text><rect x='325.1' y='162' width='96.8' height='15' rx='4' fill='#ec835a'><title>P1 · Auth thật (token + phân quyền API): tuần 2.2 → 2.8</title></rect><text x='242' y='196' text-anchor='end' font-size='10' fill='#0b0b0b'>P2 · PoC go2rtc WebRTC/TURN + MSE fallback</text><rect x='374.5' y='185' width='72.1' height='15' rx='4' fill='#2a78d6'><title>P2 · PoC go2rtc WebRTC/TURN + MSE fallback: tuần 3.0 → 3.2</title></rect><text x='242' y='219' text-anchor='end' font-size='10' fill='#0b0b0b'>P2 · Overlay canvas đồng bộ pts</text><rect x='436.2' y='208' width='84.5' height='15' rx='4' fill='#2a78d6'><title>P2 · Overlay canvas đồng bộ pts: tuần 4.0 → 4.4</title></rect><text x='242' y='242' text-anchor='end' font-size='10' fill='#0b0b0b'>P2 · PoC ONVIF metadata i-PRO</text><rect x='411.6' y='231' width='59.8' height='15' rx='4' fill='#2a78d6'><title>P2 · PoC ONVIF metadata i-PRO: tuần 3.6 → 3.6</title></rect><text x='242' y='265' text-anchor='end' font-size='10' fill='#0b0b0b'>P2 · Chất lượng AI + bộ đánh giá offline</text><rect x='405.4' y='254' width='152.4' height='15' rx='4' fill='#2a78d6'><title>P2 · Chất lượng AI + bộ đánh giá offline: tuần 3.5 → 5.0</title></rect><text x='242' y='288' text-anchor='end' font-size='10' fill='#0b0b0b'>P2 · Responsive + a11y</text><rect x='436.2' y='277' width='96.8' height='15' rx='4' fill='#2a78d6'><title>P2 · Responsive + a11y: tuần 4.0 → 4.6</title></rect><text x='242' y='311' text-anchor='end' font-size='10' fill='#0b0b0b'>P3 · Bù gap yêu cầu (9 dòng Một phần)</text><rect x='528.9' y='300' width='121.5' height='15' rx='4' fill='#1baf7a'><title>P3 · Bù gap yêu cầu (9 dòng Một phần): tuần 5.5 → 6.5</title></rect><text x='242' y='334' text-anchor='end' font-size='10' fill='#0b0b0b'>P3 · Chat Bot (nếu thuộc phạm vi repo)</text><rect x='559.8' y='323' width='183.2' height='15' rx='4' fill='#1baf7a'><title>P3 · Chat Bot (nếu thuộc phạm vi repo): tuần 6.0 → 8.0</title></rect><text x='242' y='357' text-anchor='end' font-size='10' fill='#0b0b0b'>Khi có GPU · TensorRT + NVDEC + batch</text><rect x='590.6' y='346' width='90.6' height='15' rx='4' fill='#1baf7a'><title>Khi có GPU · TensorRT + NVDEC + batch: tuần 6.5 → 7.0</title></rect></svg><figcaption>Hình 10.1 — Lộ trình 8 tuần cho 1–2 dev. Đỏ = P0 khẩn, cam = P1, xanh dương = P2, xanh lá = P3.</figcaption></figure>
+  <table>
+    <thead><tr><th>Pha</th><th>Nội dung</th><th>Công (ước)</th><th>Tiêu chí nghiệm thu</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag crit">P0</span> tuần 1</td><td>Cloudflare Access, tắt frpc, che <code>source_uri</code>, đổi mật khẩu camera/token; retention + dọn đĩa; fix nhanh Q1–Q11</td><td>4–6 ngày</td><td>Không endpoint nào truy cập được khi chưa đăng nhập SSO; API không trả mật khẩu; đĩa &lt;70%; stream ≥10 fps, trễ video p95 &lt;1.5 s qua Cloudflare; không đứng hình &gt;2 s khi có sự kiện; log ghi rõ thiết bị AI đang chạy</td></tr>
+      <tr><td><span class="tag serious">P1</span> tuần 2–3</td><td>Tách AI worker (process), Docker Compose + restart + cô lập tài nguyên, auth phía server (token + phân quyền), SQLite; OpenVINO + <code>hw_profile</code> + điều khiển thích ứng (mục 5.4), chạy <code>bench_hw.py</code> trên máy đích</td><td>10–14 ngày</td><td>Kill app → tự lên &lt;30 s; trên máy đích, AI đạt fps của tầng mà <code>hw_profile</code> chọn, với số camera đã cam kết; còn bắt ≥90% số người so với model tham chiếu; 2 role bị chặn đúng ở backend (test); 2 camera ghi đồng thời không mất dữ liệu</td></tr>
+      <tr><td><span class="tag info">P2</span> tuần 3–5</td><td>go2rtc WebRTC/TURN + MSE fallback; overlay canvas đồng bộ pts; PoC ONVIF metadata i-PRO; chất lượng AI + bộ đánh giá offline; responsive + a11y</td><td>12–15 ngày</td><td>Video p95 &lt;1 s (MSE) / &lt;0.5 s (WebRTC); overlay lệch ≤200 ms; không đứng hình &gt;1 s trong 1 giờ; báo động giả xâm nhập &lt;1/giờ trên clip đánh giá; TAR@FAR 0.1% được báo cáo; <code>scrollWidth ≤ innerWidth</code> ở 375/768</td></tr>
+      <tr><td><span class="tag good">P3</span> tuần 5–8</td><td>Gap yêu cầu: tự bật/tắt giám sát theo lịch + cờ <code>enabled</code> (R33), thực thể khu vực + CRUD khu vực (R35–R37), luật trường bắn gắn lịch (R16/R27), màn tổng hợp quân số (R10/R21), tiến độ hoàn thành (R8), xác nhận cách hiểu R11/R22 với KH; khi có GPU: build engine TensorRT, NVDEC, gom batch và chạy <code>bench_hw.py</code> trên máy GPU (mục 5.5); <i>đề xuất ngoài FunctionList: xuất Excel vi phạm</i>; Chat Bot nếu thuộc phạm vi</td><td>10–15 ngày (Chat Bot: chưa ước lượng được, xem mục 7.4)</td><td>28/28 dòng AI Giám sát đạt cả chức năng lẫn phân quyền; demo theo kịch bản từng dòng của FunctionList</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============ 11. PHỤ LỤC ============ -->
+<section class="page">
+  <h2>11. Phụ lục: số liệu gốc &amp; cách đo</h2>
+  <h3>11.1 Đo stream qua Cloudflare (150 s)</h3>
+<pre><code># Kéo MJPEG, cắt từng JPEG theo marker FFD8/FFD9, ghi giờ nhận (GMT+7)
+python3 grab.py "https://military-attendance-dev.techainer.com/api/v1/cameras/cam_01/stream.mjpg?overlay=1" cf 150
+# 37 frame, ~102 KB/frame, 0.25 fps; khoảng cách TB 4.13 s (min 2.00, p95 6.22, max 7.27)
+
+# Hiệu chỉnh đồng hồ camera: lấy keyframe trực tiếp trên server, đọc OSD
+ffmpeg -rtsp_transport tcp -skip_frame nokey -i "rtsp://***@192.168.1.5:554/Streaming/Channels/101" -frames:v 1 ...
+# OSD 17:59:07 lúc server 18:05:48.65 ⇒ camera chậm ~401.6–402.3 s
+
+# Codec
+ffprobe ... Channels/101 → hevc Main 1920x1080 25/1
+ffprobe ... Channels/102 → hevc Main 640x360 25/1</code></pre>
+  <p class="small">Tuổi hình từng frame (s): 4.8 3.2 4.6 4.0 2.8 2.7 2.5 2.9 3.1 4.2 3.5 4.1 3.7 5.9 2.6 2.2 1.6 1.9 4.5 3.7 3.2 5.4 3.0 2.6 3.1 4.1 1.7 2.7 3.7 6.0 1.0 1.4 0.6 0.6 1.6 1.0 1.6. Một lần đo khác (20 s, 4 luồng song song, cả localhost) cho 0.15 fps, khoảng cách 6.5–7.9 s ± 2.1–2.5 s — tải máy dao động theo job train chạy chung.</p>
+  <h3>11.2 Bằng chứng GPU không được dùng</h3>
+<pre><code>Specified provider 'CUDAExecutionProvider' is not in available provider names.
+Available providers: 'AzureExecutionProvider, CPUExecutionProvider'
+Applied providers: ['CPUExecutionProvider']   # cả 5 model buffalo_l
+nvidia-smi pmon -s u   # app: sm "-" trong 15/15 mẫu; NVDEC 0%</code></pre>
+  <h3>11.3 Phạm vi &amp; giới hạn</h3>
+  <ul>
+    <li>Chỉ đọc: không sửa code, không restart, không đổi cấu hình server. Trên server chỉ tạo file tạm trong <code>/tmp</code> khi lấy keyframe, đã xoá ngay.</li>
+    <li>Phân rã thời gian từng bước trong vòng xử lý (hình 3.5) là <b>ước tính</b> từ chu kỳ đo được; cần instrument (Q11) để có số chính xác.</li>
+    <li>Camera i-PRO không tới được từ server lúc review, nên chưa kiểm chứng được ONVIF metadata trực tiếp; thông tin lấy từ <code>docs/camera_ai_stream_guide.md</code> của dev.</li>
+    <li>Mức cải thiện ở mục 5.1–5.2 là kỳ vọng theo kinh nghiệm; mục 5.3–5.4 là số đo thật nhưng trên Xeon 6226R đang có tải nền, mức AVX2 là giả lập, và clip quay ban đêm. Cần chạy <code>scripts/bench_hw.py</code> trên máy đích để chốt.</li>
+    <li>Sheet Chat Bot được đánh giá là "chưa có" trong repo này; chưa kiểm tra các repo khác.</li>
+    <li>Mọi trích dẫn <code>file:line</code> theo commit <code>6fc2929</code>. Mã app (<code>app/</code>, <code>static/</code>) giống hệt bản đang deploy <code>ac6f28b</code>.</li>
+  </ul>
+  <h3>11.4 Danh sách endpoint (tóm tắt)</h3>
+  <p class="small">v1: events (list, SSE stream, ack, clip), sessions (attendance, checks), summary (safety, training), zones (CRUD theo camera), cameras (CRUD, start/stop, stream.mjpg, snapshot), schedules (CRUD), auth (login, password, profile), system (time, health). Legacy vẫn được UI dùng: <code>/api/faces*</code>, <code>/api/zones</code>, <code>/api/snapshot</code>, <code>/api/schedules*</code> (POST không validate), <code>/api/attendance*</code>, <code>/api/start|stop|upload*</code>, <code>/api/time</code>, <code>/api/status</code>, <code>/api/alerts</code>, <code>WS /ws</code> (không còn client nhưng server vẫn broadcast frame base64).</p>
+</section>
+
+</main>
+</body>
+</html>
