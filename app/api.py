@@ -1983,7 +1983,7 @@ async def v1_system_time():
 
 
 @app.get("/api/v1/system/config")
-async def v1_system_config():
+async def v1_system_config(request: Request):
     """Cấu hình công khai: player.js chọn go2rtc (WebRTC/MSE) hay rơi về MJPEG,
     và màn đăng nhập có hiện khối "tài khoản demo" hay không.
 
@@ -1993,7 +1993,9 @@ async def v1_system_config():
     return {
         "go2rtc_enabled": go2rtc.GO2RTC_ENABLED,
         "go2rtc_proxy_base": "/go2rtc",
-        "ice_servers": go2rtc.ice_servers(),
+        # Mật khẩu TURN tạm chỉ cấp khi đã có phiên đăng nhập hợp lệ
+        "ice_servers": go2rtc.ice_servers(include_turn=auth.verify_session_token(
+            request.cookies.get(auth.SESSION_COOKIE)) is not None),
         "show_demo_accounts": SHOW_DEMO_ACCOUNTS,
     }
 

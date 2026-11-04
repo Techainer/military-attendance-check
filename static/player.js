@@ -19,9 +19,14 @@ import '/static/vendor/go2rtc/video-stream.js';
 
 const CONFIG_URL = '/api/v1/system/config';
 let _configPromise = null;
+let _configAt = 0;
+// Cấu hình có mật khẩu TURN tạm (hết hạn, và chỉ có sau khi đăng nhập) — không
+// giữ mãi bản lấy lúc còn ở màn đăng nhập
+const CONFIG_MAX_AGE_MS = 5 * 60 * 1000;
 
 function systemConfig() {
-    if (!_configPromise) {
+    if (!_configPromise || Date.now() - _configAt > CONFIG_MAX_AGE_MS) {
+        _configAt = Date.now();
         _configPromise = fetch(CONFIG_URL)
             .then((r) => (r.ok ? r.json() : null))
             .catch(() => null)

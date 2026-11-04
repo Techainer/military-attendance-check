@@ -185,6 +185,25 @@ check("go2rtc_enabled = false khi tắt", client.get("/api/v1/system/config").js
 go2rtc.GO2RTC_ENABLED = True
 
 
+print("\n[9b] TURN: mật khẩu tạm ký HMAC, chỉ cấp cho phiên đã đăng nhập")
+import base64, hashlib, hmac as _hmac  # noqa: E402
+old_turn = (go2rtc._TURN_URLS, go2rtc._TURN_SECRET)
+go2rtc._TURN_URLS, go2rtc._TURN_SECRET = ["turn:turn.example.com:3478"], "s3cret"
+cred = go2rtc.turn_credentials(user="u", ttl_s=100, now=1000)
+check("username = '<hết hạn>:<tên>'", cred["username"] == "1100:u", str(cred))
+expect = base64.b64encode(_hmac.new(b"s3cret", b"1100:u", hashlib.sha1).digest()).decode()
+check("credential = base64(HMAC-SHA1(secret, username)) như coturn", cred["credential"] == expect)
+body = client.get("/api/v1/system/config").json()
+check("đã đăng nhập: có TURN kèm mật khẩu tạm",
+      any("credential" in s for s in body.get("ice_servers", [])), str(body))
+anon = TestClient(api.app)
+body = anon.get("/api/v1/system/config").json()
+check("chưa đăng nhập: KHÔNG lộ mật khẩu TURN",
+      not any("credential" in s for s in body.get("ice_servers", [])), str(body))
+go2rtc._TURN_URLS, go2rtc._TURN_SECRET = old_turn
+check("chưa cấu hình TURN thì không sinh gì", go2rtc.turn_credentials() is None or bool(old_turn[1]))
+
+
 print("\n[10] Proxy WebSocket relay hai chiều tới go2rtc (/api/ws)")
 
 

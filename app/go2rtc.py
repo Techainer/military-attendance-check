@@ -18,8 +18,12 @@ thuộc. WebSocket proxy dùng ``websockets`` (đã có sẵn, kéo theo bởi
 """
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 import re
+import time
 import os
 import urllib.error
 import urllib.parse
@@ -43,19 +47,44 @@ GO2RTC_URL = os.environ.get("GO2RTC_URL", "http://127.0.0.1:1984").rstrip("/")
 # động; không set thì trình duyệt tự rơi về MSE (xem static/player.js).
 _ICE_SERVERS_RAW = os.environ.get("GO2RTC_ICE_SERVERS", "")
 
+# TURN dùng chung (coturn, chế độ use-auth-secret / "TURN REST API"): app không
+# giữ mật khẩu TURN cố định nào, mà ký mật khẩu tạm từ TURN_SECRET:
+#   username = "<hết_hạn_unix>:<tên>", credential = base64(HMAC-SHA1(secret, username))
+# Mật khẩu chỉ cấp cho trình duyệt ĐÃ đăng nhập (xem v1_system_config) — lộ ra
+# endpoint công khai là ai cũng mượn được TURN để relay lưu lượng của họ.
+_TURN_URLS = [u.strip() for u in os.environ.get("TURN_URLS", "").split(",") if u.strip()]
+_TURN_SECRET = os.environ.get("TURN_SECRET", "")
+_TURN_TTL_S = int(os.environ.get("TURN_TTL_S", "43200"))
+
 # Thời hạn gọi HTTP REST tới go2rtc (server nội bộ, nên ngắn là đủ)
 _HTTP_TIMEOUT_S = 6.0
 
 
-def ice_servers() -> list:
-    if not _ICE_SERVERS_RAW:
-        return []
-    try:
-        value = json.loads(_ICE_SERVERS_RAW)
-        return value if isinstance(value, list) else []
-    except (json.JSONDecodeError, TypeError):
-        print(f"[go2rtc] GO2RTC_ICE_SERVERS không phải JSON hợp lệ, bỏ qua: {_ICE_SERVERS_RAW!r}")
-        return []
+def turn_credentials(user: str = "horus", ttl_s: Optional[int] = None,
+                     now: Optional[float] = None) -> Optional[dict]:
+    """RTCIceServer có mật khẩu TURN tạm, hoặc None nếu chưa cấu hình TURN."""
+    if not (_TURN_URLS and _TURN_SECRET):
+        return None
+    expiry = int((time.time() if now is None else now) + (ttl_s or _TURN_TTL_S))
+    username = f"{expiry}:{user}"
+    digest = hmac.new(_TURN_SECRET.encode(), username.encode(), hashlib.sha1).digest()
+    return {"urls": list(_TURN_URLS), "username": username,
+            "credential": base64.b64encode(digest).decode()}
+
+
+def ice_servers(include_turn: bool = False) -> list:
+    servers: list = []
+    if _ICE_SERVERS_RAW:
+        try:
+            value = json.loads(_ICE_SERVERS_RAW)
+            servers = value if isinstance(value, list) else []
+        except (json.JSONDecodeError, TypeError):
+            print(f"[go2rtc] GO2RTC_ICE_SERVERS không phải JSON hợp lệ, bỏ qua: {_ICE_SERVERS_RAW!r}")
+    if include_turn:
+        turn = turn_credentials()
+        if turn:
+            servers = servers + [turn]
+    return servers
 
 
 # ---------------------------------------------------------------- stream sync
