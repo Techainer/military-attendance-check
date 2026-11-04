@@ -164,6 +164,21 @@ function drawDetections(ctx, w, h, result, zonesMeta) {
 
     if (!result) return;
 
+    // Khung camera nhỏ (lưới nhiều camera) thì chữ nhỏ lại; nhãn dài cắt theo
+    // bề ngang box; nhãn đè lên nhãn đã vẽ thì thử đặt trong box, vẫn đè thì bỏ
+    // (box và màu vẫn còn, chỉ mất chữ) — tránh mớ chữ chồng nhau không đọc nổi
+    const fontPx = w < 520 ? 11 : 13;
+    const labelH = fontPx + 5;
+    const placed = [];
+    const overlaps = (r) => placed.some((p) =>
+        r.x < p.x + p.w && p.x < r.x + r.w && r.y < p.y + p.h && p.y < r.y + r.h);
+    const fitText = (text, maxW) => {
+        if (ctx.measureText(text).width <= maxW) return text;
+        let t = text;
+        while (t.length > 1 && ctx.measureText(t + '…').width > maxW) t = t.slice(0, -1);
+        return t + '…';
+    };
+
     (result.tracks || []).forEach((t) => {
         const [x1, y1, x2, y2] = t.box;
         const bx = x1 * w, by = y1 * h, bw = (x2 - x1) * w, bh = (y2 - y1) * h;
@@ -172,15 +187,22 @@ function drawDetections(ctx, w, h, result, zonesMeta) {
         ctx.strokeRect(bx, by, bw, bh);
 
         if (t.label) {
-            ctx.font = '13px "Segoe UI", sans-serif';
-            const padding = 4;
-            const textW = ctx.measureText(t.label).width;
+            ctx.font = `${fontPx}px "Segoe UI", sans-serif`;
+            ctx.textBaseline = 'alphabetic';
+            const padding = 3;
+            const text = fitText(t.label, Math.max(bw, 70) - padding * 2);
+            const textW = ctx.measureText(text).width;
+            const above = { x: bx, y: by - labelH, w: textW + padding * 2, h: labelH };
+            const inside = { x: bx, y: by, w: above.w, h: labelH };
+            const r = !overlaps(above) && above.y >= 0 ? above : (!overlaps(inside) ? inside : null);
+            if (!r) return;
+            placed.push(r);
             ctx.fillStyle = t.color || '#788692';
             ctx.globalAlpha = 0.85;
-            ctx.fillRect(bx, by - 18, textW + padding * 2, 18);
+            ctx.fillRect(r.x, r.y, r.w, r.h);
             ctx.globalAlpha = 1;
             ctx.fillStyle = '#0b1220';
-            ctx.fillText(t.label, bx + padding, by - 5);
+            ctx.fillText(text, r.x + padding, r.y + labelH - 5);
         }
     });
 
