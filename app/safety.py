@@ -358,7 +358,7 @@ class IntrusionDetector:
         for tid in [t for t in pending if t not in zone_state]:
             del pending[tid]
         for tid in [t for t in track_last if t not in zone_state]:
-            del track_last[t]
+            del track_last[tid]
 
         if not pending:
             return None

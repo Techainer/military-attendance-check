@@ -2209,12 +2209,6 @@ a.btn-clip-ctrl {
 
 /* ≤600: mỗi trang vẫn 4 camera, chỉ đổi cách xếp thành 1 cột/hàng cho vừa
    màn hình hẹp — pager/vuốt ngang để đổi trang vẫn hoạt động như bình thường */
-@media (max-width: 600px) {
-    .camera-wall {
-        grid-template-columns: minmax(0, 1fr);
-        grid-template-rows: repeat(4, minmax(200px, auto));
-    }
-}
 
 /* ≤768: sidebar chuyển sang dạng ngăn kéo (ẩn ngoài màn hình), mở bằng nút
    hamburger trên thanh trên cùng, có lớp phủ tối phía sau; Esc/bấm ra ngoài
@@ -3060,3 +3054,15 @@ a.btn-clip-ctrl {
    khối "Chưa chạy" đã báo trạng thái */
 .camera-tile-video img:not([src]),
 .camera-tile-video img[src=""] { visibility: hidden; }
+
+/* ≤600: mỗi trang vẫn 4 camera, xếp 1 cột cho vừa màn hình hẹp — pager/vuốt
+   ngang đổi trang vẫn chạy. Đặt CUỐI file để đè rule .camera-wall gốc (cùng độ
+   ưu tiên, rule sau thắng); hàng tự co theo số camera, không chừa hàng trống. */
+@media (max-width: 600px) {
+    .camera-wall {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: none;
+        grid-auto-rows: auto;
+        min-height: 0;
+    }
+}

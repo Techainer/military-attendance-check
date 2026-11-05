@@ -334,6 +334,23 @@ fires_wait += fired_only(v_catchup)
 check("qua khoảng đệm của vùng -> C được bắn BÙ ở khung sau, dù khung đó không "
       "có gì mới xác nhận", len(fires_wait) == 2, str(fires_wait))
 
+# Người đã bắn sự kiện rồi RỜI hẳn khỏi khung -> dọn trạng thái theo track không
+# được ném lỗi (lỗi thật đã gặp: NameError làm chết cả vòng xử lý camera).
+det_leave = IntrusionDetector(_zone_store([restricted]))
+leave_fires = []
+try:
+    for i in range(5):
+        leave_fires += fired_only(det_leave.check([posA], [801], W, H, now + timedelta(seconds=0.3 * i)))
+    for i in range(40):  # A biến mất 20s
+        det_leave.check([], [], W, H, now + timedelta(seconds=2 + 0.5 * i))
+    for i in range(5):  # người mới vào
+        leave_fires += fired_only(det_leave.check([posB], [802], W, H, now + timedelta(seconds=25 + 0.3 * i)))
+    leave_ok = True
+except Exception as e:  # noqa: BLE001
+    leave_ok, leave_fires = False, [repr(e)]
+check("track đã bắn rồi rời khung -> không lỗi, người mới vẫn được báo",
+      leave_ok and len(leave_fires) == 2, str(leave_fires))
+
 # ---------------------------------------------------------------- kết luận
 print()
 if failures:

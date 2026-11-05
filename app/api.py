@@ -257,6 +257,19 @@ async def _run_camera(runtime: CameraRuntime):
         # Dọn kể cả khi luồng ném lỗi, nếu không camera kẹt ở trạng thái "đang
         # chạy" mãi và không bật lại được.
         runtimes.pop(runtime.camera_id, None)
+        if not getattr(runtime.processor, "_stop_requested", False):
+            # Vòng xử lý chết ngoài ý muốn (lỗi code/luồng) — không ai bấm dừng —
+            # thì tự bật lại thay vì để camera tắt âm thầm tới khi có người để ý.
+            print(f"[Camera] {runtime.camera_id} dừng ngoài ý muốn, thử bật lại sau {CAMERA_RESTART_DELAY_S:.0f}s")
+            asyncio.create_task(_restart_camera_later(CAMERA_RESTART_DELAY_S))
+
+
+CAMERA_RESTART_DELAY_S = float(os.environ.get("CAMERA_RESTART_DELAY_S", "10"))
+
+
+async def _restart_camera_later(delay: float) -> None:
+    await asyncio.sleep(delay)
+    await _resume_cameras()
 
 
 def _set_autostart(camera_id: str, value: bool) -> None:
