@@ -135,6 +135,7 @@ table.req td ul{margin:.2rem 0 0;padding-left:1rem}
     <li>Tóm tắt điều hành</li>
   </ol>
   <p class="small" style="margin:-.2rem 0 .5rem"><b>• Kết quả sau triển khai (04/11/2026)</b> — mục mới, ngay sau tóm tắt điều hành: trước/sau, kiến trúc đang chạy, lỗi đã vá, việc còn lại, rollback.</p>
+  <p class="small" style="margin:-.2rem 0 .5rem"><b>• Xử lý phản hồi tester (05/11/2026)</b> — mục mới, ngay sau "Kết quả sau triển khai": 11 vấn đề tester nêu trong "Vấn đề HORUS 11/26" và cách đã xử lý, đã deploy 05/11.</p>
   <ol start="2">
     <li>Bảo mật khẩn cấp</li>
     <li>Stream: giật, đứng hình và trễ — số đo &amp; nguyên nhân</li>
@@ -289,6 +290,37 @@ table.req td ul{margin:.2rem 0 0;padding-left:1rem}
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml down
 # rồi chạy lại trong tmux của martin:
 FACE_SIM_THRESHOLD=0.3 uv run main.py</code></pre>
+</section>
+
+<!-- ============ XỬ LÝ PHẢN HỒI TESTER ============ -->
+<section class="page">
+  <h2>Xử lý phản hồi tester (05/11/2026)</h2>
+  <p>Mục này đối chiếu các vấn đề tester nêu trong tài liệu "Vấn đề HORUS 11/26" với các thay đổi đã triển khai để xử lý. Đã deploy lên máy chủ ngày <b>05/11/2026</b>.</p>
+
+  <h3>Vấn đề &amp; xử lý</h3>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>Vấn đề</th><th>Nguyên nhân</th><th>Đã xử lý</th></tr></thead>
+    <tbody>
+      <tr><td>Nhãn đối tượng khó nhìn</td><td>Nền nhãn cùng màu box, chữ tối</td><td>Nhãn nền tối + chữ trắng (tương phản ≈18:1) + vạch màu trạng thái; áp dụng cả trình duyệt lẫn ảnh/clip.</td></tr>
+      <tr><td>1 người thành 2 / người di chuyển bị đếm 2</td><td>Box "giữ chỗ khi bị che" ở vị trí cũ không bị bỏ khi tracker đổi ID; NMS lỏng (<code>0.7</code>)</td><td>NMS <code>0.5</code>; bỏ box giữ chỗ khi có box mới gần (IoU≥<code>0.2</code> hoặc tâm gần); giữ chỗ <b>5→3 s</b>; sĩ số đếm theo track duy nhất.</td></tr>
+      <tr><td>Dừng/Chạy phải bấm Làm mới</td><td>Nút chỉ làm mới bảng thiết bị, không làm mới lưới camera</td><td>Cập nhật ngay + hỏi xác nhận khi Dừng; tự đồng bộ trạng thái mỗi <b>15 s</b>.</td></tr>
+      <tr><td>Phóng to/thu nhỏ lẫn lộn</td><td>Trong toàn màn hình, thanh điều khiển gốc của video tự phóng to riêng video → mất lớp AI</td><td>Tắt điều khiển gốc; nút toàn màn hình và double-click cùng một hành vi (toàn màn hình kèm lớp AI); nút 1:1 để về tỉ lệ gốc.</td></tr>
+      <tr><td>Chỉ khoanh đỏ lúc mới vào vùng cấm; 2 người chỉ bắt 1</td><td>Cảnh báo chỉ đánh dấu ở khung chuyển trạng thái; thời gian chờ 20 s tính theo vùng (nuốt người thứ 2)</td><td>Khoanh đỏ <b>suốt thời gian ở trong vùng</b>; mỗi người vào là một sự kiện (chờ theo từng người <b>60 s</b>, theo vùng <b>3 s</b>, không bỏ sót); sự kiện liệt kê mọi người trong vùng kèm tên nếu nhận diện; nhãn "VI PHẠM: &lt;tên&gt;".</td></tr>
+      <tr><td>Clip 10 s chỉ có trước vi phạm</td><td>Clip cắt từ bộ đệm ngay lúc báo</td><td>Đợi thêm <b>5 s</b> rồi cắt <b>[−5 s, +5 s]</b>; trong lúc chờ, API trả "đang xử lý", giao diện tự thử lại.</td></tr>
+      <tr><td>Ảnh điểm danh đầu giờ lệch giờ</td><td>Ảnh là khung tốt nhất bất kỳ trong cửa sổ 5 phút; giờ in trên ảnh là đồng hồ camera</td><td>Nhận diện tích luỹ cả cửa sổ, ảnh bằng chứng lấy trong <b>30 s cuối</b>; đóng dấu "Chụp lúc …" theo giờ máy chủ; hiện giờ chụp trong nhật ký + ghi chú cách chụp.</td></tr>
+      <tr><td>Lưới camera, cuộn chung với sự kiện</td><td>Lưới tự co giãn, cả trang cuộn chung</td><td>Lưới <b>2x2</b>, phân trang + vuốt ngang, chỉ phát luồng camera trang hiện tại; cột camera và cột sự kiện cuộn độc lập; mobile 1 cột.</td></tr>
+      <tr><td>Cần lịch sử vi phạm + trạng thái xử lý</td><td>Chỉ có nút xác nhận</td><td>Tab "Lịch sử vi phạm" lọc Chưa/Đã xử lý, người xử lý, giờ, phân trang.</td></tr>
+      <tr><td>Bỏ Điểm danh ngay / Chốt sĩ số thủ công</td><td>—</td><td>Đã gỡ khỏi màn Giám sát.</td></tr>
+      <tr><td>Bảng nhật ký/lưu trữ vi phạm</td><td>Bảng cuộn cả trang</td><td>Header cố định, cuộn trong bảng, phân trang <b>20 dòng</b>.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Ghi chú</h3>
+  <ul>
+    <li><b>(a)</b> Đã phát hiện và sửa ngay một lỗi phát sinh sau deploy (vòng xử lý camera dừng khi người vi phạm rời khung) và thêm cơ chế tự bật lại camera khi vòng xử lý dừng ngoài ý muốn.</li>
+    <li><b>(b)</b> Luồng điểm danh theo thời khoá biểu cần Duy Tran xác nhận lại mong muốn (độ dài cửa sổ, thời điểm chụp).</li>
+    <li><b>(c)</b> Thời gian suy luận tăng lên <b>~87 ms</b> do GPU dùng chung với job huấn luyện khác (~21 GB, 94%), AI vẫn <b>~9.3 fps</b>.</li>
+  </ul>
 </section>
 
 <!-- ============ 2. BẢO MẬT ============ -->
