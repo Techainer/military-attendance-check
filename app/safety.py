@@ -25,8 +25,16 @@ RULE_ATTENDANCE = "attendance_area"
 RULE_RESTRICTED = "restricted_area"
 RULE_CROSSING = "crossing_line"
 
-# Không bắn lại vi phạm của cùng một vùng trong khoảng này
-INTRUSION_COOLDOWN_SECONDS = 20
+# Khoảng tối thiểu giữa hai lần bắn vi phạm của CÙNG MỘT vùng (bất kể track nào),
+# chỉ để chặn dồn dập khi nhiều người cùng vào gần như một lúc. Hạ từ 20 xuống
+# 3s: 20s cũ từng chặn mất người thứ hai vào vùng sau người thứ nhất vài giây —
+# giờ việc "không báo lại" cho CÙNG một track đã có cơ chế riêng
+# (INTRUSION_TRACK_COOLDOWN_S), nên vùng chỉ cần một khoảng đệm ngắn.
+INTRUSION_COOLDOWN_SECONDS = float(os.environ.get("INTRUSION_COOLDOWN_SECONDS", "3"))
+# Không bắn lại vi phạm của CÙNG MỘT track trong vùng này nếu nó vừa được báo
+# gần đây (dù track đã rời rồi vào lại) — chặn báo lặp do track mất dấu rồi
+# tracker gán lại id khác chỉ trong chớp mắt.
+INTRUSION_TRACK_COOLDOWN_S = float(os.environ.get("INTRUSION_TRACK_COOLDOWN_S", "60"))
 
 # Biên độ trễ (hysteresis) quanh mép vùng/vạch, tính ở khung hình rộng _REF_WIDTH
 # rồi co giãn theo kích thước khung hình thực tế. Thiếu biên độ này, chân box
@@ -255,48 +263,121 @@ class IntrusionDetector:
 
     def __init__(self, zone_store: ZoneStore):
         self.zones = zone_store
-        # zone_id -> lần bắn vi phạm gần nhất
+        # zone_id -> lần bắn vi phạm gần nhất (CỦA VÙNG, bất kể track nào)
         self._last_fired: Dict[str, datetime] = {}
         # zone_id -> {track_id: trạng thái máy của track đó trong vùng/vạch này}
         self._track_state: Dict[str, Dict[int, dict]] = {}
+        # zone_id -> {track_id: lần bắn gần nhất CỦA RIÊNG track đó}
+        self._track_last_fired: Dict[str, Dict[int, datetime]] = {}
+        # zone_id -> {track_id: dwell} — track đã được XÁC NHẬN xâm nhập, đang
+        # chờ tới lượt bắn (bị chặn bởi INTRUSION_COOLDOWN_SECONDS của vùng),
+        # thử lại ở các khung hình sau, KHÔNG bị mất.
+        self._pending_fire: Dict[str, Dict[int, float]] = {}
 
     def check(self, person_boxes, track_ids, width: int, height: int, now: datetime,
               occluded: Optional[List[bool]] = None,
               confidences: Optional[List[float]] = None) -> List[dict]:
-        """Trả về danh sách vi phạm VỪA CHUYỂN TRẠNG THÁI trong khung hình này.
+        """Trả về trạng thái vi phạm của từng vùng đang có gì đáng báo.
 
-        Mỗi phần tử: ``{"zone", "indices", "dwell_seconds"}`` — ``indices`` là vị
-        trí của các box vừa được xác nhận vi phạm (không lặp lại cho tới khi
-        track đó rời khỏi rồi vào lại). ``occluded`` (tuỳ chọn, cùng độ dài với
-        ``person_boxes``) đánh dấu các box đang "giữ" qua khung hình bị che —
-        các box này bị loại khỏi mọi máy trạng thái.
+        Mỗi phần tử: ``{"zone", "indices", "inside", "dwell_seconds"}``.
+
+        - ``indices``: vị trí các box VỪA được bắn thành sự kiện trong khung này
+          (rỗng nếu không có sự kiện mới — do chưa có track nào mới xác nhận,
+          hoặc có nhưng đang bị chặn bởi khoảng đệm của vùng/track, xem dưới).
+        - ``inside`` (chỉ có với vùng cấm): vị trí TẤT CẢ box đang được xác nhận
+          là ở trong vùng NGAY KHUNG HÌNH NÀY, kể cả những track đã được báo từ
+          trước — dùng để vẽ/khoanh đỏ liên tục suốt thời gian còn ở trong vùng,
+          không chỉ đúng khung hình vừa chuyển trạng thái. Vạch an toàn không có
+          khái niệm "đang ở trong" (chỉ có khoảnh khắc cắt qua) nên luôn rỗng.
+
+        Mỗi TRACK chỉ được bắn sự kiện lại sau ``INTRUSION_TRACK_COOLDOWN_S``
+        giây kể từ lần bắn trước của chính nó; ngoài ra mỗi VÙNG còn có khoảng
+        đệm ngắn ``INTRUSION_COOLDOWN_SECONDS`` giữa hai lần bắn (để nhiều track
+        cùng xác nhận trong một khung chỉ gộp thành MỘT sự kiện) — track bị
+        khoảng đệm của vùng chặn vẫn nằm trong hàng chờ, được bắn ngay khi tới
+        khung hình kế tiếp đủ điều kiện, không bị bỏ sót.
         """
         violations = []
         for zone in self.zones.zones():
             rule = zone.get("rule")
+            zone_id = zone.get("id", zone.get("name", "zone"))
             if rule == RULE_RESTRICTED:
-                hits = self._restricted_hits(zone, person_boxes, track_ids, occluded, width, height, now,
-                                             confidences)
+                hits, inside, tid_to_idx = self._restricted_hits(
+                    zone, person_boxes, track_ids, occluded, width, height, now, confidences)
+                fired = self._fire_restricted(zone_id, hits, tid_to_idx, now)
+                if not inside and fired is None:
+                    continue
+                indices, dwell_seconds = fired if fired is not None else ([], 0)
+                violations.append({
+                    "zone": zone,
+                    "indices": indices,
+                    "inside": inside,
+                    "dwell_seconds": dwell_seconds,
+                })
             elif rule == RULE_CROSSING:
                 hits = self._crossing_hits(zone, person_boxes, track_ids, occluded, width, height, now,
                                            confidences)
+                if not hits:
+                    continue
+                last = self._last_fired.get(zone_id)
+                if last is not None and (now - last).total_seconds() < INTRUSION_COOLDOWN_SECONDS:
+                    continue
+                self._last_fired[zone_id] = now
+                violations.append({
+                    "zone": zone,
+                    "indices": [idx for idx, _dwell in hits],
+                    "inside": [],
+                    "dwell_seconds": int(max(dwell for _idx, dwell in hits)),
+                })
             else:
                 continue
-            if not hits:
-                continue
-
-            zone_id = zone.get("id", zone.get("name", "zone"))
-            last = self._last_fired.get(zone_id)
-            if last is not None and (now - last).total_seconds() < INTRUSION_COOLDOWN_SECONDS:
-                continue
-            self._last_fired[zone_id] = now
-
-            violations.append({
-                "zone": zone,
-                "indices": [idx for idx, _dwell in hits],
-                "dwell_seconds": int(max(dwell for _idx, dwell in hits)),
-            })
         return violations
+
+    def _fire_restricted(self, zone_id: str, hits: List[Tuple[int, float, int]],
+                         tid_to_idx: Dict[int, int], now: datetime) -> Optional[Tuple[List[int], int]]:
+        """Quyết định có bắn sự kiện cho vùng cấm ở khung này không.
+
+        Nhận các track VỪA xác nhận (``hits``) trong khung hiện tại, dồn vào
+        hàng chờ theo track (lọc bớt track vừa bắn gần đây theo
+        ``INTRUSION_TRACK_COOLDOWN_S``), rồi thử bắn gộp MỘT sự kiện cho TẤT CẢ
+        track đang chờ — miễn là vùng chưa bị khoảng đệm ``INTRUSION_COOLDOWN_SECONDS``
+        chặn. Track chờ mà vùng đang bị chặn vẫn giữ trong hàng chờ cho khung sau.
+        """
+        track_last = self._track_last_fired.setdefault(zone_id, {})
+        pending = self._pending_fire.setdefault(zone_id, {})
+        zone_state = self._track_state.get(zone_id, {})
+
+        for idx, dwell, tid in hits:
+            last_t = track_last.get(tid)
+            if last_t is not None and (now - last_t).total_seconds() < INTRUSION_TRACK_COOLDOWN_S:
+                continue
+            pending[tid] = dwell
+
+        # Dọn hàng chờ + lần bắn gần nhất của track đã rời hẳn (không còn được
+        # theo dõi ở vùng này), tránh rò bộ nhớ và chờ vô ích một track đã biến mất
+        for tid in [t for t in pending if t not in zone_state]:
+            del pending[tid]
+        for tid in [t for t in track_last if t not in zone_state]:
+            del track_last[t]
+
+        if not pending:
+            return None
+
+        last_zone_fire = self._last_fired.get(zone_id)
+        if last_zone_fire is not None and (now - last_zone_fire).total_seconds() < INTRUSION_COOLDOWN_SECONDS:
+            return None  # vùng vừa báo gần đây -> chờ khung sau, track vẫn còn trong pending
+
+        fire_tids = [tid for tid in pending if tid in tid_to_idx]
+        if not fire_tids:
+            return None  # mọi track đang chờ bắn đều tạm vắng ở khung này
+
+        self._last_fired[zone_id] = now
+        indices = [tid_to_idx[tid] for tid in fire_tids]
+        dwell_seconds = int(max(pending[tid] for tid in fire_tids))
+        for tid in fire_tids:
+            track_last[tid] = now
+            del pending[tid]
+        return indices, dwell_seconds
 
     def restricted_occupied(self) -> bool:
         """Có track nào đang được XÁC NHẬN ở trong một vùng cấm không.
@@ -334,22 +415,37 @@ class IntrusionDetector:
                 del state[tid]
 
     def _restricted_hits(self, zone, person_boxes, track_ids, occluded,
-                          width, height, now, confidences=None) -> List[Tuple[int, float]]:
+                          width, height, now, confidences=None
+                          ) -> Tuple[List[Tuple[int, float, int]], List[int], Dict[int, int]]:
+        """Trả về ``(hits, inside, tid_to_idx)``.
+
+        - ``hits``: ``(idx, dwell, track_id)`` của các track VỪA chuyển sang xác
+          nhận ở khung này.
+        - ``inside``: vị trí các box đang được xác nhận ở trong vùng NGAY khung
+          này (gồm cả track mới xác nhận và track đã xác nhận từ trước, miễn còn
+          đứng trong vùng) — dùng để vẽ/khoanh đỏ liên tục.
+        - ``tid_to_idx``: track id -> vị trí box của nó ở khung này (mọi track
+          có id thật đang thấy được, không chỉ track đã xác nhận) — dùng để quy
+          đổi track đang "chờ bắn" (xem ``_fire_restricted``) về vị trí hiện tại.
+        """
         points = zone.get("points", [])
         if len(points) < 3:
-            return []
+            return [], [], {}
         polygon = _to_pixels(points, width, height)
         zone_id = zone.get("id", zone.get("name", "zone"))
         state = self._track_state.setdefault(zone_id, {})
         margin = _margin_px(width)
 
-        hits: List[Tuple[int, float]] = []
+        hits: List[Tuple[int, float, int]] = []
+        inside: List[int] = []
+        tid_to_idx: Dict[int, int] = {}
         seen_tracks = set()
         for idx, box in enumerate(person_boxes):
             tid = self._real_track_id(track_ids, occluded, idx)
             if tid is None:
                 continue
             seen_tracks.add(tid)
+            tid_to_idx[tid] = idx
             st = state.setdefault(tid, {"confirmed": False, "candidate_since": None,
                                          "candidate_frames": 0, "last_seen": now})
             st["last_seen"] = now
@@ -363,6 +459,8 @@ class IntrusionDetector:
                     st["confirmed"] = False
                     st["candidate_since"] = None
                     st["candidate_frames"] = 0
+                else:
+                    inside.append(idx)
                 continue
 
             if dist >= margin and _low_conf(confidences, idx):
@@ -379,7 +477,8 @@ class IntrusionDetector:
                 dwell = (now - st["candidate_since"]).total_seconds()
                 if st["candidate_frames"] >= INTRUSION_MIN_FRAMES and dwell >= INTRUSION_MIN_DWELL_S:
                     st["confirmed"] = True
-                    hits.append((idx, dwell))
+                    hits.append((idx, dwell, tid))
+                    inside.append(idx)
             else:
                 # Trong vùng đệm quanh mép (hoặc rõ ràng ở ngoài) -> chưa đủ rõ,
                 # không tích dồn để rung nhiễu quanh mép không gây báo động giả
@@ -387,7 +486,7 @@ class IntrusionDetector:
                 st["candidate_frames"] = 0
 
         self._prune_stale(state, seen_tracks, now)
-        return hits
+        return hits, inside, tid_to_idx
 
     def _crossing_hits(self, zone, person_boxes, track_ids, occluded,
                         width, height, now, confidences=None) -> List[Tuple[int, float]]:

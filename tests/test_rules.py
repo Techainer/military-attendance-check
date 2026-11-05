@@ -49,6 +49,14 @@ def box_at(center_x, center_y=300):
     return [center_x - 50, center_y - 298, center_x + 50, center_y + 2]
 
 
+def fired_only(violations):
+    """Lọc lại chỉ những vi phạm THẬT SỰ vừa bắn sự kiện mới ở khung đó —
+    ``check()`` giờ còn trả cả entry chỉ để báo 'vẫn đang ở trong vùng'
+    (``indices`` rỗng, xem docstring ``IntrusionDetector.check``), không phải
+    lúc nào có entry cũng là một sự kiện mới."""
+    return [v for v in violations if v["indices"]]
+
+
 # ---------------------------------------------------------------- vùng cấm
 print("\n[1] Vùng cấm: hysteresis chặn rung nhiễu ở mép, dwell chặn bắn sớm")
 
@@ -89,7 +97,10 @@ first_dwell = v[0]["dwell_seconds"]
 
 for i in range(1, 6):
     v = det2.check([deep_inside], [101], W, H, now + timedelta(seconds=1.2 + i))
-    check(f"vẫn đứng trong vùng (khung +{i}) -> không bắn lặp lại", v == [], str(v))
+    check(f"vẫn đứng trong vùng (khung +{i}) -> không bắn lặp lại",
+          len(v) == 1 and v[0]["indices"] == [], str(v))
+    check(f"vẫn đứng trong vùng (khung +{i}) -> nhưng vẫn báo 'inside' để vẽ liên tục",
+          v[0]["inside"] == [0], str(v))
 
 # ------------------------------------------------- track bị che / chưa có id
 print("\n[2] Box bị che hoặc chưa có track id thật không được tính")
@@ -250,20 +261,78 @@ print("\n[conf] Box mờ (đồ vật nhận nhầm ban đêm) không kích ho�
 det_c = IntrusionDetector(_zone_store([restricted]))
 fired = []
 for i in range(20):  # 6 giây đứng sâu trong vùng, conf 0.3
-    fired += det_c.check([deep_inside], [300], W, H, now + timedelta(seconds=0.3 * i),
-                         confidences=[0.3])
+    fired += fired_only(det_c.check([deep_inside], [300], W, H, now + timedelta(seconds=0.3 * i),
+                                    confidences=[0.3]))
 check("conf 0.3 đứng yên 6 s trong vùng -> không báo", fired == [], str(fired))
 fired = []
 for i in range(20):
-    fired += det_c.check([deep_inside], [301], W, H, now + timedelta(seconds=0.3 * i),
-                         confidences=[0.85])
+    fired += fired_only(det_c.check([deep_inside], [301], W, H, now + timedelta(seconds=0.3 * i),
+                                    confidences=[0.85]))
 check("conf 0.85 -> báo đúng một lần", len(fired) == 1, str(fired))
 det_c2 = IntrusionDetector(_zone_store([restricted]))
 fired = []
 for i, c in enumerate([0.8, 0.4, 0.8, 0.4, 0.8, 0.8, 0.8, 0.8]):
-    fired += det_c2.check([deep_inside], [302], W, H, now + timedelta(seconds=0.3 * i),
-                          confidences=[c])
+    fired += fired_only(det_c2.check([deep_inside], [302], W, H, now + timedelta(seconds=0.3 * i),
+                                     confidences=[c]))
 check("conf dao động quanh ngưỡng vẫn báo được (không reset dwell)", len(fired) == 1, str(fired))
+
+# ----------------------------------- cooldown theo track + hàng chờ của vùng
+print("\n[6] Nhiều người vào vùng cấm: mỗi track một sự kiện, không bị trộn/mất")
+
+posA, posB = box_at(900), box_at(1100)   # hai vị trí khác nhau, cùng trong vùng cấm
+
+# Hai track CÙNG xác nhận trong MỘT khung -> gộp thành đúng MỘT sự kiện, báo đủ cả hai
+det_both = IntrusionDetector(_zone_store([restricted]))
+same_frame_fires = []
+for i in range(5):
+    v = det_both.check([posA, posB], [501, 502], W, H, now + timedelta(seconds=0.3 * i))
+    same_frame_fires += fired_only(v)
+check("hai track cùng xác nhận một khung -> đúng MỘT sự kiện", len(same_frame_fires) == 1,
+      str(same_frame_fires))
+check("sự kiện đó báo đủ CẢ HAI box", sorted(same_frame_fires[0]["indices"]) == [0, 1],
+      str(same_frame_fires))
+
+# Người thứ hai vào sau người thứ nhất 5s (xa hơn khoảng đệm vùng 3s mặc định)
+# -> vẫn sinh thêm một sự kiện RIÊNG, không bị gộp mất hay bỏ sót
+det_5s = IntrusionDetector(_zone_store([restricted]))
+fires_5s = []
+for i in range(5):  # A xác nhận ở t=1.2s (giống kịch bản chuẩn ở mục [1])
+    v = det_5s.check([posA], [601], W, H, now + timedelta(seconds=0.3 * i))
+    fires_5s += fired_only(v)
+check("người A vào trước -> 1 sự kiện", len(fires_5s) == 1, str(fires_5s))
+
+T_B = 5.0  # B bắt đầu đứng vào 5s sau mốc xuất phát của A
+for i in range(5):
+    v = det_5s.check([posA, posB], [601, 602], W, H, now + timedelta(seconds=T_B + 0.3 * i))
+    fires_5s += fired_only(v)
+check("người B vào 5s sau A -> thêm một sự kiện RIÊNG (tổng 2, không bị chặn vì đã có A)",
+      len(fires_5s) == 2, str(fires_5s))
+check("sự kiện của B chỉ gồm box của B", fires_5s[-1]["indices"] == [1], str(fires_5s))
+
+v = det_5s.check([posA, posB], [601, 602], W, H, now + timedelta(seconds=T_B + 1.8))
+check("cả hai còn đứng trong vùng -> 'inside' liệt kê đủ CẢ HAI, liên tục",
+      sorted(v[0]["inside"]) == [0, 1], str(v))
+
+# Track thứ hai xác nhận TRONG lúc khoảng đệm của vùng (INTRUSION_COOLDOWN_SECONDS)
+# còn đang khoá vì track thứ nhất vừa bắn -> phải CHỜ (không mất), bắn bù ngay
+# khung đầu tiên sau khi khoảng đệm hết.
+det_wait = IntrusionDetector(_zone_store([restricted]))
+fires_wait = []
+for i in range(5):  # A xác nhận ở t=1.2s -> khoá khoảng đệm vùng tới t=1.2+3=4.2s
+    v = det_wait.check([posA], [701], W, H, now + timedelta(seconds=0.3 * i))
+    fires_wait += fired_only(v)
+check("A xác nhận ngay, khoá khoảng đệm của vùng", len(fires_wait) == 1, str(fires_wait))
+
+for i in range(5):  # C bắt đầu vào ngay sau đó, xác nhận ở t=1.5+1.2=2.7s (< 4.2s)
+    v = det_wait.check([posA, posB], [701, 702], W, H, now + timedelta(seconds=1.5 + 0.3 * i))
+    fires_wait += fired_only(v)
+check("C xác nhận trong lúc khoảng đệm vùng còn khoá -> CHƯA bắn, không bị mất",
+      len(fires_wait) == 1, str(fires_wait))
+
+v_catchup = det_wait.check([posA, posB], [701, 702], W, H, now + timedelta(seconds=4.5))
+fires_wait += fired_only(v_catchup)
+check("qua khoảng đệm của vùng -> C được bắn BÙ ở khung sau, dù khung đó không "
+      "có gì mới xác nhận", len(fires_wait) == 2, str(fires_wait))
 
 # ---------------------------------------------------------------- kết luận
 print()

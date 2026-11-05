@@ -27,6 +27,13 @@ PAD_Y = 3
 # Chừa lề để nhãn không dán sát mép khung hình
 MARGIN = 10
 
+# Nền chip nhãn thống nhất cho MỌI trạng thái (BGR của #0b1220) — trước đây mỗi
+# trạng thái tự chọn màu nền riêng (đỏ/vàng/xanh...) khiến chữ dễ chìm vào nền
+# sáng hoặc gắt màu, tester báo khó đọc. Giờ nền luôn tối, trạng thái chỉ còn
+# thể hiện qua dải màu hẹp bên trái (``stripe_color``).
+LABEL_BG = (32, 18, 11)
+STRIPE_W = 4
+
 _font_cache = {}
 
 
@@ -51,13 +58,17 @@ def _load_font(size: int):
 
 
 def draw_label(frame: np.ndarray, text: str, origin, font_size: int = 16,
-               text_color=(255, 255, 255), bg_color=(0, 180, 70), anchor: str = "top") -> None:
+               text_color=(255, 255, 255), bg_color=LABEL_BG, anchor: str = "top",
+               stripe_color=None) -> None:
     """Vẽ một nhãn chữ có nền lên ``frame`` (sửa trực tiếp).
 
     Args:
         origin: toạ độ (x, y) theo hệ OpenCV. x vượt quá mép phải thì nhãn được
             kéo về canh sát lề phải.
         anchor: "top" thì y là cạnh trên của nhãn, "bottom" thì y là cạnh dưới.
+        stripe_color: có thì vẽ thêm dải màu rộng ``STRIPE_W`` px bên trái nhãn
+            để thể hiện trạng thái (khoanh vùng cấm = đỏ, trong vùng = xanh...)
+            mà không cần đổi hẳn màu nền, giữ độ tương phản chữ/nền ổn định.
     """
     font = _load_font(font_size)
     left, top, right, bottom = font.getbbox(text)
@@ -74,5 +85,8 @@ def draw_label(frame: np.ndarray, text: str, origin, font_size: int = 16,
     y = max(MARGIN, min(y, h_img - box_h - MARGIN))
 
     tile = Image.new("RGB", (box_w, box_h), bg_color[::-1])
-    ImageDraw.Draw(tile).text((PAD_X - left, PAD_Y - top), text, font=font, fill=text_color[::-1])
+    draw = ImageDraw.Draw(tile)
+    if stripe_color is not None:
+        draw.rectangle([0, 0, min(STRIPE_W, box_w) - 1, box_h - 1], fill=stripe_color[::-1])
+    draw.text((PAD_X - left, PAD_Y - top), text, font=font, fill=text_color[::-1])
     frame[y:y + box_h, x:x + box_w] = np.asarray(tile)[:, :, ::-1]

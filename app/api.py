@@ -1094,6 +1094,25 @@ async def v1_ack_event(event_id: str, body: AckInput):
     return events.ack(event_id, body.acked_by, body.note)
 
 
+# Clip được chốt ở một task nền CHỜ ĐỦ CLIP_POST_S giây sau sự kiện mới dựng
+# (xem VideoProcessor._schedule_event_clip) để có cả khung SAU thời điểm vi
+# phạm, không chỉ trước. Sự kiện mới hơn khoảng này mà vẫn chưa có clip thì coi
+# là "đang dựng" (pending), KHÔNG phải mất hẳn — cho FE tự thử lại.
+EVENT_CLIP_PENDING_S = float(os.environ.get("EVENT_CLIP_PENDING_S", "15"))
+
+
+def _event_clip_pending(event: dict) -> bool:
+    """Sự kiện còn mới (trong khoảng ``EVENT_CLIP_PENDING_S``) nên clip của nó
+    có thể vẫn đang được dựng ở task nền, chưa hẳn là không có clip."""
+    try:
+        occurred = datetime.fromisoformat(event["occurred_at"])
+    except (KeyError, ValueError, TypeError):
+        return False
+    now_aware = datetime.now(occurred.tzinfo) if occurred.tzinfo else clock.now()
+    age = (now_aware - occurred).total_seconds()
+    return 0 <= age < EVENT_CLIP_PENDING_S
+
+
 @app.get("/api/v1/events/{event_id}/clip")
 async def v1_event_clip(event_id: str, download: int = 0):
     """Đoạn video ~10 giây quanh thời điểm sự kiện.
@@ -1110,6 +1129,11 @@ async def v1_event_clip(event_id: str, download: int = 0):
         clip_id = (event or {}).get("clip_id")
         frames = latest_event_clips.get(clip_id) if clip_id else None
         if not frames or not events.save_clip(event_id, list(frames)):
+            # Chỉ "pending" khi sự kiện CÓ gắn clip_id (nghĩa là có lên lịch dựng
+            # clip) mà chưa kịp xong — sự kiện vốn không có clip_id (không định
+            # kèm clip) thì báo thiếu hẳn (404) ngay, không bắt FE chờ vô ích.
+            if clip_id and event is not None and _event_clip_pending(event):
+                return JSONResponse(status_code=202, content={"status": "pending"})
             raise HTTPException(status_code=404, detail="Sự kiện không có đoạn ghi kèm")
 
     return FileResponse(clip_file, media_type="video/mp4",

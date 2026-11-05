@@ -1,5 +1,6 @@
 """Roll-call session logic: điểm danh N phút đầu giờ và N phút cuối giờ học."""
 
+import os
 from datetime import date as date_cls, datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -8,11 +9,18 @@ import cv2
 
 from app import clock
 from app.events import TYPE_EARLY_LEAVE, TYPE_LATE
+from app.overlay import draw_label
 from app.presence import MIN_PRESENCE_SPAN_S, PresenceTracker, VIOLATION_EARLY_LEAVE
 from app.storage import read_json_list, write_json_list
 
 
 DEFAULT_WINDOW_MINS = 5
+# Ảnh bằng chứng chỉ được lấy từ khung hình trong ``ATTENDANCE_EVIDENCE_TAIL_S``
+# giây CUỐI của cửa sổ điểm danh (dù điểm danh vẫn cộng dồn nhận diện suốt cả
+# cửa sổ) — tester phản hồi ảnh chụp giữa cửa sổ dễ chụp thiếu người tới muộn.
+# Không có khung nào trong đoạn cuối này (vd. camera rớt đúng lúc) thì rơi về
+# khung tốt nhất trong toàn cửa sổ, còn hơn không có bằng chứng.
+ATTENDANCE_EVIDENCE_TAIL_S = float(os.environ.get("ATTENDANCE_EVIDENCE_TAIL_S", "30"))
 # Ca chưa gán camera thì thuộc về camera mặc định
 DEFAULT_CAMERA_ID = "cam_01"
 # Số lượt quét tối thiểu để coi là có mặt (chống nhận nhầm 1 frame)
@@ -281,9 +289,15 @@ class AttendanceSession:
         # tự khung hình để lọc nhận nhầm dồn dập, không chỉ đếm số lượt quét thô
         self.sightings: Dict[str, dict] = {}
         self.scans = 0
-        # Khung hình có nhiều quân nhân được định danh nhất, dùng làm bằng chứng
+        # Khung hình có nhiều quân nhân được định danh nhất TRONG TOÀN CỬA SỔ —
+        # dùng làm bằng chứng DỰ PHÒNG khi không có khung nào ở đoạn cuối cửa sổ
+        # (xem ``tail_evidence_frame`` + ``final_evidence_frame``).
         self.evidence_frame = None
         self.evidence_quality = -1
+        # Khung tốt nhất CHỈ TÍNH trong ATTENDANCE_EVIDENCE_TAIL_S giây cuối cửa
+        # sổ — ảnh bằng chứng ưu tiên lấy từ đây, phản ánh đúng sĩ số lúc chốt.
+        self.tail_evidence_frame = None
+        self.tail_evidence_quality = -1
 
     @property
     def key(self) -> str:
@@ -320,6 +334,22 @@ class AttendanceSession:
         if frame is not None and quality > self.evidence_quality:
             self.evidence_quality = quality
             self.evidence_frame = frame.copy()
+
+        if frame is not None:
+            # Không có 'now' (hành vi cũ, xem docstring) -> không phân biệt được
+            # đoạn cuối cửa sổ, coi mọi khung đều "ở cuối" để giữ nguyên hành vi
+            # trước đây (ảnh bằng chứng = khung tốt nhất, bất kể lúc nào).
+            in_tail = now is None or now >= self.ends_at - timedelta(seconds=ATTENDANCE_EVIDENCE_TAIL_S)
+            if in_tail and quality > self.tail_evidence_quality:
+                self.tail_evidence_quality = quality
+                self.tail_evidence_frame = frame.copy()
+
+    @property
+    def final_evidence_frame(self):
+        """Khung dùng làm bằng chứng thật: ưu tiên khung tốt nhất ở ĐOẠN CUỐI
+        cửa sổ; không có (camera rớt đúng lúc cuối) thì rơi về khung tốt nhất
+        trong toàn cửa sổ."""
+        return self.tail_evidence_frame if self.tail_evidence_frame is not None else self.evidence_frame
 
     def remaining_seconds(self, now: datetime) -> float:
         return max(0.0, (self.ends_at - now).total_seconds())
@@ -441,17 +471,27 @@ class AttendanceManager:
                 keys.add(f"{sch_id}:{day}:{PHASE_START}")
         return keys
 
-    def _save_evidence(self, frame, log_id: str, phase: str) -> Optional[str]:
-        """Lưu khung hình bằng chứng, trả về đường dẫn phục vụ cho web."""
+    def _save_evidence(self, frame, log_id: str, phase: str) -> Tuple[Optional[str], Optional[str]]:
+        """Đóng dấu thời gian chụp rồi lưu khung hình bằng chứng.
+
+        Trả về ``(đường dẫn phục vụ cho web, giờ chụp dạng ISO)`` — giờ chụp lấy
+        tại THỜI ĐIỂM GHI, không phải lúc khung hình được thu thập trong cửa sổ,
+        vì bản thân khung đã có HUD/giờ của chính nó vẽ sẵn lúc xử lý; dấu thêm
+        ở đây để chỉ huy biết rõ ảnh được CHỐT lúc nào.
+        """
         if frame is None:
-            return None
+            return None, None
+        captured_at = clock.now()
+        stamped = frame.copy()
+        draw_label(stamped, f"Chụp lúc {captured_at.strftime('%H:%M:%S %d/%m/%Y')}",
+                   (12, stamped.shape[0] - 10), font_size=16, anchor="bottom")
         filename = f"{log_id}_{phase}.jpg"
         try:
-            cv2.imwrite(str(self.evidence_dir / filename), frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            cv2.imwrite(str(self.evidence_dir / filename), stamped, [cv2.IMWRITE_JPEG_QUALITY, 85])
         except Exception as e:
             print(f"[Attendance] Lỗi lưu ảnh bằng chứng: {e}")
-            return None
-        return f"/data/attendance_evidence/{filename}"
+            return None, None
+        return f"/data/attendance_evidence/{filename}", clock.iso(captured_at)
 
     def _summarize(self, log: dict) -> dict:
         return summarize_log(log)
@@ -491,7 +531,10 @@ class AttendanceManager:
         target.setdefault("checks", {})
         target.setdefault("date_iso", date_iso)
         target["required"] = session.required_count()
-        check["evidence"] = self._save_evidence(session.evidence_frame, target["id"], session.phase)
+        evidence_url, evidence_captured_at = self._save_evidence(
+            session.final_evidence_frame, target["id"], session.phase)
+        check["evidence"] = evidence_url
+        check["evidence_captured_at"] = evidence_captured_at
         target["checks"][session.phase] = check
         self._summarize(target)
         self._attach_attendance_table(target, session, closed_at)

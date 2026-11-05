@@ -170,10 +170,11 @@ check("vi phạm gắn đúng vùng", v[0]["zone"]["id"] == "z_cam")
 
 v = det.check([outside, inside], [1, 2], W, H, now + timedelta(seconds=3))
 check("vẫn đứng trong vùng, track đã xác nhận -> không bắn lặp lại mỗi khung",
-      v == [], str(v))
+      len(v) == 1 and v[0]["indices"] == [], str(v))
+check("nhưng vẫn báo đang 'ở trong' để vẽ/khoanh đỏ liên tục", v[0]["inside"] == [1], str(v))
 
 v = det.check([outside], [1], W, H, now + timedelta(seconds=4))
-check("rời khỏi vùng cấm -> không còn vi phạm", v == [])
+check("rời khỏi vùng cấm -> không còn vi phạm, không còn 'inside'", v == [])
 
 # vạch an toàn
 (tmp / "zone_rules.json").write_text(json.dumps({

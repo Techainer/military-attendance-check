@@ -1,5 +1,6 @@
 """Person detection module using YOLO v8/v11 with multi-object tracking."""
 
+import os
 import time
 from pathlib import Path
 from typing import Tuple
@@ -9,6 +10,13 @@ import yaml
 from ultralytics import YOLO
 
 from app import hw
+
+# Ngưỡng NMS (Non-Max Suppression) của chính YOLO: hai box cùng che một người
+# (model đôi khi tách một người thành 2 box sát nhau, đặc biệt lúc nửa người bị
+# che) chồng lấn trên ngưỡng này thì MỘT trong hai bị loại trước khi ra tới
+# bước tracking — khác với HOLD_DUPLICATE_IOU bên dưới (lọc box "ma" giữ qua
+# khung bị che).
+YOLO_NMS_IOU = float(os.environ.get("YOLO_NMS_IOU", "0.5"))
 
 
 def _iou(a, b) -> float:
@@ -44,10 +52,19 @@ class PersonDetector:
 
     # Track phải xuất hiện đủ số lượt này mới được giữ lại khi bị che
     MIN_HITS_TO_HOLD = 3
-    # Giữ lại track bị che tối đa bao nhiêu giây
-    OCCLUSION_GRACE_SECONDS = 5.0
-    # Box giữ lại trùng với box đang thấy quá mức này thì bỏ, tránh đếm đôi
+    # Giữ lại track bị che tối đa bao nhiêu giây. Hạ từ 5.0 xuống 3.0: 5s cũ giữ
+    # "ma" quá lâu khi người di chuyển qua chỗ che rồi tracker gán lại id mới —
+    # ma cũ đứng yên + người thật đang đi tạo cảm giác "nhân bản" trên màn hình.
+    OCCLUSION_GRACE_SECONDS = float(os.environ.get("OCCLUSION_GRACE_SECONDS", "3.0"))
+    # Box giữ lại ("ma") trùng với box đang thấy quá mức này thì bỏ, tránh đếm đôi
     HOLD_DUPLICATE_IOU = 0.45
+    # Ngưỡng IoU thấp hơn: người di chuyển nên box mới có thể lệch khỏi box "ma"
+    # khá nhiều mà vẫn là CÙNG một người (không đủ để qua HOLD_DUPLICATE_IOU) —
+    # chỉ cần chồng lấn một phần đáng kể cũng đủ để bỏ "ma", tránh vẽ nhân bản.
+    HOLD_DUPLICATE_IOU_LOOSE = 0.2
+    # Hoặc tâm box mới gần tâm "ma" trong phạm vi này (tỉ lệ theo chiều rộng box
+    # "ma") thì cũng coi là cùng một người đang di chuyển qua, dù IoU thấp.
+    HOLD_DUPLICATE_CENTER_FRAC = 0.75
     # Track biến mất sát mép khung hình là người đi ra ngoài, không phải bị che
     BORDER_MARGIN_PX = 24
 
@@ -156,6 +173,28 @@ class PersonDetector:
         m = self.BORDER_MARGIN_PX
         return x1 <= m or y1 <= m or x2 >= w - m or y2 >= h - m
 
+    def _is_duplicate_of_live(self, ghost_box, boxes) -> bool:
+        """Box "ma" (giữ lại qua khung bị che) có trùng một box ĐANG THẤY THẬT
+        không — chồng lấn rõ (IoU cao) hoặc chỉ chồng lấn một phần nhưng tâm hai
+        box đủ gần thì đều coi là CÙNG một người, phải bỏ "ma" đi. Không chỉ xét
+        IoU cao (``HOLD_DUPLICATE_IOU``) như trước: người đang DI CHUYỂN qua chỗ
+        che, lúc tracker gán lại id mới, box mới có thể lệch khá xa box "ma" dù
+        vẫn là cùng một người — không bắt được trường hợp này thì "ma" đứng yên
+        + người thật đang đi tạo cảm giác nhân bản trên màn hình.
+        """
+        gx1, gy1, gx2, gy2 = ghost_box
+        ghost_w = max(1.0, gx2 - gx1)
+        gcx, gcy = (gx1 + gx2) / 2.0, (gy1 + gy2) / 2.0
+        for b in boxes:
+            if _iou(ghost_box, b) >= self.HOLD_DUPLICATE_IOU_LOOSE:
+                return True
+            bx1, by1, bx2, by2 = b
+            bcx, bcy = (bx1 + bx2) / 2.0, (by1 + by2) / 2.0
+            center_dist = ((bcx - gcx) ** 2 + (bcy - gcy) ** 2) ** 0.5
+            if center_dist < self.HOLD_DUPLICATE_CENTER_FRAC * ghost_w:
+                return True
+        return False
+
     def detect_persons(self, frame: np.ndarray, offset: Tuple[int, int] = (0, 0)) -> dict:
         """
         Detect and track persons in a video frame.
@@ -177,6 +216,7 @@ class PersonDetector:
             frame,
             classes=[self.person_class_id],
             conf=self.conf,
+            iou=YOLO_NMS_IOU,
             imgsz=self.imgsz,
             tracker=self._tracker_cfg_path,
             persist=True,
@@ -231,7 +271,7 @@ class PersonDetector:
                 # Đi ra khỏi khung hình chứ không phải bị vật che
                 del self._tracks[tid]
                 continue
-            if any(_iou(entry["box"], b) >= self.HOLD_DUPLICATE_IOU for b in boxes):
+            if self._is_duplicate_of_live(entry["box"], boxes):
                 continue
             boxes.append(entry["box"])
             confidences.append(entry["conf"])

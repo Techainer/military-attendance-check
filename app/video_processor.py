@@ -29,7 +29,7 @@ from collections import deque
 from typing import Optional, List, Dict, Tuple
 
 from app import clock
-from app.detector import PersonDetector
+from app.detector import PersonDetector, _iou
 from app.overlay import draw_label
 from app.monitor import AttendanceMonitor
 from app.face_engine import FaceEngine
@@ -61,7 +61,15 @@ _camera_state: Dict[str, dict] = {}
 
 # Giữ khoảng bấy nhiêu giây khung hình cho đoạn phát lại, theo đúng nhịp publish
 # thực tế (trước đây cố định 60 khung ở 5fps ~ 12s; giờ fps publish có thể khác).
+# Phải đủ PRE + POST + biên an toàn (xem CLIP_PRE_S/CLIP_POST_S dưới) để lúc chốt
+# clip không bị thiếu khung ở một trong hai đầu.
 CLIP_BUFFER_SECONDS = 12
+
+# Clip sự kiện lấy CLIP_PRE_S giây TRƯỚC + CLIP_POST_S giây SAU thời điểm vi
+# phạm (t0) — trước đây chỉ chốt đệm trước (snapshot ngay lúc phát hiện) nên
+# không bao giờ thấy được diễn biến SAU lúc báo động.
+CLIP_PRE_S = float(os.environ.get("CLIP_PRE_S", "5"))
+CLIP_POST_S = float(os.environ.get("CLIP_POST_S", "5"))
 
 # Mỗi đoạn clip giữ vài chục khung JPEG độ phân giải luồng (vài trăm KB), nên chỉ
 # giữ lại bấy nhiêu đoạn gần nhất; luồng chạy cả ngày mà không dọn thì bộ nhớ
@@ -202,13 +210,24 @@ def push_clip_frame(camera_id: str, frame, ts: Optional[float] = None) -> None:
     _state(camera_id)["clips"].append((frame, ts if ts is not None else time.monotonic()))
 
 
-def keep_clip(camera_id: str, clip_id: str) -> str:
-    """Chốt lại đoạn đệm hiện tại của camera và dọn bớt các đoạn cũ.
+def keep_clip(camera_id: str, clip_id: str, t0_mono: Optional[float] = None) -> str:
+    """Chốt lại đoạn đệm của camera thành ``clip_id`` và dọn bớt các đoạn cũ.
 
-    Bộ đệm theo camera giữ (khung, thời điểm) để biết đúng nhịp khung hình; đoạn
-    đã chốt chỉ cần nội dung khung, bỏ thời điểm cho nhẹ.
+    ``t0_mono`` (tuỳ chọn): mốc monotonic của sự kiện — có thì CHỈ lấy khung có
+    ``ts`` trong khoảng ``[t0-CLIP_PRE_S, t0+CLIP_POST_S]`` (clip CÓ CẢ trước và
+    sau thời điểm vi phạm). Không truyền thì lấy TOÀN BỘ đệm hiện có, như hành
+    vi cũ — dùng khi clip không gắn với một mốc cụ thể (ví dụ test gọi trực
+    tiếp). Gọi hàm này SỚM (ngay lúc phát hiện) thì chỉ có nửa TRƯỚC vì nửa SAU
+    chưa kịp ghi; vòng AI giờ gọi qua ``VideoProcessor._schedule_event_clip``,
+    đợi đủ ``CLIP_POST_S`` giây rồi mới gọi vào đây.
     """
-    latest_event_clips[clip_id] = [frame for frame, _ts in _state(camera_id)["clips"]]
+    clips = _state(camera_id)["clips"]
+    if t0_mono is None:
+        frames = [frame for frame, _ts in clips]
+    else:
+        lo, hi = t0_mono - CLIP_PRE_S, t0_mono + CLIP_POST_S
+        frames = [frame for frame, ts in clips if lo <= ts <= hi]
+    latest_event_clips[clip_id] = frames
     for stale in list(latest_event_clips)[:-MAX_STORED_CLIPS]:
         del latest_event_clips[stale]
     return clip_id
@@ -687,6 +706,33 @@ def compute_roi(
     return x1, y1, x2, y2
 
 
+def _dedupe_zone_count(in_zone_indices, track_ids, occluded_flags, person_boxes) -> int:
+    """Sĩ số trong vùng, đếm theo TRACK DUY NHẤT: track vẫn còn đó nhưng xuất
+    hiện 2 box (vd. box "ma" giữ qua che khuất của chính track đó, hoặc tracker
+    gán lại id mới cho người đang di chuyển qua chỗ che) không được đếm đôi. Box
+    chưa có track id thật (id âm, tracker chưa gán kịp) thì không có gì để gộp
+    -> đếm riêng từng cái như hành vi cũ.
+    """
+    seen_tids = set()
+    count = 0
+    for p_idx in in_zone_indices:
+        tid = track_ids[p_idx] if p_idx < len(track_ids) else None
+        if tid is None or tid < 0:
+            count += 1
+            continue
+        if occluded_flags[p_idx] and any(
+            j != p_idx and j in in_zone_indices and not occluded_flags[j]
+            and _iou(person_boxes[p_idx], person_boxes[j]) > 0
+            for j in in_zone_indices
+        ):
+            continue  # box "ma" đè lên box đang thấy thật -> không đếm đôi
+        if tid in seen_tids:
+            continue
+        seen_tids.add(tid)
+        count += 1
+    return count
+
+
 def _attendance_polygon_points(zones_cfg, w_img: int, h_img: int):
     """Polygon đếm quân số: dùng để LỌC người trong vùng và để VẼ, cùng một
     nguồn để hai việc không bao giờ lệch nhau.
@@ -745,7 +791,7 @@ def draw_overlay(frame, result: Optional[dict]):
         elif rule == RULE_RESTRICTED:
             draw_label(frame, f"VÙNG CẤM · {zone.get('name', '')}",
                        (int(pts[:, 0].mean()), int(pts[:, 1].min())), font_size=14,
-                       bg_color=(0, 40, 160), anchor="bottom")
+                       stripe_color=(0, 40, 160), anchor="bottom")
 
     if np_pts is None:
         np_pts, _ = _attendance_polygon_points(zones_cfg, w_img, h_img)
@@ -761,8 +807,12 @@ def draw_overlay(frame, result: Optional[dict]):
         if track["intrusion"]:
             # VI PHẠM AN TOÀN: khoanh đỏ đậm, ưu tiên hơn mọi trạng thái khác
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
-            draw_label(frame, "VI PHẠM AN TOÀN", (x1, y1), font_size=15,
-                       bg_color=(0, 0, 200), anchor="bottom")
+            vio_label = "VI PHẠM AN TOÀN"
+            if identity is not None:
+                who = f"{identity.get('rank', '')} {identity.get('name', '')}".strip()
+                vio_label = f"VI PHẠM: {who}" if who else vio_label
+            draw_label(frame, vio_label, (x1, y1), font_size=15,
+                       stripe_color=(0, 0, 200), anchor="bottom")
         elif is_in_zone:
             if identity is not None:
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 120), 2)
@@ -770,19 +820,19 @@ def draw_overlay(frame, result: Optional[dict]):
                 name_str = identity.get('name', '')
                 mid_str = identity.get('military_id', '')
                 id_label = f"[{rank_str}] {name_str} ({mid_str})" if rank_str else f"{name_str} ({mid_str})"
-                draw_label(frame, id_label, (x1, y1), font_size=15, bg_color=(0, 180, 70), anchor="bottom")
+                draw_label(frame, id_label, (x1, y1), font_size=15, stripe_color=(0, 180, 70), anchor="bottom")
             elif is_occluded:
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 190, 230), 1)
                 draw_label(frame, "Bị che khuất", (x1, y1), font_size=14,
-                           bg_color=(0, 120, 150), anchor="bottom")
+                           stripe_color=(0, 120, 150), anchor="bottom")
             else:
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (20, 220, 80), 2)
                 draw_label(frame, f"Trong vùng {int(conf * 100)}%", (x1, y1), font_size=14,
-                           bg_color=(10, 140, 50), anchor="bottom")
+                           stripe_color=(10, 140, 50), anchor="bottom")
         else:
             cv2.rectangle(frame, (x1, y1), (x2, y2), (120, 130, 140), 1)
             draw_label(frame, "Ngoài vùng", (x1, y1), font_size=13,
-                       text_color=(200, 205, 215), bg_color=(60, 65, 75), anchor="bottom")
+                       stripe_color=(60, 65, 75), anchor="bottom")
 
     for fbox in result.get("matched_face_boxes", []):
         fx1, fy1, fx2, fy2 = fbox
@@ -968,6 +1018,26 @@ class VideoProcessor:
 
         return matched_boxes
 
+    def _schedule_event_clip(self, clip_id: str, t0_mono: float, event: Optional[dict]) -> None:
+        """Lên lịch chốt clip 10s (``CLIP_PRE_S`` trước + ``CLIP_POST_S`` sau) cho
+        một sự kiện, không chặn vòng AI: phải CHỜ ĐỦ ``CLIP_POST_S`` giây mới có
+        khung ở nửa SAU thời điểm vi phạm, nên việc chốt (``keep_clip``) + lưu
+        ra file (``_archive_clip_bg``, chỉ khi có ``event``) chạy ở một task nền.
+        """
+        task = asyncio.create_task(self._finalize_event_clip_safe(clip_id, t0_mono, event))
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+
+    async def _finalize_event_clip_safe(self, clip_id: str, t0_mono: float,
+                                        event: Optional[dict]) -> None:
+        try:
+            await asyncio.sleep(CLIP_POST_S)
+            keep_clip(self.camera_id, clip_id, t0_mono)
+            if event is not None:
+                self._archive_clip_bg(event, clip_id)
+        except Exception as e:
+            print(f"[Camera] Lỗi chốt clip sự kiện {clip_id}: {e}")
+
     async def _archive_clip(self, event: dict, clip_id: Optional[str]) -> None:
         """Ghi đoạn phát lại của sự kiện ra file mp4.
 
@@ -1121,6 +1191,9 @@ class VideoProcessor:
             identity = t.get("identity")
             if t["intrusion"]:
                 color, label = "#ff2d2d", "VI PHẠM AN TOÀN"
+                if identity:
+                    who = f"{identity.get('rank', '')} {identity.get('name', '')}".strip()
+                    label = f"VI PHẠM: {who}" if who else label
             elif t["in_zone"] and identity:
                 color = "#00ff78"
                 label = f"{identity.get('rank', '')} {identity.get('name', '')}".strip()
@@ -1309,8 +1382,9 @@ class VideoProcessor:
                     if in_feet or in_center:
                         in_zone_indices.add(p_idx)
 
-                # Sĩ số trong vùng = chỉ những người NẰM TRONG vùng đã cấu hình
-                person_count = len(in_zone_indices)
+                # Sĩ số trong vùng = những người NẰM TRONG vùng đã cấu hình, đếm
+                # theo TRACK DUY NHẤT (xem ``_dedupe_zone_count``).
+                person_count = _dedupe_zone_count(in_zone_indices, track_ids, occluded_flags, person_boxes)
 
                 # 3. Giám sát an toàn: ai vào vùng cấm hoặc vượt vạch an toàn
                 # (``now`` đã lấy sớm hơn ở bước quyết định nhịp AI, dùng lại để
@@ -1318,25 +1392,34 @@ class VideoProcessor:
                 intrusions = self.intrusion.check(person_boxes, track_ids, w_img, h_img, now,
                                                   occluded=occluded_flags,
                                                   confidences=confidences)
-                intrusion_indices = {idx for v in intrusions for idx in v["indices"]}
+                # intrusion_indices dùng để VẼ (khoanh đỏ liên tục) và cho SSE: phải
+                # là TẤT CẢ người đang ở trong vùng cấm ("inside"), không chỉ người
+                # vừa xác nhận ("indices" — chỉ có ở khung VỪA chuyển trạng thái).
+                intrusion_indices = {idx for v in intrusions for idx in v.get("inside") or []}
+                intrusion_indices |= {idx for v in intrusions for idx in v["indices"]}
 
-                # 4. Gắn khuôn mặt đã quét được vào người trong vùng
+                # 4. Gắn khuôn mặt đã quét được vào người trong vùng điểm danh HOẶC
+                # đang vi phạm vùng cấm (violator cần định danh cho sự kiện, dù có
+                # thể đứng ngoài vùng điểm danh) — không dùng để tính sĩ số/có mặt,
+                # chỉ để tìm tên; present_personnel dưới đây lọc lại đúng trong vùng.
+                priority_indices = in_zone_indices | intrusion_indices
                 now_mono = time.monotonic()
                 claimed_boxes = set()
                 assignments: Dict[int, dict] = {}
                 matched_face_boxes = self._assign_faces(
-                    recognized_faces, person_boxes, in_zone_indices, claimed_boxes, assignments
+                    recognized_faces, person_boxes, priority_indices, claimed_boxes, assignments
                 )
 
-                # 4b. Người trong vùng còn lại: cắt riêng vùng ảnh rồi quét lại.
-                regions = self._rescan_regions(person_boxes, in_zone_indices, claimed_boxes, frame.shape,
+                # 4b. Người còn lại (vùng điểm danh + vùng cấm): cắt riêng vùng ảnh
+                # rồi quét lại.
+                regions = self._rescan_regions(person_boxes, priority_indices, claimed_boxes, frame.shape,
                                                track_ids, time.monotonic())
                 if regions:
                     rescanned = await asyncio.to_thread(
                         self.face_engine.recognize_in_regions, frame, regions
                     )
                     matched_face_boxes += self._assign_faces(
-                        rescanned, person_boxes, in_zone_indices, claimed_boxes, assignments
+                        rescanned, person_boxes, priority_indices, claimed_boxes, assignments
                     )
 
                 # 4c. Khoá danh tính vào track: một quân nhân đã nhận ra được thì vẫn
@@ -1348,7 +1431,7 @@ class VideoProcessor:
                 person_to_face_match = {p_idx: info["person"] for p_idx, info in assignments.items()}
                 claimed_person_ids = {info["person"]["id"] for info in assignments.values()}
 
-                for p_idx in in_zone_indices:
+                for p_idx in priority_indices:
                     if p_idx in person_to_face_match:
                         continue
                     remembered = self._recall_identity(track_ids[p_idx], now_mono)
@@ -1359,9 +1442,15 @@ class VideoProcessor:
 
                 self._prune_identities(now_mono)
 
+                # present_personnel (sĩ số đã định danh) chỉ tính người THẬT SỰ
+                # trong vùng điểm danh — person_to_face_match có thể còn chứa cả
+                # người đang vi phạm vùng cấm (ngoài vùng điểm danh), không được
+                # tính vào đây.
                 present_personnel = []
                 seen_ids = set()
                 for p_idx in sorted(person_to_face_match):
+                    if p_idx not in in_zone_indices:
+                        continue
                     p_info = person_to_face_match[p_idx]
                     if p_info["id"] in seen_ids:
                         continue
@@ -1438,33 +1527,59 @@ class VideoProcessor:
                 # Vi phạm an toàn được chốt sau khi đã có khung bằng chứng, để
                 # ảnh nhìn thấy đúng đối tượng bị phát hiện.
                 for violation in intrusions:
+                    # "indices" rỗng = khung này không có track nào MỚI xác nhận
+                    # (vùng cấm: đang chờ bị khoảng đệm chặn, hoặc chỉ là track cũ
+                    # vẫn đứng trong "inside"; vạch an toàn: không có gì cắt qua) ->
+                    # không bắn sự kiện, tránh báo lại mỗi khung cho người đã báo rồi.
+                    if not violation["indices"]:
+                        continue
                     if self.events is None:
                         break
                     zone = violation["zone"]
+                    is_crossing = zone.get("rule") == RULE_CROSSING
+                    # Vùng cấm: báo TẤT CẢ người hiện đang ở trong vùng ("inside"),
+                    # không chỉ người vừa xác nhận — chỉ huy cần thấy đủ ai đang ở
+                    # trong đó. Vạch an toàn không có khái niệm "đang ở trong" nên
+                    # vẫn dùng đúng người vừa cắt qua như cũ.
+                    report_indices = violation["indices"] if is_crossing else \
+                        (violation.get("inside") or violation["indices"])
+
                     identified = []
                     boxes = []
-                    for idx in violation["indices"]:
+                    names = []
+                    for idx in report_indices:
                         person = person_to_face_match.get(idx)
                         if person is None:
                             boxes.append(normalize_box(person_boxes[idx], w_img, h_img,
                                                        confidences[idx], "Không xác định"))
+                            names.append("Không xác định")
                             continue
                         name = f"{person.get('rank', '')} {person.get('name', '')}".strip()
                         identified.append({"person_id": person.get("id"), "person_name": name})
                         boxes.append(normalize_box(person_boxes[idx], w_img, h_img,
                                                    confidences[idx], name))
-                    # Giữ lại đoạn đệm dẫn tới lúc vi phạm để chỉ huy xem lại
-                    clip_id = keep_clip(self.camera_id,
-                                        f"clip_{int(time.time())}_{zone.get('id', 'zone')}")
+                        names.append(name)
+
+                    if is_crossing:
+                        message = (f"Phát hiện {len(boxes):02d} đối tượng vượt "
+                                   f"{zone.get('name', 'vùng cấm')}.")
+                    else:
+                        message = (f"{len(boxes)} người vào vùng cấm {zone.get('name', 'vùng cấm')}: "
+                                   + ", ".join(names))
+                    first_identified = identified[0] if identified else None
+
+                    # Clip 10s (5s trước + 5s sau) quanh thời điểm vi phạm: chỉ ghi
+                    # lại t0 ở đây, phần dựng thật chạy nền sau (xem _schedule_event_clip)
+                    # vì nửa SAU của clip cần chờ vài giây mới có khung.
+                    clip_id = f"clip_{int(time.time())}_{zone.get('id', 'zone')}"
+                    t0_mono = time.monotonic()
 
                     # Đẩy cảnh báo đi trước rồi mới ghi ảnh/clip: cảnh báo đỏ phải
                     # hiện ngay, đừng đợi ghi đĩa xong. emit_async ghi ảnh + JSON ở
                     # luồng khác, chỉ phần đẩy SSE chạy ngay trên vòng lặp này.
                     event = await self.events.emit_async(
                         TYPE_INTRUSION,
-                        f"Phát hiện {len(boxes):02d} đối tượng "
-                        f"{'vượt' if zone.get('rule') == RULE_CROSSING else 'đi vào'} "
-                        f"{zone.get('name', 'vùng cấm')}.",
+                        message,
                         severity="critical",
                         frame=display_frame,
                         boxes=boxes,
@@ -1472,6 +1587,8 @@ class VideoProcessor:
                         camera_name=self.camera_name,
                         zone_id=zone.get("id"),
                         clip_id=clip_id,
+                        person_id=(first_identified or {}).get("person_id"),
+                        person_name=(first_identified or {}).get("person_name"),
                         detail={
                             "zone_name": zone.get("name", ""),
                             "zone_rule": zone.get("rule"),
@@ -1482,7 +1599,7 @@ class VideoProcessor:
                         },
                     )
                     await on_update({"type": "event", "event": event})
-                    self._archive_clip_bg(event, clip_id)
+                    self._schedule_event_clip(clip_id, t0_mono, event)
 
                 # 6. Ghi nhận vào phiên điểm danh và chốt biên bản khi hết cửa sổ.
                 #    Khung hình dùng làm bằng chứng là khung đã vẽ đầy đủ HUD.
@@ -1529,9 +1646,11 @@ class VideoProcessor:
                 # để việc ghi đĩa không chặn vòng xử lý khung kế tiếp.
                 alert_result = await asyncio.to_thread(monitor.update_count, person_count, display_frame)
                 if alert_result['alert_triggered']:
-                    event_clip_id = keep_clip(self.camera_id, f"clip_{int(time.time())}")
+                    event_clip_id = f"clip_{int(time.time())}"
+                    t0_mono = time.monotonic()
                     alert_data = alert_result['alert_data']
 
+                    event = None
                     if self.events is not None:
                         baseline = alert_data.get('baseline') or 0
                         event = await self.events.emit_async(
@@ -1551,7 +1670,8 @@ class VideoProcessor:
                             },
                         )
                         await on_update({"type": "event", "event": event})
-                        self._archive_clip_bg(event, event_clip_id)
+
+                    self._schedule_event_clip(event_clip_id, t0_mono, event)
 
                     await on_update({
                         'type': 'alert',

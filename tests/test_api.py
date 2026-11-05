@@ -223,7 +223,15 @@ vp.keep_clip("cam_clip_hong", "clip_hong")
 broken = api.events.emit("INTRUSION", "Đoạn ghi hỏng.", severity="critical",
                          zone_id="z1", clip_id="clip_hong",
                          detail={"zone_name": "z", "object_count": 1})
-r = client.get(f"/api/v1/events/{broken['id']}/clip")
+# Sự kiện vừa tạo còn trong khoảng EVENT_CLIP_PENDING_S nên về lý thuyết có thể
+# đang "chờ dựng" (202) — ép khoảng chờ về 0 để khẳng định đúng ý: clip hỏng
+# (không decode được) phải báo lỗi hẳn, không phải chỉ "chưa xong".
+old_pending_s = api.EVENT_CLIP_PENDING_S
+api.EVENT_CLIP_PENDING_S = 0
+try:
+    r = client.get(f"/api/v1/events/{broken['id']}/clip")
+finally:
+    api.EVENT_CLIP_PENDING_S = old_pending_s
 check("đoạn ghi hỏng -> báo lỗi thay vì sập", r.status_code in (404, 500), str(r.status_code))
 
 print("\n[3] Kênh SSE")

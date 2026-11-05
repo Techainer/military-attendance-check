@@ -6,16 +6,17 @@ Chạy: uv run python tests/test_ai_quality.py
 """
 
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.detector import PersonDetector
+from app.detector import PersonDetector, YOLO_NMS_IOU
 from app.face_engine import FaceEngine
 from app.video_processor import (
-    MotionGate, VideoProcessor, compute_roi, _zones_signature,
+    MotionGate, VideoProcessor, compute_roi, _zones_signature, _dedupe_zone_count,
     IDENTITY_BIND_SCORE, IDENTITY_REVOKE_HITS,
 )
 
@@ -119,8 +120,10 @@ class _FakeResult:
 class _FakeYoloModel:
     def __init__(self, results):
         self._results = results
+        self.last_kwargs = None
 
     def track(self, frame, **kwargs):
+        self.last_kwargs = kwargs
         return self._results
 
 
@@ -150,6 +153,69 @@ det2 = _bare_detector(fake_results)
 out2 = det2.detect_persons(np.zeros((20, 20, 3), dtype=np.uint8))
 check("Không truyền offset (full-frame) -> box giữ nguyên toạ độ cục bộ",
       out2["boxes"] == [(5, 5, 15, 15)], str(out2["boxes"]))
+
+det_nms = _bare_detector(fake_results)
+det_nms.detect_persons(np.zeros((20, 20, 3), dtype=np.uint8))
+check("model.track() nhận đúng ngưỡng NMS từ YOLO_NMS_IOU (loại box đôi chồng lấn)",
+      det_nms.model.last_kwargs.get("iou") == YOLO_NMS_IOU, str(det_nms.model.last_kwargs))
+
+# --------------------------------------------- ghost (giữ qua che khuất) trùng box mới
+print("\n[2b] Box 'ma' (giữ qua che khuất) bị bỏ khi đè lên box MỚI đang di chuyển qua")
+
+
+def _detector_with_ghost(ghost_box, live_box, live_tid=20, frame_shape=(400, 400, 3)):
+    """Giả lập: track 10 đã đủ hits để được giữ làm 'ma' qua che khuất, rồi model
+    trả về đúng MỘT box MỚI (tid khác — tracker gán lại id cho người di chuyển
+    qua chỗ che) — kiểm có bỏ 'ma' đi (không đếm đôi) theo logic mới hay không."""
+    results = [_FakeResult(_FakeBoxes([_FakeBox(list(live_box), 0.9)], _IdsTensor([live_tid])))]
+    det = _bare_detector(results)
+    det._tracks = {10: {"box": tuple(ghost_box), "conf": 0.9, "hits": PersonDetector.MIN_HITS_TO_HOLD,
+                         "last_seen": time.monotonic()}}
+    return det.detect_persons(np.zeros(frame_shape, dtype=np.uint8))
+
+
+ghost = (150, 150, 250, 250)  # 100x100, tâm (200, 200)
+
+# IoU ~0.33 — dưới ngưỡng cũ (HOLD_DUPLICATE_IOU=0.45) nên TRƯỚC ĐÂY vẫn giữ "ma"
+# (đếm đôi cùng một người); ngưỡng mới (HOLD_DUPLICATE_IOU_LOOSE=0.2) phải bỏ.
+out_mid_iou = _detector_with_ghost(ghost, (200, 150, 300, 250))
+check("box mới đè IoU~0.33 (dưới ngưỡng cũ 0.45, trên ngưỡng mới 0.2) -> bỏ 'ma'",
+      10 not in out_mid_iou["track_ids"] and len(out_mid_iou["boxes"]) == 1, str(out_mid_iou))
+
+# IoU thấp (<0.2) nhưng tâm box mới còn gần tâm "ma" (< 0.75 * chiều rộng "ma")
+# -> người đang DI CHUYỂN qua, box lệch nhiều nhưng vẫn là cùng một người
+out_center_close = _detector_with_ghost(ghost, (203, 203, 303, 303))
+check("IoU thấp (0.12) nhưng tâm box mới còn gần tâm 'ma' -> vẫn bỏ 'ma' (người đang di chuyển)",
+      10 not in out_center_close["track_ids"] and len(out_center_close["boxes"]) == 1,
+      str(out_center_close))
+
+# Box mới ở xa hẳn (rõ ràng không phải cùng người) -> GIỮ "ma", không bỏ nhầm
+out_far = _detector_with_ghost(ghost, (900, 900, 980, 980), frame_shape=(1000, 1000, 3))
+check("box mới ở xa hẳn, không liên quan -> vẫn GIỮ 'ma', không bỏ nhầm sĩ số",
+      10 in out_far["track_ids"] and len(out_far["boxes"]) == 2, str(out_far))
+
+# ----------------------------------------- sĩ số trong vùng đếm theo track duy nhất
+print("\n[2c] person_count: không đếm đôi track trùng / 'ma' đè lên box đang thấy")
+
+zone_boxes = [
+    (0, 0, 100, 100),      # idx0: track 1, đang thấy thật
+    (10, 10, 110, 110),    # idx1: track 1 (TRÙNG track idx0 — box kép cùng track)
+    (500, 500, 600, 600),  # idx2: track 2, đang thấy thật
+    (505, 505, 605, 605),  # idx3: "ma" của track KHÁC (99), chồng lấn box idx2 -> không đếm đôi
+    (900, 0, 950, 50),     # idx4: "ma" của track 100, KHÔNG chồng ai đang thấy -> vẫn đếm
+]
+zone_tids = [1, 1, 2, 99, 100]
+zone_occluded = [False, False, False, True, True]
+zone_indices = {0, 1, 2, 3, 4}
+
+check("track 1 trùng (2 box CÙNG track) -> chỉ đếm 1; 'ma' track KHÁC đè lên box "
+      "đang thấy -> không đếm đôi; 'ma' không chồng ai -> vẫn đếm riêng (tổng 3)",
+      _dedupe_zone_count(zone_indices, zone_tids, zone_occluded, zone_boxes) == 3,
+      str(_dedupe_zone_count(zone_indices, zone_tids, zone_occluded, zone_boxes)))
+
+no_tid_boxes = [(0, 0, 10, 10), (0, 0, 10, 10)]
+check("box chưa có track id thật (id âm) -> đếm riêng từng cái, không gộp",
+      _dedupe_zone_count({0, 1}, [-1, -2], [False, False], no_tid_boxes) == 2)
 
 # ---------------------------------------------------------------- motion gate
 print("\n[3] MotionGate: tĩnh -> idle, vừa đổi hẳn khung -> có động")
