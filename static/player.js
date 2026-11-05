@@ -132,6 +132,17 @@ function attachMjpeg(imgEl, cameraId, overlayEnabled) {
 
 // ---------------------------------------------------------------- go2rtc
 
+// Tắt control/PiP/toàn-màn-hình gốc của <video> (xem ghi chú ở nơi gọi) — kèm
+// theo CSS (static/style.css, selector .ai-player-stream video) chặn thêm lần
+// hai, vì một số trình duyệt vẫn vẽ control khi hover dù controls đã false.
+function disableNativeVideoControls(videoEl) {
+    if (!videoEl) return;
+    videoEl.controls = false;
+    videoEl.removeAttribute('controls');
+    videoEl.disablePictureInPicture = true;
+    videoEl.setAttribute('controlslist', 'nofullscreen nodownload noremoteplayback');
+}
+
 function buildBadge() {
     const badge = document.createElement('span');
     badge.className = 'player-status-badge player-status-connecting';
@@ -167,8 +178,9 @@ function drawDetections(ctx, w, h, result, zonesMeta) {
     // Khung camera nhỏ (lưới nhiều camera) thì chữ nhỏ lại; nhãn dài cắt theo
     // bề ngang box; nhãn đè lên nhãn đã vẽ thì thử đặt trong box, vẫn đè thì bỏ
     // (box và màu vẫn còn, chỉ mất chữ) — tránh mớ chữ chồng nhau không đọc nổi
-    const fontPx = w < 520 ? 11 : 13;
+    const fontPx = w < 520 ? 11 : 12;
     const labelH = fontPx + 5;
+    const stripeW = 4; // vạch màu track bên trái nhãn, thay cho cả nền tô màu track
     const placed = [];
     const overlaps = (r) => placed.some((p) =>
         r.x < p.x + p.w && p.x < r.x + r.w && r.y < p.y + p.h && p.y < r.y + r.h);
@@ -190,19 +202,23 @@ function drawDetections(ctx, w, h, result, zonesMeta) {
             ctx.font = `${fontPx}px "Segoe UI", sans-serif`;
             ctx.textBaseline = 'alphabetic';
             const padding = 3;
-            const text = fitText(t.label, Math.max(bw, 70) - padding * 2);
+            // Trừ luôn phần vạch màu bên trái khỏi bề ngang còn lại cho chữ
+            const text = fitText(t.label, Math.max(bw, 70) - stripeW - padding * 2);
             const textW = ctx.measureText(text).width;
-            const above = { x: bx, y: by - labelH, w: textW + padding * 2, h: labelH };
+            const above = { x: bx, y: by - labelH, w: stripeW + textW + padding * 2, h: labelH };
             const inside = { x: bx, y: by, w: above.w, h: labelH };
             const r = !overlaps(above) && above.y >= 0 ? above : (!overlaps(inside) ? inside : null);
             if (!r) return;
             placed.push(r);
-            ctx.fillStyle = t.color || '#788692';
-            ctx.globalAlpha = 0.85;
+            // Nền chip tối đồng nhất (không nhuộm theo màu track) + chữ trắng —
+            // đạt tương phản ≥4.5:1 với mọi màu track, màu track chỉ còn ở vạch
+            // bên trái để vẫn phân biệt được track nào với track nào.
+            ctx.fillStyle = 'rgba(11, 18, 32, 0.9)';
             ctx.fillRect(r.x, r.y, r.w, r.h);
-            ctx.globalAlpha = 1;
-            ctx.fillStyle = '#0b1220';
-            ctx.fillText(text, r.x + padding, r.y + labelH - 5);
+            ctx.fillStyle = t.color || '#788692';
+            ctx.fillRect(r.x, r.y, stripeW, r.h);
+            ctx.fillStyle = '#fff';
+            ctx.fillText(text, r.x + stripeW + padding, r.y + labelH - 5);
         }
     });
 
@@ -350,6 +366,12 @@ async function startGo2rtc(imgEl, cameraId, overlayEnabled, variant, cfg) {
     const badge = buildBadge();
 
     container.insertBefore(video, container.firstChild);
+    // video-rtc.js (vendor, không sửa) tự bật controls=true khi dựng <video>
+    // trong oninit(); controls gốc của trình duyệt có nút/bấm-đúp vào toàn màn
+    // hình RIÊNG của mình, bỏ qua lớp phủ canvas AI — tắt ngay sau khi chèn để
+    // toàn màn hình luôn đi qua makeZoomable()/toggleFullscreen() của app.js,
+    // trên CONTAINER (video+canvas), không phải trên một mình thẻ <video>.
+    disableNativeVideoControls(video.video);
     container.insertBefore(canvas, video.nextSibling);
     container.insertBefore(badge, canvas.nextSibling);
 

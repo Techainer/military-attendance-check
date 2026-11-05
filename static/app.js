@@ -179,6 +179,7 @@ function switchNavTab(tabName) {
     }
 
     if (safetyPollTimer) { clearInterval(safetyPollTimer); safetyPollTimer = null; }
+    if (cameraWallPollTimer) { clearInterval(cameraWallPollTimer); cameraWallPollTimer = null; }
     currentSafetyType = null;
     currentTabName = tabName;
 
@@ -202,7 +203,11 @@ function switchNavTab(tabName) {
             loadCameras();
             break;
         case 'monitoring':
+            switchEventsFeedTab('live');
             loadCameraWall();
+            // Quét nhẹ trạng thái bật/tắt mỗi 15s — KHÔNG gắn lại luồng camera
+            // không đổi gì, xem pollCameraWallStatus()
+            cameraWallPollTimer = setInterval(pollCameraWallStatus, 15000);
             break;
     }
 }
@@ -412,8 +417,13 @@ function showClipMessage(text) {
     if (clipDownloadLink) clipDownloadLink.style.display = text ? 'none' : 'inline-flex';
 }
 
+// Tăng mỗi lần mở clip mới hoặc đóng modal — vòng chờ 202 cũ kiểm lại token
+// này trước khi đụng vào DOM, để không ghi đè lên clip khác đang mở sau nó.
+let _clipLoadToken = 0;
+
 function viewEventClip(eventId) {
     if (!clipModal || !clipPlayerVideo) return;
+    const token = ++_clipLoadToken;
     clipModal.style.display = 'flex';
     showClipMessage('Đang tải đoạn ghi…');
 
@@ -422,6 +432,7 @@ function viewEventClip(eventId) {
 
     clipPlayerVideo.onloadeddata = () => showClipMessage('');
     clipPlayerVideo.onerror = async () => {
+        if (token !== _clipLoadToken) return;
         // Thẻ <video> chỉ báo "hỏng", không nói vì sao. Hỏi lại máy chủ để nói
         // đúng lý do thay vì để người xem nhìn khung đen như trước.
         let reason = 'Không tải được đoạn ghi.';
@@ -434,12 +445,40 @@ function viewEventClip(eventId) {
         }
         showClipMessage(reason);
     };
-    clipPlayerVideo.src = url;
-    clipPlayerVideo.load();
+
+    // Clip được ghi ra ngay lúc sự kiện xảy ra nên vài giây đầu máy chủ có thể
+    // trả 202 {"status":"pending"} — kiểm trước bằng fetch() rồi mới gán vào
+    // <video>, không thì <video> nhận thẳng JSON 202 làm nội dung và báo lỗi.
+    // Thử lại mỗi 2s, tối đa 15s.
+    const deadline = Date.now() + 15000;
+    const tryLoad = async () => {
+        if (token !== _clipLoadToken) return; // đã mở clip khác hoặc đã đóng modal
+        try {
+            const res = await fetch(url);
+            if (token !== _clipLoadToken) return;
+            if (res.status === 202) {
+                if (Date.now() < deadline) {
+                    showClipMessage('Clip đang xử lý, thử lại sau vài giây');
+                    setTimeout(tryLoad, 2000);
+                } else {
+                    showClipMessage('Clip chưa sẵn sàng, vui lòng thử lại sau.');
+                }
+                return;
+            }
+            if (res.status === 404) { showClipMessage('Sự kiện này không còn đoạn ghi kèm.'); return; }
+            if (!res.ok) { showClipMessage(`Không tải được đoạn ghi (mã ${res.status}).`); return; }
+            clipPlayerVideo.src = url;
+            clipPlayerVideo.load();
+        } catch (e) {
+            showClipMessage(`Không tải được đoạn ghi: ${e.message}`);
+        }
+    };
+    tryLoad();
 }
 window.viewEventClip = viewEventClip;
 
 function closeClipModal() {
+    _clipLoadToken++; // huỷ mọi vòng chờ 202 còn đang chạy cho clip vừa đóng
     // Bỏ src để trình duyệt ngừng tải, không thì clip vẫn chạy ngầm sau khi đóng
     if (clipPlayerVideo) {
         clipPlayerVideo.pause();
@@ -702,6 +741,97 @@ function detachStream(imgEl) {
 // này không ảnh hưởng ô kia.
 
 let cameraWallData = [];
+// 2x2 cố định/trang (yêu cầu tester): camera thứ 5 trở đi xem ở trang khác,
+// không co giãn lưới theo tổng số camera như trước.
+const CAMWALL_PAGE_SIZE = 4;
+let camWallPage = 0;
+let cameraWallPollTimer = null;
+
+function cameraWallTotalPages() {
+    return Math.max(1, Math.ceil(cameraWallData.length / CAMWALL_PAGE_SIZE));
+}
+
+function cameraWallPageCams() {
+    const start = camWallPage * CAMWALL_PAGE_SIZE;
+    return cameraWallData.slice(start, start + CAMWALL_PAGE_SIZE);
+}
+
+function renderCameraWallPager() {
+    const pager = document.getElementById('camera-wall-pager');
+    if (!pager) return;
+    const totalPages = cameraWallTotalPages();
+    pager.style.display = cameraWallData.length > CAMWALL_PAGE_SIZE ? 'flex' : 'none';
+    const info = document.getElementById('camwall-page-info');
+    if (info) info.textContent = `Trang ${camWallPage + 1}/${totalPages}`;
+    const prev = document.getElementById('camwall-prev-btn');
+    const next = document.getElementById('camwall-next-btn');
+    if (prev) prev.disabled = camWallPage <= 0;
+    if (next) next.disabled = camWallPage >= totalPages - 1;
+}
+
+function goCameraWallPage(delta) {
+    const next = Math.min(cameraWallTotalPages() - 1, Math.max(0, camWallPage + delta));
+    if (next === camWallPage) return;
+    camWallPage = next;
+    loadCameraWall();
+}
+window.goCameraWallPage = goCameraWallPage;
+
+// Dựng/cập nhật một ô camera. forceSync=false (dùng ở nhịp quét 15s) thì CHỈ
+// chạm DOM/luồng khi trạng thái bật-tắt thật sự đổi — tránh giật hình/kết nối
+// lại vô ích mỗi 15s cho những camera không đổi gì. forceSync=true (nạp lần
+// đầu, đổi trang, bấm ▶/⏹) luôn đồng bộ lại toàn bộ.
+function syncCameraTile(wall, cam, forceSync) {
+    let tile = document.getElementById(`cam-tile-${cam.id}`);
+    const isNew = !tile;
+    if (isNew) {
+        tile = document.createElement('div');
+        tile.className = 'camera-tile';
+        tile.id = `cam-tile-${cam.id}`;
+        tile.innerHTML = `
+            <div class="camera-tile-head">
+                <span class="camera-tile-name"></span>
+                <span class="camera-tile-status"></span>
+            </div>
+            <div class="camera-tile-video">
+                <img id="cam-img-${cam.id}" alt="Luồng ${esc(cam.name)}">
+                <div class="camera-tile-idle">Chưa chạy</div>
+            </div>
+            <div class="camera-tile-foot">
+                <span class="camera-tile-area"></span>
+                <button class="btn-event-clip"></button>
+            </div>`;
+        wall.appendChild(tile);
+        makeZoomable(tile.querySelector('.camera-tile-video'));
+    }
+
+    const running = cam.status === 'online';
+    const btn = tile.querySelector('.camera-tile-foot button');
+    const statusChanged = isNew || forceSync || tile.dataset.running !== String(running);
+    if (!statusChanged) return tile;
+
+    tile.dataset.running = String(running);
+    tile.classList.toggle('is-running', running);
+    tile.querySelector('.camera-tile-name').textContent = cam.name;
+    tile.querySelector('.camera-tile-status').innerHTML =
+        CAMERA_STATUS_TAG[cam.status] || cam.status;
+    tile.querySelector('.camera-tile-area').textContent = cam.area_name || '';
+
+    // Nút có thể đang hiện "Đang dừng…/Đang chạy…" (toggleCameraRun) — tự sửa
+    // lại nhãn/mở khoá ngay khi trạng thái máy chủ đã khớp với điều đang chờ.
+    btn.disabled = false;
+    btn.textContent = running ? '⏹ Dừng' : '▶ Chạy';
+    btn.onclick = () => toggleCameraRun(cam.id, running, cam.name, btn);
+
+    const img = document.getElementById(`cam-img-${cam.id}`);
+    if (running) {
+        // Chỉ gắn lại khi chưa có luồng, tránh giật hình mỗi lần làm mới
+        if (!img.getAttribute('src')) attachStream(img, cam.id, isAiOverlayEnabled, 'sub');
+    } else {
+        detachStream(img);
+    }
+    return tile;
+}
 
 async function loadCameraWall() {
     const wall = document.getElementById('camera-wall');
@@ -726,66 +856,90 @@ async function loadCameraWall() {
 
     if (!cameraWallData.length) {
         wall.innerHTML = '<p class="empty-hint">Chưa có thiết bị camera nào. Thêm ở màn Thiết bị camera.</p>';
+        renderCameraWallPager();
         return;
     }
 
-    // Dựng lại toàn bộ lưới thì mọi thẻ ảnh bị gán src mới, tức là mở lại từng
-    // kết nối MJPEG. Nên chỉ thêm ô mới và cập nhật ô đã có.
-    const seen = new Set();
-    cameraWallData.forEach(cam => {
-        seen.add(cam.id);
-        let tile = document.getElementById(`cam-tile-${cam.id}`);
-        if (!tile) {
-            tile = document.createElement('div');
-            tile.className = 'camera-tile';
-            tile.id = `cam-tile-${cam.id}`;
-            tile.innerHTML = `
-                <div class="camera-tile-head">
-                    <span class="camera-tile-name"></span>
-                    <span class="camera-tile-status"></span>
-                </div>
-                <div class="camera-tile-video">
-                    <img id="cam-img-${cam.id}" alt="Luồng ${esc(cam.name)}">
-                    <div class="camera-tile-idle">Chưa chạy</div>
-                </div>
-                <div class="camera-tile-foot">
-                    <span class="camera-tile-area"></span>
-                    <button class="btn-event-clip"></button>
-                </div>`;
-            wall.appendChild(tile);
-            makeZoomable(tile.querySelector('.camera-tile-video'));
-        }
+    // Trang hiện tại có thể lệch (ví dụ camera vừa bị xoá) — kẹp lại cho hợp lệ
+    if (camWallPage >= cameraWallTotalPages()) camWallPage = cameraWallTotalPages() - 1;
 
-        const running = cam.status === 'online';
-        tile.classList.toggle('is-running', running);
-        tile.querySelector('.camera-tile-name').textContent = cam.name;
-        tile.querySelector('.camera-tile-status').innerHTML =
-            CAMERA_STATUS_TAG[cam.status] || cam.status;
-        tile.querySelector('.camera-tile-area').textContent = cam.area_name || '';
+    const pageCams = cameraWallPageCams();
+    const pageIds = new Set(pageCams.map(c => c.id));
 
-        const btn = tile.querySelector('.camera-tile-foot button');
-        btn.textContent = running ? '⏹ Dừng' : '▶ Chạy';
-        btn.onclick = () => toggleCameraRun(cam.id, running);
-
-        const img = document.getElementById(`cam-img-${cam.id}`);
-        if (running) {
-            // Chỉ gắn lại khi chưa có luồng, tránh giật hình mỗi lần làm mới
-            if (!img.getAttribute('src')) attachStream(img, cam.id, isAiOverlayEnabled, 'sub');
-        } else {
-            detachStream(img);
-        }
-    });
-
-    // Camera bị xoá thì gỡ ô của nó
+    // Chỉ camera của TRANG HIỆN TẠI mới có luồng. Ô nào đang hiện mà rời trang
+    // (chuyển trang hoặc camera bị xoá) phải ngắt luồng rồi gỡ — bỏ quên
+    // detachStream() là còn kết nối go2rtc/MJPEG chạy ngầm dù ô đã biến mất.
     [...wall.querySelectorAll('.camera-tile')].forEach(tile => {
         const id = tile.id.replace('cam-tile-', '');
-        if (!seen.has(id)) {
+        if (!pageIds.has(id)) {
             detachStream(document.getElementById(`cam-img-${id}`));
             tile.remove();
         }
     });
+
+    pageCams.forEach(cam => syncCameraTile(wall, cam, true));
+    renderCameraWallPager();
 }
 window.loadCameraWall = loadCameraWall;
+
+// Quét trạng thái bật/tắt mỗi 15s khi còn ở màn giám sát (gọi từ switchNavTab).
+// KHÔNG dựng lại cả lưới — chỉ ô nào đổi trạng thái mới chạm DOM/luồng, xem
+// syncCameraTile(). Việc này tránh giật hình các camera không đổi gì giữa
+// hai lần quét liên tiếp.
+async function pollCameraWallStatus() {
+    const wall = document.getElementById('camera-wall');
+    if (!wall) return;
+
+    let data;
+    try {
+        data = await getJson('/api/v1/cameras');
+    } catch (e) {
+        return; // máy chủ bận thì bỏ qua nhịp này, giữ nguyên lưới đang có
+    }
+    cameraWallData = data.items;
+    knownCameraTotal = cameraWallData.length;
+
+    const running = cameraWallData.filter(c => c.status === 'online');
+    const summary = document.getElementById('monitor-summary');
+    if (summary) {
+        summary.textContent = running.length
+            ? `Đang chạy ${running.length}/${cameraWallData.length} camera`
+            : `Chưa camera nào chạy · ${cameraWallData.length} thiết bị`;
+    }
+
+    // Số camera đổi khiến số trang đổi (thêm/xoá thiết bị) — dựng lại đầy đủ
+    // một lần cho đúng, nhịp sau mới trở lại kiểu quét nhẹ.
+    if (camWallPage >= cameraWallTotalPages()) { loadCameraWall(); return; }
+
+    cameraWallPageCams().forEach(cam => syncCameraTile(wall, cam, false));
+    renderCameraWallPager();
+}
+
+// Vuốt ngang trên lưới camera để đổi trang (ngưỡng 50px theo yêu cầu). Khi đã
+// zoom (scale>1), makeZoomable() tự preventDefault() lúc pointerdown nên cử
+// chỉ kéo-ảnh không bị hiểu nhầm thành vuốt đổi trang.
+(function setupCameraWallSwipe() {
+    const wall = document.getElementById('camera-wall');
+    if (!wall) return;
+    let startX = null, startY = null;
+    wall.addEventListener('pointerdown', (e) => { startX = e.clientX; startY = e.clientY; });
+    wall.addEventListener('pointerup', (e) => {
+        if (startX === null) return;
+        const dx = e.clientX - startX, dy = e.clientY - startY;
+        startX = null;
+        if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) goCameraWallPage(dx < 0 ? 1 : -1);
+    });
+    wall.addEventListener('pointercancel', () => { startX = null; });
+})();
+
+// Phím mũi tên đổi trang lưới camera (tuỳ chọn, theo yêu cầu) — chỉ khi đang ở
+// màn giám sát và không gõ trong ô nhập liệu nào.
+document.addEventListener('keydown', (e) => {
+    if (currentTabName !== 'monitoring') return;
+    if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target && e.target.tagName) || '')) return;
+    if (e.key === 'ArrowLeft') goCameraWallPage(-1);
+    else if (e.key === 'ArrowRight') goCameraWallPage(1);
+});
 
 function detachAllCameraStreams() {
     document.querySelectorAll('.camera-tile img').forEach(detachStream);
@@ -887,6 +1041,129 @@ function renderEventCard(container, event, prepend) {
 }
 window.renderEventCard = renderEventCard;
 
+// ---------- tab "Lịch sử vi phạm" bên cạnh dòng sự kiện trực tiếp ----------
+// Dòng trực tiếp chỉ hiện sự kiện CHƯA xử lý (xem renderEventCard ở trên) và
+// mất đi ngay khi xác nhận — tab này tra lại toàn bộ qua /api/v1/events, lọc
+// đúng loại vi phạm an toàn mà dòng trực tiếp đang dùng (EVENT_CLASS.INTRUSION
+// = 'event-safety'), có phân trang + lọc theo trạng thái xử lý.
+const VIOLATION_EVENT_TYPES = ['INTRUSION'];
+const EVH_PAGE_SIZE = 20;
+let evhPage = 1;
+let evhTotalPages = 1;
+
+function switchEventsFeedTab(tab) {
+    const liveTab = document.getElementById('tab-events-live');
+    const histTab = document.getElementById('tab-events-history');
+    const liveList = document.getElementById('events-list-container');
+    const histBox = document.getElementById('events-history-container');
+    if (!liveTab || !histTab || !liveList || !histBox) return;
+
+    const isHistory = tab === 'history';
+    liveTab.classList.toggle('active', !isHistory);
+    histTab.classList.toggle('active', isHistory);
+    liveList.style.display = isHistory ? 'none' : '';
+    histBox.style.display = isHistory ? 'flex' : 'none';
+
+    if (isHistory) loadViolationHistory(1);
+}
+window.switchEventsFeedTab = switchEventsFeedTab;
+
+function violationHistoryVisible() {
+    const box = document.getElementById('events-history-container');
+    return !!box && box.style.display !== 'none';
+}
+
+async function loadViolationHistory(page) {
+    const list = document.getElementById('events-history-list');
+    if (!list) return;
+    evhPage = page || evhPage || 1;
+
+    const statusSelect = document.getElementById('evh-filter-status');
+    const ackedVal = statusSelect ? statusSelect.value : '';
+
+    const params = new URLSearchParams();
+    params.set('type', VIOLATION_EVENT_TYPES.join(','));
+    if (ackedVal) params.set('acked', ackedVal);
+    params.set('page', String(evhPage));
+    params.set('page_size', String(EVH_PAGE_SIZE));
+
+    list.innerHTML = '<p class="empty-hint">Đang tải lịch sử vi phạm…</p>';
+    try {
+        const res = await fetch(`/api/v1/events?${params.toString()}`);
+        if (!res.ok) throw new Error(res.statusText);
+        const data = await res.json();
+        renderViolationHistory(data.items || []);
+        evhTotalPages = Math.max(1, Math.ceil((data.total || 0) / (data.page_size || EVH_PAGE_SIZE)));
+        if (evhPage > evhTotalPages) evhPage = evhTotalPages;
+        renderViolationHistoryPager();
+    } catch (e) {
+        list.innerHTML = `<p class="empty-hint">Không tải được lịch sử vi phạm: ${esc(e.message)}</p>`;
+    }
+}
+window.loadViolationHistory = loadViolationHistory;
+
+function renderViolationHistoryPager() {
+    const pager = document.getElementById('evh-pager');
+    if (!pager) return;
+    pager.style.display = evhTotalPages > 1 ? 'flex' : 'none';
+    const info = document.getElementById('evh-page-info');
+    if (info) info.textContent = `Trang ${evhPage}/${evhTotalPages}`;
+    const prev = document.getElementById('evh-prev-btn');
+    const next = document.getElementById('evh-next-btn');
+    if (prev) prev.disabled = evhPage <= 1;
+    if (next) next.disabled = evhPage >= evhTotalPages;
+}
+
+function goViolationHistoryPage(delta) {
+    const next = Math.min(evhTotalPages, Math.max(1, evhPage + delta));
+    if (next === evhPage) return;
+    loadViolationHistory(next);
+}
+window.goViolationHistoryPage = goViolationHistoryPage;
+
+function renderViolationHistory(items) {
+    const list = document.getElementById('events-history-list');
+    if (!list) return;
+    if (!items.length) {
+        list.innerHTML = '<p class="empty-hint">Không có vi phạm nào phù hợp.</p>';
+        return;
+    }
+
+    list.innerHTML = '';
+    items.forEach(event => {
+        const card = document.createElement('div');
+        card.className = `event-card ${EVENT_CLASS[event.type] || 'event-system'}`;
+        card.id = `evh-${event.id}`;
+
+        const time = new Date(event.occurred_at).toLocaleString('vi-VN');
+        const place = [event.camera_name, event.area_name].filter(Boolean).join(' · ');
+        const names = ((event.detail || {}).identified || []).map(p => p.person_name).filter(Boolean);
+        const clipBtn = event.clip_url
+            ? `<button class="btn-event-clip" onclick="viewEventClip('${event.id}')">▶️ Xem clip 10s</button>` : '';
+        const statusBadge = event.acked
+            ? '<span class="event-history-badge acked">Đã xử lý</span>'
+            : '<span class="event-history-badge unacked">Chưa xử lý</span>';
+        const ackAction = event.acked
+            ? `<span class="cell-subtext">${esc(event.acked_by || '')}`
+                + `${event.acked_at ? ' · ' + esc(new Date(event.acked_at).toLocaleString('vi-VN')) : ''}</span>`
+            : `<button class="btn-event-confirm" onclick="ackEvent('${event.id}')">Xác nhận xử lý</button>`;
+
+        card.innerHTML = `
+            <div class="event-card-header">
+                <span class="event-category cat-${(event.type || '').toLowerCase()}">${EVENT_LABELS[event.type] || event.type}</span>
+                <span class="event-time">${time}</span>
+            </div>
+            <p class="event-desc">${esc(event.message)}</p>
+            ${event.snapshot_url ? `<img class="event-thumb" src="${event.snapshot_url}" onclick="openEvidence('${event.snapshot_url}','${esc(event.message)}')" alt="Ảnh sự kiện">` : ''}
+            <div class="event-location">${esc(place)}</div>
+            ${names.length ? `<div class="event-history-names">Định danh: ${names.map(esc).join(', ')}</div>` : ''}
+            <div class="event-card-actions">${clipBtn}${statusBadge}</div>
+            <div class="event-card-actions">${ackAction}</div>
+        `;
+        list.appendChild(card);
+    });
+}
+
 async function ackEvent(eventId) {
     const who = document.querySelector('.user-name');
     try {
@@ -917,6 +1194,10 @@ async function ackEvent(eventId) {
         if (pendingEventsBadge) pendingEventsBadge.textContent = `${pendingEventsCount} chờ xử lý`;
         if (currentTabName === 'safety') loadSafetyDashboard();
         else if (currentTabName === 'safety-detail') loadSafetyDetail();
+        // Tab "Lịch sử vi phạm" dùng badge trạng thái riêng (không phải thẻ
+        // #evt-), và có thể đang lọc "Chưa xử lý" nên món vừa xử lý phải biến
+        // mất khỏi danh sách — nạp lại trang hiện tại là chắc chắn nhất.
+        if (violationHistoryVisible()) loadViolationHistory(evhPage);
     } catch (e) {
         showToast('Không xác nhận được: ' + e.message, 'error');
     }
@@ -2018,9 +2299,38 @@ async function deleteSchedule(schId) {
 window.deleteSchedule = deleteSchedule;
 
 
+// ----------------- PHÂN TRANG BẢNG (dùng chung nhiều bảng dài) -----------------
+// Nhật ký điểm danh và nhật ký vi phạm an toàn đều là bảng dài, cuộn riêng
+// (xem .table-scroll-tall trong style.css) — cùng cắt trang kiểu này cho đỡ
+// lặp lại code, 20 dòng/trang theo yêu cầu.
+function paginate(rows, page, pageSize) {
+    const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+    const safePage = Math.min(Math.max(1, page || 1), totalPages);
+    const start = (safePage - 1) * pageSize;
+    return { items: rows.slice(start, start + pageSize), page: safePage, totalPages };
+}
+
+// ``onChange(nextPage)`` — gọi lại khi bấm ‹/›; bản thân renderPager() không
+// tự vẽ lại bảng, bên gọi tự quyết định vẽ lại từ đâu (API hay mảng đã lọc sẵn).
+function renderPager(containerEl, page, totalPages, onChange) {
+    if (!containerEl) return;
+    if (totalPages <= 1) { containerEl.innerHTML = ''; return; }
+    containerEl.innerHTML = `
+        <button type="button" class="pager-nav-btn" ${page <= 1 ? 'disabled' : ''}>‹</button>
+        <span class="pager-info">Trang ${page}/${totalPages}</span>
+        <button type="button" class="pager-nav-btn" ${page >= totalPages ? 'disabled' : ''}>›</button>
+    `;
+    const prevBtn = containerEl.children[0], nextBtn = containerEl.children[2];
+    prevBtn.onclick = () => onChange(page - 1);
+    nextBtn.onclick = () => onChange(page + 1);
+}
+
 // ----------------- ATTENDANCE LOGS MANAGEMENT -----------------
 let attendanceLogsData = [];
 const attendanceLogsTbody = document.getElementById('attendance-logs-tbody');
+let attLogsPage = 1;
+let attLogsFiltered = [];
+const ATT_LOGS_PAGE_SIZE = 20;
 
 async function loadAttendanceLogs() {
     if (!attendanceLogsTbody) return;
@@ -2058,7 +2368,8 @@ function getCheck(log, phase) {
             present: log.present,
             absent: log.absent,
             absent_personnel: log.absent_personnel || [],
-            evidence: log.evidence || null
+            evidence: log.evidence || null,
+            evidence_captured_at: log.evidence_captured_at || null
         };
     }
     if (log.checks && phase === 'start' && log.checks.manual) return log.checks.manual;
@@ -2077,9 +2388,14 @@ function renderEvidenceCell(check, log, phaseLabel) {
         return '<span style="color: #94a3b8;">—</span>';
     }
     const caption = `${log.date} · ${log.unit} · ${phaseLabel} · Có mặt ${check.present}/${log.required}`;
+    // Giờ hệ thống chốt ảnh (khác giờ in sẵn trên khung hình, lấy từ camera —
+    // xem ghi chú cạnh bảng), hiện thêm dưới ảnh thu nhỏ để chỉ huy đối chiếu.
+    const capturedAt = check.evidence_captured_at
+        ? `<div class="cell-subtext font-mono">${esc(new Date(check.evidence_captured_at).toLocaleTimeString('vi-VN'))}</div>` : '';
     return `<img src="${check.evidence}" class="evidence-thumb" loading="lazy"`
         + ` alt="Bằng chứng ${phaseLabel}"`
-        + ` onclick="openEvidenceModal('${check.evidence}', '${phaseLabel}', '${caption.replace(/'/g, "\\'")}')">`;
+        + ` onclick="openEvidenceModal('${check.evidence}', '${phaseLabel}', '${caption.replace(/'/g, "\\'")}')">`
+        + capturedAt;
 }
 
 // Tên quân nhân xếp hàng dọc, mỗi người một gạch đầu dòng: đọc nhanh hơn một
@@ -2099,14 +2415,20 @@ function renderAbsentList(log) {
 
 function renderAttendanceLogsTable(logs) {
     if (!attendanceLogsTbody) return;
+    attLogsFiltered = logs; // pager đổi trang thì vẽ lại từ đây, không lọc lại từ đầu
     attendanceLogsTbody.innerHTML = '';
+    const pagerEl = document.getElementById('attendance-logs-pager');
 
     if (logs.length === 0) {
         attendanceLogsTbody.innerHTML = `<tr><td colspan="12" class="empty-row">Không có bản ghi điểm danh nào phù hợp</td></tr>`;
+        if (pagerEl) pagerEl.innerHTML = '';
         return;
     }
 
-    logs.forEach(log => {
+    const { items, page, totalPages } = paginate(logs, attLogsPage, ATT_LOGS_PAGE_SIZE);
+    attLogsPage = page;
+
+    items.forEach(log => {
         const row = document.createElement('tr');
         const statusClass = log.status_type === 'success' ? 'status-ok' : 'status-warning';
         const startCheck = getCheck(log, 'start');
@@ -2127,6 +2449,11 @@ function renderAttendanceLogsTable(logs) {
             <td><button class="btn-event-clip" onclick="openLogModal('${log.id}')">Xem chi tiết</button></td>
         `;
         attendanceLogsTbody.appendChild(row);
+    });
+
+    renderPager(pagerEl, page, totalPages, (p) => {
+        attLogsPage = p;
+        renderAttendanceLogsTable(attLogsFiltered);
     });
 }
 
@@ -2252,21 +2579,70 @@ function toggleFullscreen(el) {
 }
 window.toggleFullscreen = toggleFullscreen;
 
+// Nút ⛶/🗗 trên MỌI khung zoomable phải đổi chữ/tiêu đề đúng theo khung nào
+// đang toàn màn hình — một listener fullscreenchange dùng chung, gắn một lần.
+let _fullscreenBtnSyncAdded = false;
+function ensureFullscreenButtonSync() {
+    if (_fullscreenBtnSyncAdded) return;
+    _fullscreenBtnSyncAdded = true;
+    document.addEventListener('fullscreenchange', () => {
+        document.querySelectorAll('.zoom-fullscreen-btn').forEach((btn) => {
+            const container = btn.closest('.zoomable');
+            const isFs = !!container && document.fullscreenElement === container;
+            btn.textContent = isFs ? '🗗' : '⛶';
+            btn.title = isFs ? 'Thu nhỏ' : 'Phóng to';
+            btn.setAttribute('aria-label', btn.title);
+        });
+    });
+}
+
+// Khung zoomable người dùng vừa chạm tới gần nhất (lăn chuột/kéo) — để phím
+// '0' biết nên reset zoom của khung nào, vì không phải lúc nào cũng đang toàn
+// màn hình (nhiều ô camera cùng zoomable được trên một trang).
+let _lastInteractedZoomable = null;
+let _zoomResetKeyAdded = false;
+function ensureZoomResetKey() {
+    if (_zoomResetKeyAdded) return;
+    _zoomResetKeyAdded = true;
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== '0') return;
+        const tag = (e.target && e.target.tagName) || '';
+        if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return;
+        const target = (document.fullscreenElement && document.fullscreenElement.classList.contains('zoomable'))
+            ? document.fullscreenElement : _lastInteractedZoomable;
+        if (target && target._zoom && target._zoom.scale > 1) target._zoom.reset();
+    });
+}
+
 // Gắn khả năng phóng to / kéo di cho một khung có chứa <img>: lăn chuột để
-// zoom, kéo để di khi đã phóng, bấm đúp để về vừa khung, nút ⛶ để toàn màn hình.
+// zoom, kéo để di khi đã phóng, bấm đúp để toàn màn hình, nút ⛶ để toàn màn
+// hình, nút "1:1" (hiện khi đã zoom) hoặc phím '0' để về vừa khung.
 function makeZoomable(container) {
     if (!container || container.dataset.zoomable === '1') return;
     container.dataset.zoomable = '1';
     container.classList.add('zoomable');
+    ensureFullscreenButtonSync();
+    ensureZoomResetKey();
 
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'zoom-fullscreen-btn';
-    btn.title = 'Phóng to toàn màn hình';
-    btn.setAttribute('aria-label', 'Phóng to toàn màn hình');
+    btn.title = 'Phóng to';
+    btn.setAttribute('aria-label', 'Phóng to');
     btn.textContent = '⛶';
     btn.onclick = (e) => { e.stopPropagation(); toggleFullscreen(container); };
     container.appendChild(btn);
+
+    // Nút "1:1": chỉ hiện khi đã zoom (CSS theo .is-zoomed) — thay cho bấm đúp
+    // để về vừa khung như trước, vì bấm đúp giờ dùng để vào/ra toàn màn hình.
+    const resetBtn = document.createElement('button');
+    resetBtn.type = 'button';
+    resetBtn.className = 'zoom-reset-btn';
+    resetBtn.title = 'Về đúng kích cỡ (phím 0)';
+    resetBtn.setAttribute('aria-label', resetBtn.title);
+    resetBtn.textContent = '1:1';
+    resetBtn.onclick = (e) => { e.stopPropagation(); reset(); };
+    container.appendChild(resetBtn);
 
     let scale = 1, x = 0, y = 0, drag = null;
     // player.js (go2rtc) chèn <video-stream> và ẨN <img> MJPEG thay vì gỡ nó —
@@ -2326,6 +2702,7 @@ function makeZoomable(container) {
 
     container.addEventListener('wheel', (e) => {
         e.preventDefault();
+        _lastInteractedZoomable = container;
         const r = container.getBoundingClientRect();
         zoomAt(e.deltaY < 0 ? 0.25 : -0.25, e.clientX - r.left, e.clientY - r.top);
     }, { passive: false });
@@ -2334,6 +2711,7 @@ function makeZoomable(container) {
     container.addEventListener('dragstart', (e) => e.preventDefault());
 
     container.addEventListener('pointerdown', (e) => {
+        _lastInteractedZoomable = container;
         if (scale === 1 || (e.target.closest && e.target.closest('button'))) return;
         e.preventDefault();
         drag = { sx: e.clientX - x, sy: e.clientY - y };
@@ -2358,7 +2736,13 @@ function makeZoomable(container) {
     };
     container.addEventListener('pointerup', endDrag);
     container.addEventListener('pointercancel', endDrag);
-    container.addEventListener('dblclick', reset);
+    // Bấm đúp giờ vào/ra toàn màn hình (đồng bộ với nút ⛶), khớp với hành vi
+    // của <video> go2rtc nếu lỡ còn lộ ra — khỏi có hai cách bấm đúp khác nhau
+    // tuỳ đang xem MJPEG hay go2rtc. Về vừa khung giờ dùng nút "1:1" hoặc phím '0'.
+    container.addEventListener('dblclick', (e) => {
+        if (e.target.closest && e.target.closest('button')) return;
+        toggleFullscreen(container);
+    });
 
     container._zoom = { zoomBy, reset, get scale() { return scale; } };
 }
@@ -2412,6 +2796,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 function filterAttendanceLogsByStatus() {
+    attLogsPage = 1; // đổi bộ lọc (trạng thái, hoặc gọi lại từ loadAttendanceLogs) thì về trang 1
     const statusSelect = document.getElementById('log-filter-status');
     const selected = statusSelect ? statusSelect.value : 'all';
 
@@ -3029,8 +3414,12 @@ window.renderSafetyCameraTable = renderSafetyCameraTable;
 
 let safetyDetailCameraId = null;
 
+let sfdLogPage = 1;
+const SFD_LOG_PAGE_SIZE = 20;
+
 function openSafetyDetail(cameraId) {
     safetyDetailCameraId = cameraId;
+    sfdLogPage = 1; // đổi camera đang xem thì về trang 1 của nhật ký vi phạm
     switchNavTab('safety-detail');
 }
 window.openSafetyDetail = openSafetyDetail;
@@ -3106,14 +3495,19 @@ function detachSafetyStreams() {
 function renderSafetyLog(events) {
     const tbody = document.getElementById('sfd-log-tbody');
     if (!tbody) return;
+    const pagerEl = document.getElementById('sfd-log-pager');
 
     if (!events.length) {
         tbody.innerHTML = '<tr><td colspan="6" class="empty-row">Chưa có vi phạm nào được xử lý trên camera này</td></tr>';
+        if (pagerEl) pagerEl.innerHTML = '';
         return;
     }
 
+    const { items, page, totalPages } = paginate(events, sfdLogPage, SFD_LOG_PAGE_SIZE);
+    sfdLogPage = page;
+
     tbody.innerHTML = '';
-    events.forEach(ev => {
+    items.forEach(ev => {
         const when = new Date(ev.occurred_at).toLocaleString('vi-VN');
         const zone = (ev.detail || {}).zone_name || ev.area_name || '—';
         const tr = document.createElement('tr');
@@ -3132,6 +3526,11 @@ function renderSafetyLog(events) {
             <td>${esc(ev.acked_by || '—')}
                 ${ev.acked_at ? `<div class="cell-subtext font-mono">${esc(new Date(ev.acked_at).toLocaleString('vi-VN'))}</div>` : ''}</td>`;
         tbody.appendChild(tr);
+    });
+
+    renderPager(pagerEl, page, totalPages, (p) => {
+        sfdLogPage = p;
+        renderSafetyLog(events);
     });
 }
 
@@ -3262,7 +3661,7 @@ async function loadCameras() {
                 <td>${c.target_fps || 5}</td>
                 <td>${CAMERA_STATUS_TAG[c.status] || c.status}</td>
                 <td class="row-actions">
-                    <button class="btn-event-clip" onclick="toggleCameraRun('${c.id}', ${running})">
+                    <button class="btn-event-clip" onclick="toggleCameraRun('${c.id}', ${running}, '${esc(c.name)}', this)">
                         ${running ? '⏹ Dừng' : '▶ Chạy'}</button>
                     <button class="btn-event-clip" onclick='openCameraStreamModal(${JSON.stringify(c)})'>📺 Xem luồng</button>
                     <button class="btn-event-clip" onclick='openCameraModal(${JSON.stringify(c)})'>Sửa</button>
@@ -3377,15 +3776,32 @@ function describeApiError(payload) {
     return 'Dữ liệu không hợp lệ';
 }
 
-async function toggleCameraRun(cameraId, isRunning) {
+// ``btnEl``: nút vừa bấm (ô lưới giám sát hoặc dòng trong bảng Thiết bị camera
+// — cùng một hàm, dùng chung) — để khoá/đổi chữ ngay, không chờ nạp lại xong
+// mới thấy phản hồi. ``cameraName`` chỉ dùng cho hộp thoại xác nhận khi dừng.
+async function toggleCameraRun(cameraId, isRunning, cameraName, btnEl) {
+    if (isRunning && !confirm(`Dừng camera ${cameraName || cameraId}?`)) return;
+
+    const prevText = btnEl ? btnEl.textContent : null;
+    if (btnEl) {
+        btnEl.disabled = true;
+        btnEl.textContent = isRunning ? 'Đang dừng…' : 'Đang chạy…';
+    }
+
     try {
         const res = await fetch(`/api/v1/cameras/${cameraId}/${isRunning ? 'stop' : 'start'}`,
                                 { method: 'POST' });
         if (!res.ok) throw new Error(describeApiError(await res.json()));
         activeCameraId = cameraId;
-        setTimeout(loadCameras, 800);
+        // Cả hai: lưới giám sát (nếu đang mở) và bảng quản lý thiết bị (nếu
+        // đang mở) — hàm nào không tìm thấy phần tử của mình thì tự bỏ qua.
+        setTimeout(() => { loadCameraWall(); loadCameras(); }, 800);
     } catch (e) {
         showToast(e.message, 'error');
+        if (btnEl) {
+            btnEl.disabled = false;
+            btnEl.textContent = prevText;
+        }
     }
 }
 window.toggleCameraRun = toggleCameraRun;

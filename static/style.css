@@ -483,9 +483,10 @@ body {
     grid-template-columns: minmax(0, 1fr) 380px;
     gap: 20px;
     align-items: stretch;
-    /* Trừ chiều cao thanh trên cùng và khoảng đệm của khung nội dung, để cột
-       sự kiện cao bằng đúng phần màn hình còn lại chứ không cụt ở giữa trang */
-    min-height: calc(100vh - 150px);
+    /* CỐ ĐỊNH (không phải min-height): hai cột cuộn riêng bên trong, cuộn dòng
+       sự kiện không còn kéo cả lưới camera đi theo. Trừ chiều cao thanh trên
+       cùng và khoảng đệm của khung nội dung. */
+    height: calc(100vh - 150px);
 }
 
 /* Surveillance Column */
@@ -493,6 +494,8 @@ body {
     display: flex;
     flex-direction: column;
     gap: 12px;
+    min-height: 0;
+    overflow-y: auto;
 }
 
 /* Surveillance Top Bar */
@@ -774,6 +777,28 @@ input:checked + .slider:before {
     letter-spacing: 0.5px;
 }
 
+/* Hai tab "Trực tiếp" / "Lịch sử vi phạm" thay cho tiêu đề h2 cố định */
+.events-feed-tabs {
+    display: flex;
+    gap: 16px;
+}
+.events-feed-tab {
+    background: none;
+    border: none;
+    padding: 2px 0 10px;
+    margin-bottom: -15px; /* ăn vào border-bottom của .events-feed-header để gạch chân tab nằm đúng trên viền */
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    color: #94a3b8;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+}
+.events-feed-tab.active {
+    color: #1e293b;
+    border-bottom-color: var(--primary-green);
+}
+
 .pending-badge {
     background: #f8fafc;
     border: 1px solid #cbd5e1;
@@ -791,6 +816,37 @@ input:checked + .slider:before {
     overflow-y: auto;
     flex: 1;
     min-height: 0;
+}
+
+/* ----- Tab "Lịch sử vi phạm" (dùng chung thẻ event-card, thêm badge trạng thái) ----- */
+.events-history {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    gap: 10px;
+}
+.events-history-filters { margin: 0; }
+.events-history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+}
+.event-history-badge {
+    font-size: 11.5px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 10px;
+    letter-spacing: 0.3px;
+}
+.event-history-badge.unacked { background: rgba(220, 38, 38, 0.12); color: #b91c1c; }
+.event-history-badge.acked { background: var(--status-active-bg); color: var(--status-active-text); }
+.event-history-names {
+    font-size: 12px;
+    color: #475569;
 }
 
 .event-card {
@@ -1198,6 +1254,39 @@ input:checked + .slider:before {
 
 .table-responsive {
     overflow-x: auto;
+}
+
+/* Bảng dài (nhật ký điểm danh, nhật ký vi phạm an toàn): giới hạn cao, cuộn
+   riêng trong khung, tiêu đề cột dính lại khi cuộn — dùng cùng với phân trang
+   phía JS (paginate()/renderPager() trong app.js) nên mỗi trang chỉ 20 dòng,
+   giới hạn cao này chủ yếu để không vượt màn hình khi lưới camera cũng cố định
+   chiều cao. */
+.table-scroll-tall {
+    max-height: calc(100vh - 320px);
+    overflow: auto;
+}
+.table-scroll-tall thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+}
+
+.evidence-note {
+    font-size: 12.5px;
+    color: #64748b;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 8px 12px;
+    margin: 4px 0 12px;
+}
+
+.table-pager {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    padding: 12px 0 2px;
 }
 
 .personnel-table {
@@ -2110,8 +2199,21 @@ a.btn-clip-ctrl {
     .roi-layout {
         grid-template-columns: minmax(0, 1fr);
     }
-    .main-monitoring-grid { min-height: 0; }
+    /* Xếp chồng thì không còn hai cột cuộn riêng nữa — bỏ chiều cao cố định
+       để toàn trang cuộn như một khối bình thường, như trước khi đổi sang
+       chiều cao cố định cho bố cục hai cột ở màn rộng. */
+    .main-monitoring-grid { height: auto; }
+    .surveillance-column { overflow-y: visible; }
     .events-feed-column { min-height: 420px; }
+}
+
+/* ≤600: mỗi trang vẫn 4 camera, chỉ đổi cách xếp thành 1 cột/hàng cho vừa
+   màn hình hẹp — pager/vuốt ngang để đổi trang vẫn hoạt động như bình thường */
+@media (max-width: 600px) {
+    .camera-wall {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: repeat(4, minmax(200px, auto));
+    }
 }
 
 /* ≤768: sidebar chuyển sang dạng ngăn kéo (ẩn ngoài màn hình), mở bằng nút
@@ -2415,10 +2517,46 @@ a.btn-clip-ctrl {
    LƯỚI CAMERA — các camera chạy song song, mỗi camera một ô
    =================================================================== */
 
+/* Cố định 2 cột x 2 hàng = 4 camera/trang (loadCameraWall() trong app.js phân
+   trang dữ liệu); camera thứ 5 trở đi xem bằng pager/vuốt ngang bên dưới,
+   thay cho lưới auto-fit co giãn theo số lượng như trước. */
 .camera-wall {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(2, minmax(0, 1fr));
     gap: 14px;
+    flex: 1;
+    min-height: 360px;
+    touch-action: pan-y; /* để cuộn dọc trang vẫn mượt, vuốt ngang đổi trang xử lý riêng bằng JS */
+}
+
+.camera-wall-pager {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    padding: 2px 0;
+    flex-shrink: 0;
+}
+.pager-nav-btn {
+    min-width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    border: 1px solid #cbd5e1;
+    background: #f8fafc;
+    color: #334155;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+}
+.pager-nav-btn:hover:not(:disabled) { background: #e2e8f0; }
+.pager-nav-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.pager-info {
+    font-size: 12.5px;
+    color: #475569;
+    font-weight: 600;
+    min-width: 70px;
+    text-align: center;
 }
 
 .camera-tile {
@@ -2478,6 +2616,15 @@ a.btn-clip-ctrl {
 /* go2rtc tự vẽ chữ "loading"/"error" ở góc — trùng với badge trạng thái riêng
    của mình nên tắt, khỏi chồng hai lớp chữ. */
 .ai-player-stream .info { display: none !important; }
+
+/* Chặn hẳn control/PiP/fullscreen gốc của <video>: player.js đã tắt bằng JS
+   (video.controls=false, disablePictureInPicture, controlsList) ngay khi tạo,
+   đây là lớp chặn thứ hai — tránh trình duyệt vẫn lộ control khi hover/focus,
+   vì <video> đè lớp phủ canvas AI khi nó tự vào toàn màn hình một mình. */
+.ai-player-stream video::-webkit-media-controls { display: none !important; }
+.ai-player-stream video {
+    pointer-events: none; /* mọi tương tác (kéo/zoom/toàn màn hình) đi qua container zoomable, không qua thẳng video */
+}
 
 .ai-overlay-canvas {
     position: absolute;
@@ -2616,6 +2763,28 @@ a.btn-clip-ctrl {
     cursor: pointer;
 }
 .zoom-fullscreen-btn:hover { background: rgba(15, 23, 42, 0.85); }
+
+/* Nút "1:1" (về vừa khung) — chỉ hiện khi đang zoom, nằm cạnh nút toàn màn hình */
+.zoom-reset-btn {
+    position: absolute;
+    top: 8px;
+    right: 52px;
+    z-index: 5;
+    height: 36px;
+    min-width: 36px;
+    padding: 0 8px;
+    border-radius: 7px;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    background: rgba(15, 23, 42, 0.6);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    cursor: pointer;
+    display: none;
+}
+.zoom-reset-btn:hover { background: rgba(15, 23, 42, 0.85); }
+.zoomable.is-zoomed .zoom-reset-btn { display: inline-flex; align-items: center; justify-content: center; }
 
 /* Khi khung camera ở chế độ toàn màn hình */
 .zoomable:fullscreen {
