@@ -945,8 +945,9 @@
                         </div>
 
                         <p class="evidence-note">
-                            ℹ️ Ảnh bằng chứng được chụp ở cuối khung điểm danh (5 phút đầu giờ/cuối giờ);
-                            giờ in trên ảnh camera có thể lệch giờ hệ thống.
+                            ℹ️ Đầu giờ: quân nhân tập trung trong x phút kể từ giờ bắt đầu, hết x phút hệ thống chụp ảnh điểm danh.
+                            Cuối giờ: bắt đầu tính từ x phút trước giờ kết thúc, chụp đúng lúc kết thúc buổi học.
+                            Giờ chụp ghi theo giờ hệ thống ("Chụp lúc" ở góc ảnh); đồng hồ camera in trên ảnh có thể lệch.
                         </p>
 
                         <div class="table-responsive table-scroll-tall">
@@ -1183,8 +1184,9 @@
 
                 <div class="form-row-two">
                     <div class="form-group">
-                        <label for="sch-window-input">Điểm danh N phút mỗi mốc</label>
+                        <label for="sch-window-input">Thời gian tập trung x (phút)</label>
                         <input type="number" id="sch-window-input" value="5" min="1" max="60" required class="form-input">
+                        <p class="form-hint">Đầu giờ chụp sau x phút từ giờ bắt đầu; cuối giờ tính từ x phút trước giờ kết thúc, chụp đúng lúc kết thúc.</p>
                     </div>
                     <div class="form-group">
                         <label for="sch-count-input">Sĩ số chuẩn</label>

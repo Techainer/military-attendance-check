@@ -20,7 +20,7 @@ DEFAULT_WINDOW_MINS = 5
 # cửa sổ) — tester phản hồi ảnh chụp giữa cửa sổ dễ chụp thiếu người tới muộn.
 # Không có khung nào trong đoạn cuối này (vd. camera rớt đúng lúc) thì rơi về
 # khung tốt nhất trong toàn cửa sổ, còn hơn không có bằng chứng.
-ATTENDANCE_EVIDENCE_TAIL_S = float(os.environ.get("ATTENDANCE_EVIDENCE_TAIL_S", "30"))
+ATTENDANCE_EVIDENCE_TAIL_S = float(os.environ.get("ATTENDANCE_EVIDENCE_TAIL_S", "5"))
 # Ca chưa gán camera thì thuộc về camera mặc định
 DEFAULT_CAMERA_ID = "cam_01"
 # Số lượt quét tối thiểu để coi là có mặt (chống nhận nhầm 1 frame)

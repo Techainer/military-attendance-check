@@ -194,6 +194,29 @@ out_far = _detector_with_ghost(ghost, (900, 900, 980, 980), frame_shape=(1000, 1
 check("box mới ở xa hẳn, không liên quan -> vẫn GIỮ 'ma', không bỏ nhầm sĩ số",
       10 in out_far["track_ids"] and len(out_far["boxes"]) == 2, str(out_far))
 
+# ------------------------------------------- box lồng trong box (1 người tách đôi)
+print("\n[2b'] Box nhỏ lồng gần trọn trong box lớn (YOLO tách 1 người thành 2) -> bỏ box nhỏ")
+
+nested = [_FakeResult(_FakeBoxes([
+    _FakeBox([100, 100, 200, 400], 0.8),   # cả người (đứng)
+    _FakeBox([110, 110, 190, 250], 0.6),   # nửa thân trên, nằm trọn trong box trên
+    _FakeBox([300, 100, 400, 400], 0.9),   # người khác, đứng cạnh
+], _IdsTensor([1, 2, 3])))]
+det_nested = _bare_detector(nested)
+out_nested = det_nested.detect_persons(np.zeros((500, 500, 3), dtype=np.uint8))
+check("box nửa thân lồng trong box cả người -> chỉ còn 2 người, giữ box lớn",
+      out_nested["track_ids"] == [1, 3] and out_nested["count"] == 2, str(out_nested))
+check("track của box bị bỏ không còn trong bộ nhớ che khuất (không hiện lại thành 'ma')",
+      2 not in det_nested._tracks, str(list(det_nested._tracks)))
+
+side_by_side = [_FakeResult(_FakeBoxes([
+    _FakeBox([100, 100, 200, 300], 0.9),
+    _FakeBox([160, 120, 260, 320], 0.9),   # chồng 40% bề ngang — 2 người ngồi sát nhau
+], _IdsTensor([1, 2])))]
+out_side = _bare_detector(side_by_side).detect_persons(np.zeros((500, 500, 3), dtype=np.uint8))
+check("2 người ngồi sát, chồng một phần (không lồng) -> vẫn đủ 2",
+      out_side["count"] == 2, str(out_side))
+
 # ----------------------------------------- sĩ số trong vùng đếm theo track duy nhất
 print("\n[2c] person_count: không đếm đôi track trùng / 'ma' đè lên box đang thấy")
 

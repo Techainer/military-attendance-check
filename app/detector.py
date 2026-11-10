@@ -33,6 +33,37 @@ def _iou(a, b) -> float:
     return inter / union if union > 0 else 0.0
 
 
+# Box nhỏ nằm gần trọn trong box lớn hơn (tỉ lệ diện tích box nhỏ bị box lớn phủ
+# >= ngưỡng này) thì coi là CÙNG một người bị YOLO tách đôi (box nửa thân trên
+# lồng trong box cả người). NMS theo IoU không bắt được ca này vì box nhỏ lồng
+# trong box to cho IoU thấp.
+YOLO_CONTAIN_THR = float(os.environ.get("YOLO_CONTAIN_THR", "0.8"))
+
+
+def _containment(small, big) -> float:
+    """Phần diện tích của ``small`` nằm trong ``big`` (0..1)."""
+    ax1, ay1, ax2, ay2 = small
+    bx1, by1, bx2, by2 = big
+    iw = max(0, min(ax2, bx2) - max(ax1, bx1))
+    ih = max(0, min(ay2, by2) - max(ay1, by1))
+    area = max(1, (ax2 - ax1) * (ay2 - ay1))
+    return (iw * ih) / area
+
+
+def _contained_indices(boxes, thr: float = YOLO_CONTAIN_THR) -> set:
+    """Chỉ số các box nằm gần trọn trong một box khác lớn hơn — cần bỏ đi."""
+    areas = [max(0, (b[2] - b[0]) * (b[3] - b[1])) for b in boxes]
+    drop = set()
+    order = sorted(range(len(boxes)), key=lambda i: areas[i], reverse=True)
+    for pos, i in enumerate(order):
+        if i in drop:
+            continue
+        for j in order[pos + 1:]:
+            if j not in drop and _containment(boxes[j], boxes[i]) >= thr:
+                drop.add(j)
+    return drop
+
+
 # Mặc định của ultralytics/cfg/trackers/bytetrack.yaml — chép lại để chỉnh track_buffer
 # mà không đụng file trong package (tránh mất khi cập nhật ultralytics).
 _BYTETRACK_DEFAULTS = {
@@ -188,6 +219,8 @@ class PersonDetector:
         for b in boxes:
             if _iou(ghost_box, b) >= self.HOLD_DUPLICATE_IOU_LOOSE:
                 return True
+            if _containment(ghost_box, b) >= YOLO_CONTAIN_THR or _containment(b, ghost_box) >= YOLO_CONTAIN_THR:
+                return True
             bx1, by1, bx2, by2 = b
             bcx, bcy = (bx1 + bx2) / 2.0, (by1 + by2) / 2.0
             center_dist = ((bcx - gcx) ** 2 + (bcy - gcy) ** 2) ** 0.5
@@ -255,6 +288,18 @@ class PersonDetector:
                 boxes.append(bbox)
                 confidences.append(conf)
                 track_ids.append(tid)
+
+        # Bỏ box lồng trong box khác (1 người bị tách thành 2 box). Track của
+        # box bị bỏ cũng xoá khỏi bộ nhớ che khuất để không hiện lại thành "ma".
+        drop = _contained_indices(boxes)
+        if drop:
+            for i in drop:
+                if track_ids[i] is not None and track_ids[i] >= 0:
+                    self._tracks.pop(track_ids[i], None)
+            keep = [i for i in range(len(boxes)) if i not in drop]
+            boxes = [boxes[i] for i in keep]
+            confidences = [confidences[i] for i in keep]
+            track_ids = [track_ids[i] for i in keep]
 
         # Giữ lại các track vừa biến mất (bị che) đủ tin cậy
         occluded = [False] * len(boxes)
