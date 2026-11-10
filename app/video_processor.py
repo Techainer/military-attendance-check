@@ -343,6 +343,29 @@ IDENTITY_BIND_SCORE = 0.7
 # hơn người đang khoá, mới được THU HỒI và gán lại — chống sửa nhầm chỉ vì một
 # lượt nhận nhầm ngẫu nhiên, nhưng vẫn sửa được lỗi khoá sai lúc mới vào khung.
 IDENTITY_REVOKE_HITS = int(os.environ.get("IDENTITY_REVOKE_HITS", "3"))
+# ---- Gộp embedding theo track (FACE_POOL_*) ----
+# Mặt CCTV nhỏ/mờ cho embedding từng khung rất nhiễu: một khung lẻ hiếm khi
+# vượt ngưỡng dù đúng người. Cộng dồn (có trọng số chất lượng) embedding của
+# CÙNG một track qua nhiều khung rồi so bản "gộp" — nhiễu ngẫu nhiên triệt tiêu
+# nhau, phần đặc trưng của người đó cộng dồn lại. Bản gộp ổn định hơn nên dùng
+# ngưỡng thấp hơn một chút, nhưng đòi khoảng cách tới người nhì lớn hơn.
+FACE_POOL_MIN_SAMPLES = int(os.environ.get("FACE_POOL_MIN_SAMPLES", "4"))
+FACE_POOL_THRESHOLD = float(os.environ.get("FACE_POOL_THRESHOLD", "0.36"))
+FACE_POOL_MARGIN = float(os.environ.get("FACE_POOL_MARGIN", "0.08"))
+# Mặt nhỏ hơn ngần này (px) bỏ qua khi gộp — dưới mức đó embedding gần như ngẫu nhiên
+FACE_POOL_MIN_WIDTH = int(os.environ.get("FACE_POOL_MIN_WIDTH", "12"))
+# ---- Tự học mẫu từ camera (FACE_AUTO_ENROLL) ----
+# Track ĐÃ khoá danh tính, khung hiện tại lại khớp rất chắc (điểm cao + cách xa
+# người nhì) -> lưu embedding khung đó làm mẫu "auto" cho quân nhân, tối đa 1
+# mẫu / người / FACE_AUTO_ENROLL_INTERVAL_S. Mẫu auto bị giới hạn số lượng
+# riêng (face_engine.FACE_MAX_AUTO_SAMPLES) và xoá được trong trang Face ID.
+FACE_AUTO_ENROLL = os.environ.get("FACE_AUTO_ENROLL", "1").strip().lower() not in ("0", "false", "")
+FACE_AUTO_ENROLL_SIM = float(os.environ.get("FACE_AUTO_ENROLL_SIM", "0.55"))
+FACE_AUTO_ENROLL_MARGIN = float(os.environ.get("FACE_AUTO_ENROLL_MARGIN", "0.15"))
+FACE_AUTO_ENROLL_MIN_WIDTH = int(os.environ.get("FACE_AUTO_ENROLL_MIN_WIDTH", "24"))
+FACE_AUTO_ENROLL_INTERVAL_S = float(os.environ.get("FACE_AUTO_ENROLL_INTERVAL_S", "300"))
+# Số pixel tối thiểu để lưu mặt chưa xác định cho cán bộ gán tay
+UNKNOWN_FACE_MIN_WIDTH = int(os.environ.get("UNKNOWN_FACE_MIN_WIDTH", "16"))
 # Số vùng người được quét lại khuôn mặt ở độ phân giải cao mỗi khung hình;
 # CPU yếu thì ít lần hơn, lấy từ app.hw theo phần cứng
 MAX_FACE_RESCANS = _HW.max_face_rescans
@@ -385,6 +408,16 @@ if AI_TILING:
 # động, có track, đang điểm danh, hoặc có người trong vùng cấm.
 AI_MOTION_GATING = _env_bool("AI_MOTION_GATING", True)
 AI_IDLE_FPS = int(os.environ.get("AI_IDLE_FPS", "1"))
+
+
+def _box_iou(a, b) -> float:
+    ix = max(0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    if inter <= 0:
+        return 0.0
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0 else 0.0
 
 
 def _bbox_center(bbox) -> Tuple[float, float]:
@@ -895,6 +928,11 @@ class VideoProcessor:
         self.track_identity: Dict[int, dict] = {}
         # track_id -> mốc monotonic lần cuối quét lại mặt (xem _rescan_regions)
         self._last_rescan: Dict[int, float] = {}
+        # track_id -> {"sum": vec, "wsum", "n", "top": [(q, emb, jpeg, width)], "last_seen"}
+        # (gộp embedding theo track, xem FACE_POOL_*)
+        self._track_faces: Dict[int, dict] = {}
+        # person_id -> mốc monotonic lần cuối tự học mẫu (FACE_AUTO_ENROLL)
+        self._last_auto_enroll: Dict[str, float] = {}
 
         # Trạng thái chia sẻ giữa AI task và render task
         self.reader: Optional[FrameSource] = None
@@ -1013,7 +1051,7 @@ class VideoProcessor:
             rf = candidates[fi]
             p_idx = people_idx[pi]
             claimed.add(p_idx)
-            assignments[p_idx] = {"person": rf["person"], "similarity": rf.get("similarity", 0.0)}
+            assignments[p_idx] = {"person": rf["person"], "similarity": rf.get("similarity", 0.0), "face": rf}
             matched_boxes.append(rf["bbox"])
 
         return matched_boxes
@@ -1114,7 +1152,7 @@ class VideoProcessor:
                 del self._last_rescan[old]
         return [region for _waited, _w, _tid, region in chosen]
 
-    def _remember_identity(self, track_id, person, similarity, now_mono) -> None:
+    def _remember_identity(self, track_id, person, similarity, now_mono, force_bind: bool = False) -> None:
         """Cộng dồn bằng chứng nhận diện cho một track; khoá cứng khi đủ điểm.
 
         Sau khi đã khoá, một người KHÁC vẫn được phép THAY THẾ nếu khớp đủ
@@ -1134,6 +1172,10 @@ class VideoProcessor:
         entry["scores"][pid] = entry["scores"].get(pid, 0.0) + max(0.1, float(similarity))
         entry["hits"][pid] = entry["hits"].get(pid, 0) + 1
 
+        if entry["person"] is None and force_bind:
+            # Bằng chứng đã gộp từ nhiều khung (FACE_POOL_*) — đủ để khoá ngay
+            entry["person"] = person
+            return
         if entry["person"] is None:
             best_pid = max(entry["scores"], key=entry["scores"].get)
             if entry["scores"][best_pid] >= IDENTITY_BIND_SCORE:
@@ -1174,6 +1216,127 @@ class VideoProcessor:
         # chưa từng nhận diện, không kế thừa danh tính + điểm số cũ.
         for tid in [t for t, e in self.track_identity.items() if now_mono - e["last_seen"] > IDENTITY_TTL_SECONDS]:
             del self.track_identity[tid]
+        for tid in [t for t, e in self._track_faces.items() if now_mono - e["last_seen"] > IDENTITY_TTL_SECONDS]:
+            del self._track_faces[tid]
+
+    # ---------- gộp embedding theo track / mặt chưa xác định / tự học ----------
+
+    @staticmethod
+    def _faces_to_people(faces, person_boxes, indices) -> Dict[int, dict]:
+        """Gắn MỌI khuôn mặt (kể cả chưa nhận ra) vào box người nhỏ nhất chứa
+        tâm mặt. Box chứa từ 2 mặt trở lên thì bỏ qua — không chắc mặt nào của
+        người đó, gộp nhầm mặt người bên cạnh vào track còn tệ hơn bỏ một khung."""
+        # Cùng một mặt có thể bị bắt 2 lần (quét cả khung + quét lại vùng người):
+        # gộp các mặt chồng lấn nhiều, giữ bản to nhất (quét lại = rõ hơn).
+        uniq: list = []
+        for rf in sorted((f for f in faces if f.get("_emb") is not None),
+                         key=lambda f: -(f["bbox"][2] - f["bbox"][0])):
+            if all(_box_iou(rf["bbox"], u["bbox"]) < 0.3 for u in uniq):
+                uniq.append(rf)
+        per_box: Dict[int, list] = {}
+        for rf in uniq:
+            fcx, fcy = _bbox_center(rf["bbox"])
+            best, best_area = None, None
+            for p_idx in indices:
+                px1, py1, px2, py2 = person_boxes[p_idx]
+                if px1 - 20 <= fcx <= px2 + 20 and py1 - 20 <= fcy <= py2 + 40:
+                    area = max(1, (px2 - px1) * (py2 - py1))
+                    if best_area is None or area < best_area:
+                        best, best_area = p_idx, area
+            if best is not None:
+                per_box.setdefault(best, []).append(rf)
+        return {p_idx: rows[0] for p_idx, rows in per_box.items() if len(rows) == 1}
+
+    @staticmethod
+    def _face_jpeg(frame, bbox) -> Optional[bytes]:
+        """Ảnh mặt (nới rộng, phóng to tối thiểu 112px) để cán bộ nhìn và gán tay."""
+        h_img, w_img = frame.shape[:2]
+        x1, y1, x2, y2 = [int(v) for v in bbox]
+        pad = int(max(x2 - x1, y2 - y1) * 0.4)
+        crop = frame[max(0, y1 - pad):min(h_img, y2 + pad), max(0, x1 - pad):min(w_img, x2 + pad)]
+        if crop.size == 0:
+            return None
+        if crop.shape[0] < 112:
+            scale = 112.0 / crop.shape[0]
+            crop = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+        ok, buf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        return buf.tobytes() if ok else None
+
+    def _pool_track_face(self, tid, face, frame, now_mono) -> Optional[dict]:
+        """Cộng embedding khung này vào bản gộp của track (trọng số = chất lượng)."""
+        width = int(face.get("width") or (face["bbox"][2] - face["bbox"][0]))
+        if tid is None or tid < 0 or width < FACE_POOL_MIN_WIDTH:
+            return None
+        emb = face["_emb"]
+        quality = float(face.get("det_score", 0.5)) * min(1.0, width / 48.0)
+        entry = self._track_faces.get(tid)
+        if entry is None or entry["sum"].shape != emb.shape:
+            entry = {"sum": np.zeros_like(emb, dtype=np.float32), "wsum": 0.0, "n": 0, "top": [],
+                     "last_seen": now_mono}
+            self._track_faces[tid] = entry
+        entry["sum"] += quality * emb
+        entry["wsum"] += quality
+        entry["n"] += 1
+        entry["last_seen"] = now_mono
+        top = entry["top"]
+        if len(top) < 3 or quality > top[-1][0]:
+            jpeg = self._face_jpeg(frame, face["bbox"])
+            if jpeg is not None:
+                top.append((quality, emb, jpeg, width))
+                top.sort(key=lambda t: -t[0])
+                del top[3:]
+        return entry
+
+    def _update_face_pools(self, faces, person_boxes, track_ids, frame, now_mono) -> int:
+        """Gộp embedding theo track; track chưa định danh mà bản gộp khớp đủ chắc
+        thì khoá danh tính; còn lại đưa vào danh sách "mặt chưa xác định".
+        Trả số track vừa được định danh nhờ bản gộp."""
+        attached = self._faces_to_people(faces, person_boxes, range(len(person_boxes)))
+        bound = 0
+        for p_idx, face in attached.items():
+            tid = track_ids[p_idx] if p_idx < len(track_ids) else None
+            entry = self._pool_track_face(tid, face, frame, now_mono)
+            if entry is None:
+                continue
+            ident = self.track_identity.get(tid)
+            if ident is not None and ident.get("person") is not None:
+                self.face_engine.unknown_log.drop_track(self.camera_id, tid)
+                continue
+            if entry["n"] >= FACE_POOL_MIN_SAMPLES:
+                pooled = entry["sum"] / (np.linalg.norm(entry["sum"]) or 1.0)
+                person, sim, _margin = self.face_engine.match_embedding(
+                    pooled, FACE_POOL_THRESHOLD, FACE_POOL_MARGIN)
+                if person is not None:
+                    self._remember_identity(tid, person, sim, now_mono, force_bind=True)
+                    self.face_engine.unknown_log.drop_track(self.camera_id, tid)
+                    bound += 1
+                    continue
+            if entry["top"] and entry["top"][0][3] >= UNKNOWN_FACE_MIN_WIDTH:
+                self.face_engine.unknown_log.upsert(self.camera_id, tid, entry["top"])
+        return bound
+
+    def _auto_enroll_candidates(self, assignments, track_ids, now_mono) -> list:
+        """(person_id, embedding) đủ điều kiện tự học mẫu (xem FACE_AUTO_ENROLL)."""
+        if not FACE_AUTO_ENROLL:
+            return []
+        out = []
+        for p_idx, info in assignments.items():
+            face = info.get("face") or {}
+            pid = (info.get("person") or {}).get("id")
+            tid = track_ids[p_idx] if p_idx < len(track_ids) else None
+            ident = self.track_identity.get(tid) if tid is not None else None
+            if (pid is None or face.get("_emb") is None or ident is None
+                    or (ident.get("person") or {}).get("id") != pid):
+                continue
+            if (face.get("similarity", 0.0) < FACE_AUTO_ENROLL_SIM
+                    or face.get("margin", 0.0) < FACE_AUTO_ENROLL_MARGIN
+                    or int(face.get("width") or 0) < FACE_AUTO_ENROLL_MIN_WIDTH):
+                continue
+            if now_mono - self._last_auto_enroll.get(pid, -1e9) < FACE_AUTO_ENROLL_INTERVAL_S:
+                continue
+            self._last_auto_enroll[pid] = now_mono
+            out.append((pid, face["_emb"]))
+        return out
 
     # ---------- pub/sub kết quả AI thô ----------
 
@@ -1412,6 +1575,7 @@ class VideoProcessor:
 
                 # 4b. Người còn lại (vùng điểm danh + vùng cấm): cắt riêng vùng ảnh
                 # rồi quét lại.
+                rescanned = []
                 regions = self._rescan_regions(person_boxes, priority_indices, claimed_boxes, frame.shape,
                                                track_ids, time.monotonic())
                 if regions:
@@ -1427,6 +1591,18 @@ class VideoProcessor:
                 live_matches = len(assignments)
                 for p_idx, info in assignments.items():
                     self._remember_identity(track_ids[p_idx], info["person"], info["similarity"], now_mono)
+
+                # 4d. Gộp embedding theo track (mặt nhỏ/mờ: từng khung không đủ
+                #     điểm nhưng gộp nhiều khung thì đủ) + mặt chưa xác định + tự học.
+                try:
+                    self._update_face_pools(list(recognized_faces) + list(rescanned), person_boxes,
+                                            track_ids, frame, now_mono)
+                    for pid, emb in self._auto_enroll_candidates(assignments, track_ids, now_mono):
+                        added = await asyncio.to_thread(self.face_engine.add_samples, pid, [emb], "auto")
+                        if added:
+                            print(f"[Camera] {self.camera_id}: tự học thêm 1 mẫu khuôn mặt cho {pid}")
+                except Exception as e:
+                    print(f"[Camera] {self.camera_id}: lỗi gộp/tự học khuôn mặt: {e}")
 
                 person_to_face_match = {p_idx: info["person"] for p_idx, info in assignments.items()}
                 claimed_person_ids = {info["person"]["id"] for info in assignments.values()}
@@ -1713,6 +1889,7 @@ class VideoProcessor:
 
         self.detector.reset()
         self.track_identity.clear()
+        self._track_faces.clear()
         # ROI/nền động gắn với cỡ khung + vùng của luồng CŨ; luồng mới có thể
         # đổi camera nguồn (cỡ khung khác) nên bỏ hết, tính lại từ đầu.
         self._roi_cache_key = None

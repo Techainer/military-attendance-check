@@ -3058,6 +3058,19 @@ a.btn-clip-ctrl {
 /* ≤600: mỗi trang vẫn 4 camera, xếp 1 cột cho vừa màn hình hẹp — pager/vuốt
    ngang đổi trang vẫn chạy. Đặt CUỐI file để đè rule .camera-wall gốc (cùng độ
    ưu tiên, rule sau thắng); hàng tự co theo số camera, không chừa hàng trống. */
+/* ---- Mặt chưa xác định từ camera (trang Đăng ký khuôn mặt) ---- */
+.unknown-faces-card { margin-top: 20px; }
+.unknown-faces-hint { margin: 0 0 12px; }
+.unknown-faces-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.unknown-face { border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px; background: #fff; display: flex; flex-direction: column; gap: 8px; }
+.unknown-face-imgs { display: flex; gap: 6px; }
+.unknown-face-imgs img { width: 64px; height: 64px; object-fit: cover; border-radius: 6px; background: #0b1220; image-rendering: auto; }
+.unknown-face-meta { font-size: 12px; color: #475569; }
+.unknown-face-actions { display: flex; gap: 6px; }
+.unknown-face-actions select { flex: 1; min-width: 0; padding: 6px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; }
+.btn-sm { padding: 6px 12px !important; font-size: 13px !important; width: auto !important; margin: 0 !important; }
+.sample-count { color: #047857; font-weight: 600; }
+
 @media (max-width: 600px) {
     .camera-wall {
         grid-template-columns: minmax(0, 1fr);

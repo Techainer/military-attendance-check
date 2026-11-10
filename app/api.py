@@ -487,10 +487,79 @@ async def register_face(
         return {
             "status": "success",
             "message": f"Đăng ký Face ID thành công cho {rank} {name} ({military_id})",
-            "data": {k: v for k, v in registered_person.items() if k != "embedding"}
+            "data": face_engine.public_view(registered_person)
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# ---- Mẫu khuôn mặt bổ sung (từ camera / ảnh thêm) ----
+# Camera giám sát đặt cao cho mặt rất nhỏ/mờ; ảnh đăng ký chụp gần thì khác "miền
+# ảnh" -> độ tương đồng thấp dù đúng người. Gán vài mặt chụp từ CHÍNH camera cho
+# quân nhân giúp nhận diện ổn định hơn hẳn (xem app/face_engine.py).
+
+@app.get("/api/faces/unknown")
+async def list_unknown_faces(_qtht=Depends(require_qtht)):
+    """Các khuôn mặt chưa xác định gần đây (theo track), mới nhất trước."""
+    items = face_engine.unknown_log.list()
+    return {"status": "success", "total": len(items), "data": items}
+
+
+@app.get("/api/faces/unknown/{uid}/image")
+async def unknown_face_image(uid: str, i: int = 0, _qtht=Depends(require_qtht)):
+    item = face_engine.unknown_log.get(uid)
+    if item is None or not item.get("samples"):
+        raise HTTPException(status_code=404, detail="Không còn ảnh khuôn mặt này")
+    samples = item["samples"]
+    jpeg = samples[max(0, min(i, len(samples) - 1))][2]
+    return Response(content=jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/faces/{person_id}/samples")
+async def add_face_samples(
+    person_id: str,
+    unknown_id: Optional[str] = Form(None),
+    image: Optional[UploadFile] = File(None),
+    _qtht=Depends(require_qtht),
+):
+    """Thêm mẫu cho quân nhân: từ một mặt chưa xác định (``unknown_id``) hoặc
+    từ ảnh tải lên."""
+    if unknown_id:
+        item = face_engine.unknown_log.get(unknown_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Khuôn mặt này đã hết hạn, vui lòng chọn lại")
+        embeddings = [smp[1] for smp in item["samples"]]
+        source = "camera"
+    elif image is not None:
+        frame = cv2.imdecode(np.frombuffer(await image.read(), np.uint8), cv2.IMREAD_COLOR)
+        if frame is None:
+            raise HTTPException(status_code=400, detail="Ảnh không hợp lệ")
+        try:
+            embeddings = [face_engine.sample_from_image(frame)]
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        source = "upload"
+    else:
+        raise HTTPException(status_code=400, detail="Cần chọn một khuôn mặt hoặc tải ảnh lên")
+
+    try:
+        added = face_engine.add_samples(person_id, embeddings, source)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Không tìm thấy quân nhân")
+    if unknown_id:
+        face_engine.unknown_log.pop(unknown_id)
+    return {"status": "success", "added": added,
+            "message": f"Đã thêm {added} mẫu khuôn mặt" if added else "Mẫu này đã có sẵn, không thêm"}
+
+
+@app.delete("/api/faces/{person_id}/samples")
+async def clear_face_samples(person_id: str, source: Optional[str] = Query(None), _qtht=Depends(require_qtht)):
+    """Xoá mẫu bổ sung (tất cả, hoặc chỉ một nguồn vd. ``auto``)."""
+    try:
+        removed = face_engine.clear_samples(person_id, source)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Không tìm thấy quân nhân")
+    return {"status": "success", "removed": removed}
 
 
 @app.delete("/api/faces/{person_id}")

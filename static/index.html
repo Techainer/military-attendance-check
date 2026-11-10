@@ -430,6 +430,25 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- Mặt chưa xác định từ camera: gán tay -> mẫu bổ sung cùng "miền ảnh" camera -->
+                    <div class="glass-card unknown-faces-card">
+                        <div class="card-header personnel-header">
+                            <div class="title-with-count">
+                                <h2>MẶT CHƯA XÁC ĐỊNH TỪ CAMERA</h2>
+                                <span class="count-badge" id="unknown-faces-count">0</span>
+                            </div>
+                            <button type="button" class="btn-toolbar-neutral" onclick="loadUnknownFaces()">↻ Làm mới</button>
+                        </div>
+                        <p class="form-hint unknown-faces-hint">
+                            Camera đặt cao nên mặt rất nhỏ, khác ảnh đăng ký chụp gần. Chọn đúng quân nhân cho các mặt dưới đây
+                            để thêm <strong>mẫu chụp từ chính camera</strong> — hệ thống sẽ nhận ra người đó ổn định hơn ở các lần sau.
+                            Ảnh chỉ lưu tạm trong bộ nhớ (tối đa 6 giờ).
+                        </p>
+                        <div id="unknown-faces-grid" class="unknown-faces-grid"></div>
+                        <div id="unknown-faces-empty" class="empty-table-state">Chưa có khuôn mặt chưa xác định nào gần đây</div>
+                    </div>
+                    <input type="file" id="face-sample-file" accept="image/*" hidden onchange="uploadFaceSample(event)">
                 </section>
 
                 <!-- VIEW 3: QUẢN LÝ VÙNG & LUẬT (F-06) -->

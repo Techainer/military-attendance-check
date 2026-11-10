@@ -4,6 +4,9 @@ import os
 import json
 import base64
 import threading
+import time
+import uuid
+from collections import OrderedDict
 import numpy as np
 import cv2
 from pathlib import Path
@@ -11,6 +14,98 @@ from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 
 from app import hw
+
+# Mẫu khuôn mặt BỔ SUNG cho mỗi quân nhân (ngoài ảnh đăng ký chính). Ảnh đăng ký
+# là ảnh chụp gần, nét; còn camera giám sát đặt cao cho mặt chỉ vài chục pixel,
+# mờ, nghiêng — so hai thứ khác hẳn nhau thì độ tương đồng rất thấp dù đúng
+# người. Thêm mẫu lấy từ CHÍNH camera (gán tay từ "mặt chưa xác định" hoặc tự
+# học khi đã nhận ra rất chắc chắn) kéo hai phía về cùng một "miền ảnh".
+FACE_MAX_SAMPLES = int(os.environ.get("FACE_MAX_SAMPLES", "30"))
+FACE_MAX_AUTO_SAMPLES = int(os.environ.get("FACE_MAX_AUTO_SAMPLES", "10"))
+# Mẫu mới gần như trùng một mẫu đã có (cos >= ngưỡng) thì không thêm — không
+# thêm thông tin, chỉ làm phình ma trận.
+FACE_SAMPLE_DEDUP_SIM = 0.95
+UNKNOWN_FACE_LOG_SIZE = int(os.environ.get("UNKNOWN_FACE_LOG_SIZE", "60"))
+UNKNOWN_FACE_TTL_S = float(os.environ.get("UNKNOWN_FACE_TTL_S", str(6 * 3600)))
+
+
+class UnknownFaceLog:
+    """Các khuôn mặt CHƯA xác định gần đây (theo track), để cán bộ gán tay vào
+    đúng quân nhân -> trở thành mẫu bổ sung lấy từ chính camera.
+
+    Chỉ giữ trong RAM (mất khi khởi động lại — chủ đích, không lưu ảnh người
+    lạ lâu dài). Mỗi track một mục, giữ tối đa ``top_k`` khung tốt nhất.
+    """
+
+    def __init__(self, size: int = UNKNOWN_FACE_LOG_SIZE, ttl_s: float = UNKNOWN_FACE_TTL_S, top_k: int = 3):
+        self.size = size
+        self.ttl_s = ttl_s
+        self.top_k = top_k
+        self._items: "OrderedDict[str, dict]" = OrderedDict()
+        self._by_track: Dict[Tuple[str, int], str] = {}
+        self._lock = threading.Lock()
+
+    def upsert(self, camera_id: str, track_id: int, samples: List[Tuple[float, np.ndarray, bytes, int]]) -> None:
+        """``samples`` = [(quality, norm_emb, jpeg, face_width)], tốt nhất trước."""
+        if not samples:
+            return
+        now = time.time()
+        with self._lock:
+            key = (camera_id, int(track_id))
+            uid = self._by_track.get(key)
+            item = self._items.get(uid) if uid else None
+            if item is None:
+                uid = uuid.uuid4().hex[:12]
+                item = {"id": uid, "camera_id": camera_id, "track_id": int(track_id), "first_seen": now}
+                self._by_track[key] = uid
+            item["samples"] = list(samples[: self.top_k])
+            item["last_seen"] = now
+            self._items[uid] = item
+            self._items.move_to_end(uid)
+            self._evict(now)
+
+    def drop_track(self, camera_id: str, track_id: int) -> None:
+        with self._lock:
+            uid = self._by_track.pop((camera_id, int(track_id)), None)
+            if uid:
+                self._items.pop(uid, None)
+
+    def _evict(self, now: float) -> None:
+        for uid in [u for u, it in self._items.items() if now - it["last_seen"] > self.ttl_s]:
+            self._drop(uid)
+        while len(self._items) > self.size:
+            self._drop(next(iter(self._items)))
+
+    def _drop(self, uid: str) -> None:
+        item = self._items.pop(uid, None)
+        if item:
+            self._by_track.pop((item["camera_id"], item["track_id"]), None)
+
+    def list(self) -> List[Dict]:
+        with self._lock:
+            self._evict(time.time())
+            out = []
+            for it in reversed(self._items.values()):
+                q, _emb, _jpg, width = it["samples"][0]
+                out.append({
+                    "id": it["id"], "camera_id": it["camera_id"], "track_id": it["track_id"],
+                    "first_seen": datetime.fromtimestamp(it["first_seen"]).isoformat(timespec="seconds"),
+                    "last_seen": datetime.fromtimestamp(it["last_seen"]).isoformat(timespec="seconds"),
+                    "face_width": int(width), "quality": round(float(q), 2),
+                    "samples": len(it["samples"]),
+                })
+            return out
+
+    def get(self, uid: str) -> Optional[dict]:
+        with self._lock:
+            return self._items.get(uid)
+
+    def pop(self, uid: str) -> Optional[dict]:
+        with self._lock:
+            item = self._items.get(uid)
+            if item:
+                self._drop(uid)
+            return item
 
 
 class FaceEngine:
@@ -66,6 +161,7 @@ class FaceEngine:
         # khác cùng lúc — khoá lại để tránh đọc nửa file hoặc dựng ma trận từ dữ liệu
         # đang bị ghi đè.
         self._db_lock = threading.Lock()
+        self.unknown_log = UnknownFaceLog()
 
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.avatars_dir.mkdir(parents=True, exist_ok=True)
@@ -341,8 +437,7 @@ class FaceEngine:
                 if p.get("rank") != rank:
                     continue
 
-            person_view = {k: v for k, v in p.items() if k != "embedding"}
-            results.append(person_view)
+            results.append(self.public_view(p))
 
         return results
 
@@ -366,8 +461,159 @@ class FaceEngine:
                         person[k] = str(updates[k]).strip()
                 person["updated_at"] = datetime.now().isoformat()
                 self._save_database()
-                return {k: v for k, v in person.items() if k != "embedding"}
+                return self.public_view(person)
         return None
+
+    # ---------- kho mẫu (ảnh đăng ký + mẫu bổ sung) ----------
+
+    @staticmethod
+    def _person_ref(p: Dict) -> Dict:
+        return {
+            "id": p.get("id"),
+            "name": p.get("name"),
+            "military_id": p.get("military_id"),
+            "rank": p.get("rank"),
+            "unit": p.get("unit"),
+            "avatar_path": p.get("avatar_path"),
+        }
+
+    @staticmethod
+    def public_view(p: Dict) -> Dict:
+        """Bản ghi quân nhân cho API: bỏ embedding (sinh trắc, nặng), mẫu bổ sung
+        chỉ còn số lượng + nguồn."""
+        view = {k: v for k, v in p.items() if k not in ("embedding", "samples")}
+        samples = p.get("samples") or []
+        view["sample_count"] = len(samples)
+        view["sample_sources"] = {
+            src: sum(1 for x in samples if x.get("source") == src)
+            for src in sorted({x.get("source", "?") for x in samples})
+        }
+        return view
+
+    def _gallery(self):
+        """(ma trận mẫu [R,512], chỉ số người của từng hàng [R], danh sách người)
+        — dựng lại chỉ khi CSDL đổi. Mỗi người có 1 hàng ảnh đăng ký + các hàng
+        mẫu bổ sung; điểm của một người = MAX trên các hàng của người đó."""
+        self._load_database()
+        # Khoá lại vì thread camera khác hoặc request đăng ký có thể đang đổi
+        # registered_faces/_matrix_cache cùng lúc (đặt lại None trong _save_database).
+        with self._db_lock:
+            if self._matrix_cache is None:
+                rows, owners, persons, stale = [], [], [], []
+                for p in self.registered_faces:
+                    if not p.get("embedding"):
+                        continue
+                    # Mỗi model sinh ra một không gian vector riêng. Đem embedding của
+                    # model cũ so với model đang chạy chỉ cho ra số ngẫu nhiên, dễ nhận
+                    # nhầm người, nên phải loại ra thay vì dùng bừa.
+                    if p.get("embedding_model") != self.model_name:
+                        stale.append(p.get("name") or p.get("military_id") or "?")
+                        continue
+                    pidx = len(persons)
+                    persons.append(p)
+                    rows.append(p["embedding"])
+                    owners.append(pidx)
+                    for smp in p.get("samples") or []:
+                        if smp.get("embedding") and smp.get("model", self.model_name) == self.model_name:
+                            rows.append(smp["embedding"])
+                            owners.append(pidx)
+
+                if stale:
+                    print(f"[FaceEngine] BỎ QUA {len(stale)} quân nhân đăng ký bằng model khác "
+                          f"'{self.model_name}': {', '.join(stale[:10])}"
+                          f"{'...' if len(stale) > 10 else ''}. Cần đăng ký lại khuôn mặt "
+                          f"(hoặc đặt FACE_MODEL về model cũ).")
+                if not rows:
+                    return None
+                self._matrix_cache = (np.array(rows, dtype=np.float32), np.array(owners, dtype=np.int64), persons)
+            return self._matrix_cache
+
+    @staticmethod
+    def _match(norm_emb: np.ndarray, gallery, threshold: float, margin_req: float):
+        """(người khớp hoặc None, điểm tốt nhất, khoảng cách tới NGƯỜI khớp nhì).
+
+        Khoảng cách "mập mờ" tính giữa các NGƯỜI khác nhau, không giữa các mẫu —
+        hai mẫu của cùng một người đương nhiên gần nhau, không được coi là mập mờ.
+        """
+        matrix, owners, persons = gallery
+        sims = matrix @ norm_emb
+        per_person = np.full(len(persons), -1.0, dtype=np.float32)
+        np.maximum.at(per_person, owners, sims)
+        best_idx = int(np.argmax(per_person))
+        best = float(per_person[best_idx])
+        second = float(np.partition(per_person, -2)[-2]) if len(persons) > 1 else -1.0
+        margin = best - second
+        if best >= threshold and margin >= margin_req:
+            return persons[best_idx], best, margin
+        return None, best, margin
+
+    def match_embedding(self, norm_emb: np.ndarray, threshold: float, margin_req: float):
+        """So một embedding (vd. embedding GỘP của cả track) với kho mẫu.
+        Trả (person_ref | None, điểm, khoảng cách tới người nhì)."""
+        gallery = self._gallery()
+        if gallery is None or norm_emb is None:
+            return None, 0.0, 0.0
+        person, best, margin = self._match(np.asarray(norm_emb, dtype=np.float32), gallery, threshold, margin_req)
+        return (self._person_ref(person) if person is not None else None), best, margin
+
+    def add_samples(self, person_id: str, embeddings: List[np.ndarray], source: str) -> int:
+        """Thêm mẫu bổ sung cho một quân nhân. ``source``: "camera" (gán tay từ
+        mặt chưa xác định), "upload" (ảnh thêm), "auto" (tự học). Mẫu "auto" bị
+        giới hạn riêng (FIFO) để tự học sai không lấn át mẫu do người gán.
+        Trả số mẫu thực sự được thêm."""
+        self._load_database()
+        added = 0
+        with self._db_lock:
+            person = next((p for p in self.registered_faces
+                           if p.get("id") == person_id or p.get("military_id") == person_id), None)
+            if person is None:
+                raise KeyError(person_id)
+            samples = person.setdefault("samples", [])
+            existing = [np.asarray(x["embedding"], dtype=np.float32) for x in samples if x.get("embedding")]
+            if person.get("embedding"):
+                existing.append(np.asarray(person["embedding"], dtype=np.float32))
+            for emb in embeddings:
+                e = np.asarray(emb, dtype=np.float32)
+                e = e / (np.linalg.norm(e) or 1.0)
+                if existing and max(float(x @ e) for x in existing) >= FACE_SAMPLE_DEDUP_SIM:
+                    continue
+                samples.append({"embedding": [round(float(v), 6) for v in e], "source": source,
+                                "model": self.model_name, "created_at": datetime.now().isoformat(timespec="seconds")})
+                existing.append(e)
+                added += 1
+            auto = [x for x in samples if x.get("source") == "auto"]
+            while len(auto) > FACE_MAX_AUTO_SAMPLES:
+                samples.remove(auto.pop(0))
+            while len(samples) > FACE_MAX_SAMPLES:
+                # Bỏ mẫu cũ nhất, ưu tiên bỏ mẫu tự học trước
+                victim = next((x for x in samples if x.get("source") == "auto"), samples[0])
+                samples.remove(victim)
+        if added:
+            self._save_database()
+        return added
+
+    def clear_samples(self, person_id: str, source: Optional[str] = None) -> int:
+        """Xoá mẫu bổ sung (tất cả, hoặc chỉ một nguồn). Trả số mẫu đã xoá."""
+        self._load_database()
+        with self._db_lock:
+            person = next((p for p in self.registered_faces
+                           if p.get("id") == person_id or p.get("military_id") == person_id), None)
+            if person is None:
+                raise KeyError(person_id)
+            before = len(person.get("samples") or [])
+            person["samples"] = [x for x in person.get("samples") or []
+                                 if source is not None and x.get("source") != source]
+            removed = before - len(person["samples"])
+        if removed:
+            self._save_database()
+        return removed
+
+    def sample_from_image(self, image: np.ndarray) -> np.ndarray:
+        """Embedding mặt lớn nhất trong ảnh tải lên (để thêm mẫu)."""
+        extracted = self.extract_face_and_embedding(image, enforce_quality=False)
+        if extracted is None:
+            raise ValueError("Không phát hiện được khuôn mặt trong ảnh.")
+        return extracted[0]
 
     def recognize_faces_in_frame(self, frame: np.ndarray) -> List[Dict]:
         """
@@ -383,36 +629,9 @@ class FaceEngine:
         if self.app is None or frame is None or len(self.registered_faces) == 0:
             return []
 
-        # Ma trận embedding chỉ dựng lại khi CSDL đổi, không dựng mỗi frame. Khoá lại
-        # vì thread camera khác hoặc request đăng ký có thể đang đổi registered_faces/
-        # _matrix_cache cùng lúc (đặt lại None trong _save_database).
-        with self._db_lock:
-            if self._matrix_cache is None:
-                reg_embeddings = []
-                reg_persons = []
-                stale = []
-                for p in self.registered_faces:
-                    if not ("embedding" in p and p["embedding"] and len(p["embedding"]) > 0):
-                        continue
-                    # Mỗi model sinh ra một không gian vector riêng. Đem embedding của
-                    # model cũ so với model đang chạy chỉ cho ra số ngẫu nhiên, dễ nhận
-                    # nhầm người, nên phải loại ra thay vì dùng bừa.
-                    if p.get("embedding_model") != self.model_name:
-                        stale.append(p.get("name") or p.get("military_id") or "?")
-                        continue
-                    reg_embeddings.append(p["embedding"])
-                    reg_persons.append(p)
-
-                if stale:
-                    print(f"[FaceEngine] BỎ QUA {len(stale)} quân nhân đăng ký bằng model khác "
-                          f"'{self.model_name}': {', '.join(stale[:10])}"
-                          f"{'...' if len(stale) > 10 else ''}. Cần đăng ký lại khuôn mặt "
-                          f"(hoặc đặt FACE_MODEL về model cũ).")
-                if not reg_embeddings:
-                    return []
-                self._matrix_cache = (np.array(reg_embeddings, dtype=np.float32), reg_persons)
-
-            reg_matrix, reg_persons = self._matrix_cache  # Shape: (N, 512)
+        gallery = self._gallery()
+        if gallery is None:
+            return []
 
         all_detected_faces = []
 
@@ -434,46 +653,30 @@ class FaceEngine:
             if emb is None:
                 continue
 
-            norm_emb = emb / np.linalg.norm(emb)  # Shape: (512,)
-            sims = np.dot(reg_matrix, norm_emb)
-            best_idx = int(np.argmax(sims))
-            best_sim = float(sims[best_idx])
+            norm_emb = (emb / np.linalg.norm(emb)).astype(np.float32)  # Shape: (512,)
+            width = int(bx2 - bx1)
 
             # Mặt càng nhỏ, embedding càng nhiễu -> siết ngưỡng lại
             threshold = self.similarity_threshold
-            if (bx2 - bx1) < self.SMALL_FACE_PIXELS:
+            if width < self.SMALL_FACE_PIXELS:
                 threshold += self.SMALL_FACE_PENALTY
 
-            # Người khớp nhì quá sát người khớp nhất thì coi như không phân biệt được
-            ambiguous = False
-            if len(sims) > 1:
-                second = float(np.partition(sims, -2)[-2])
-                ambiguous = (best_sim - second) < self.AMBIGUITY_MARGIN
-
-            if best_sim >= threshold and not ambiguous:
-                matched_person = reg_persons[best_idx]
-                results.append({
-                    "bbox": [int(bx1), int(by1), int(bx2), int(by2)],
-                    "is_recognized": True,
-                    "similarity": round(best_sim, 2),
-                    "det_score": face_dict["det_score"],
-                    "person": {
-                        "id": matched_person.get("id"),
-                        "name": matched_person.get("name"),
-                        "military_id": matched_person.get("military_id"),
-                        "rank": matched_person.get("rank"),
-                        "unit": matched_person.get("unit"),
-                        "avatar_path": matched_person.get("avatar_path")
-                    }
-                })
-            else:
-                results.append({
-                    "bbox": [int(bx1), int(by1), int(bx2), int(by2)],
-                    "is_recognized": False,
-                    "similarity": round(best_sim, 2),
-                    "det_score": face_dict["det_score"],
-                    "person": None
-                })
+            matched_person, best_sim, margin = self._match(norm_emb, gallery, threshold, self.AMBIGUITY_MARGIN)
+            row = {
+                "bbox": [int(bx1), int(by1), int(bx2), int(by2)],
+                "is_recognized": matched_person is not None,
+                "similarity": round(best_sim, 2),
+                "margin": round(margin, 3),
+                "det_score": face_dict["det_score"],
+                "width": width,
+                # Embedding đã chuẩn hoá — để phía gọi gộp theo track/bổ sung mẫu.
+                # KHÔNG đưa ra API/SSE (mảng numpy, và là dữ liệu sinh trắc).
+                "_emb": norm_emb,
+                "person": None,
+            }
+            if matched_person is not None:
+                row["person"] = self._person_ref(matched_person)
+            results.append(row)
 
         return results
 

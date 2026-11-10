@@ -150,7 +150,7 @@ function switchNavTab(tabName) {
 
     if (tabName === 'registration') {
         if (currentMediaMode === 'webcam') startWebcam();
-        loadRegisteredFaces();
+        loadRegisteredFaces().then(loadUnknownFaces);
     } else {
         stopWebcam();
     }
@@ -1429,6 +1429,90 @@ async function handleFaceRegister(e) {
 window.handleFaceRegister = handleFaceRegister;
 
 
+// ----------------- MẪU KHUÔN MẶT BỔ SUNG -----------------
+let faceSampleTarget = null;
+
+function pickFaceSample(personId) {
+    faceSampleTarget = personId;
+    const input = document.getElementById('face-sample-file');
+    if (input) { input.value = ''; input.click(); }
+}
+window.pickFaceSample = pickFaceSample;
+
+async function uploadFaceSample(ev) {
+    const file = ev.target.files && ev.target.files[0];
+    if (!file || !faceSampleTarget) return;
+    const form = new FormData();
+    form.append('image', file);
+    try {
+        const res = await fetch(`/api/faces/${encodeURIComponent(faceSampleTarget)}/samples`, { method: 'POST', body: form });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Không thêm được mẫu');
+        showToast(data.message, 'success');
+        loadRegisteredFaces();
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+window.uploadFaceSample = uploadFaceSample;
+
+async function loadUnknownFaces() {
+    const grid = document.getElementById('unknown-faces-grid');
+    if (!grid) return;
+    let items = [];
+    try {
+        const res = await fetch('/api/faces/unknown');
+        if (res.ok) items = (await res.json()).data || [];
+    } catch (e) {
+        console.error('Error fetching unknown faces:', e);
+    }
+    document.getElementById('unknown-faces-count').textContent = items.length;
+    document.getElementById('unknown-faces-empty').style.display = items.length ? 'none' : 'block';
+    const options = registeredPersonnel
+        .map(p => `<option value="${esc(p.id)}">${esc(`${p.rank || ''} ${p.name || ''}`.trim())}</option>`)
+        .join('');
+    grid.innerHTML = items.map(it => {
+        const t = new Date(it.last_seen);
+        const when = isNaN(t) ? '' : t.toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' });
+        const imgs = Array.from({ length: it.samples }, (_, i) =>
+            `<img src="/api/faces/unknown/${it.id}/image?i=${i}" alt="Khuôn mặt chưa xác định" loading="lazy">`).join('');
+        return `
+            <div class="unknown-face" data-id="${it.id}">
+                <div class="unknown-face-imgs">${imgs}</div>
+                <div class="unknown-face-meta">${esc(it.camera_id)} · ${when} · mặt ${it.face_width}px</div>
+                <div class="unknown-face-actions">
+                    <select aria-label="Chọn quân nhân"><option value="">— Là ai? —</option>${options}</select>
+                    <button type="button" class="btn-primary-green btn-sm" onclick="assignUnknownFace('${it.id}', this)">Gán</button>
+                </div>
+            </div>`;
+    }).join('');
+}
+window.loadUnknownFaces = loadUnknownFaces;
+
+async function assignUnknownFace(uid, btn) {
+    const card = btn.closest('.unknown-face');
+    const personId = card.querySelector('select').value;
+    if (!personId) { showToast('Chọn quân nhân trước khi gán', 'warning'); return; }
+    const form = new FormData();
+    form.append('unknown_id', uid);
+    btn.disabled = true;
+    try {
+        const res = await fetch(`/api/faces/${encodeURIComponent(personId)}/samples`, { method: 'POST', body: form });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Không gán được');
+        showToast(data.message, 'success');
+        card.remove();
+        loadRegisteredFaces();
+        const left = document.querySelectorAll('#unknown-faces-grid .unknown-face').length;
+        document.getElementById('unknown-faces-count').textContent = left;
+        if (!left) document.getElementById('unknown-faces-empty').style.display = 'block';
+    } catch (e) {
+        showToast(e.message, 'error');
+        btn.disabled = false;
+    }
+}
+window.assignUnknownFace = assignUnknownFace;
+
 // ----------------- REGISTERED PERSONNEL TABLE -----------------
 async function loadRegisteredFaces() {
     try {
@@ -1467,7 +1551,7 @@ function renderPersonnelTable(list) {
         row.onclick = (ev) => { if (!ev.target.closest('.action-btn-group')) editPerson(p.id); };
         row.innerHTML = `
             <td>${avatarHtml}</td>
-            <td><strong>${p.name}</strong></td>
+            <td><strong>${p.name}</strong>${p.sample_count ? `<br><small class="sample-count" title="Mẫu khuôn mặt bổ sung (từ camera / ảnh thêm / tự học)">+${p.sample_count} mẫu</small>` : ''}</td>
             <td><span class="military-id-tag">${p.military_id}</span></td>
             <td>${p.rank || '-'}</td>
             <td>${p.unit || '-'}</td>
@@ -1476,6 +1560,7 @@ function renderPersonnelTable(list) {
             <td>
                 <div class="action-btn-group">
                     <button class="icon-btn" title="Chỉnh sửa" aria-label="Chỉnh sửa" onclick="editPerson('${p.id}')">✏️</button>
+                    <button class="icon-btn" title="Thêm ảnh mẫu khuôn mặt (ảnh khác góc / ảnh từ camera)" aria-label="Thêm ảnh mẫu" onclick="pickFaceSample('${p.id}')">🖼️</button>
                     <button class="icon-btn icon-btn-delete" title="Xoá" aria-label="Xoá quân nhân" onclick="deletePerson('${p.id}')">🗑️</button>
                 </div>
             </td>
