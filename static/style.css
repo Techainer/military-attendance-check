@@ -3063,8 +3063,9 @@ a.btn-clip-ctrl {
 .unknown-faces-hint { margin: 0 0 12px; }
 .unknown-faces-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
 .unknown-face { border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px; background: #fff; display: flex; flex-direction: column; gap: 8px; }
-.unknown-face-imgs { display: flex; gap: 6px; }
-.unknown-face-imgs img { width: 64px; height: 64px; object-fit: cover; border-radius: 6px; background: #0b1220; image-rendering: auto; }
+.unknown-face-imgs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; }
+.unknown-face-imgs img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 6px; background: #0b1220; cursor: pointer; border: 2px solid transparent; }
+.unknown-face-imgs img.excluded { opacity: 0.25; border-color: #dc2626; }
 .unknown-face-meta { font-size: 12px; color: #475569; }
 .unknown-face-actions { display: flex; gap: 6px; }
 .unknown-face-actions select { flex: 1; min-width: 0; padding: 6px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; }

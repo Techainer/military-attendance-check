@@ -1475,7 +1475,7 @@ async function loadUnknownFaces() {
         const t = new Date(it.last_seen);
         const when = isNaN(t) ? '' : t.toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' });
         const imgs = Array.from({ length: it.samples }, (_, i) =>
-            `<img src="/api/faces/unknown/${it.id}/image?i=${i}" alt="Khuôn mặt chưa xác định" loading="lazy">`).join('');
+            `<img src="/api/faces/unknown/${it.id}/image?i=${i}" data-i="${i}" alt="Khuôn mặt chưa xác định" title="Bấm để bỏ/chọn ảnh này" loading="lazy" onclick="this.classList.toggle('excluded')">`).join('');
         return `
             <div class="unknown-face" data-id="${it.id}">
                 <div class="unknown-face-imgs">${imgs}</div>
@@ -1493,8 +1493,11 @@ async function assignUnknownFace(uid, btn) {
     const card = btn.closest('.unknown-face');
     const personId = card.querySelector('select').value;
     if (!personId) { showToast('Chọn quân nhân trước khi gán', 'warning'); return; }
+    const chosen = [...card.querySelectorAll('.unknown-face-imgs img:not(.excluded)')].map(img => img.dataset.i);
+    if (!chosen.length) { showToast('Đã bỏ hết ảnh — chọn lại ít nhất một ảnh', 'warning'); return; }
     const form = new FormData();
     form.append('unknown_id', uid);
+    form.append('indices', chosen.join(','));
     btn.disabled = true;
     try {
         const res = await fetch(`/api/faces/${encodeURIComponent(personId)}/samples`, { method: 'POST', body: form });

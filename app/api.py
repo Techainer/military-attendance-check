@@ -519,6 +519,7 @@ async def unknown_face_image(uid: str, i: int = 0, _qtht=Depends(require_qtht)):
 async def add_face_samples(
     person_id: str,
     unknown_id: Optional[str] = Form(None),
+    indices: Optional[str] = Form(None),
     image: Optional[UploadFile] = File(None),
     _qtht=Depends(require_qtht),
 ):
@@ -528,7 +529,14 @@ async def add_face_samples(
         item = face_engine.unknown_log.get(unknown_id)
         if item is None:
             raise HTTPException(status_code=404, detail="Khuôn mặt này đã hết hạn, vui lòng chọn lại")
-        embeddings = [smp[1] for smp in item["samples"]]
+        samples = item["samples"]
+        if indices:
+            # Cán bộ bỏ chọn các ảnh không phải người này
+            wanted = {int(x) for x in indices.split(",") if x.strip().isdigit()}
+            samples = [smp for i, smp in enumerate(samples) if i in wanted]
+        if not samples:
+            raise HTTPException(status_code=400, detail="Chưa chọn ảnh nào")
+        embeddings = [smp[1] for smp in samples]
         source = "camera"
     elif image is not None:
         frame = cv2.imdecode(np.frombuffer(await image.read(), np.uint8), cv2.IMREAD_COLOR)

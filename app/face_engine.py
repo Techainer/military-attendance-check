@@ -28,7 +28,9 @@ FACE_SAMPLE_DEDUP_SIM = 0.95
 UNKNOWN_FACE_LOG_SIZE = int(os.environ.get("UNKNOWN_FACE_LOG_SIZE", "60"))
 # Hai track (cùng camera) có mặt trung bình giống nhau từ ngưỡng này -> coi là
 # cùng một người, gộp chung một thẻ "mặt chưa xác định".
-UNKNOWN_FACE_MERGE_SIM = float(os.environ.get("UNKNOWN_FACE_MERGE_SIM", "0.55"))
+UNKNOWN_FACE_MERGE_SIM = float(os.environ.get("UNKNOWN_FACE_MERGE_SIM", "0.62"))
+# Mặt nhỏ hơn ngần này thì embedding của mọi người đều "na ná" nhau -> không gộp
+UNKNOWN_FACE_MERGE_MIN_WIDTH = int(os.environ.get("UNKNOWN_FACE_MERGE_MIN_WIDTH", "24"))
 UNKNOWN_FACE_TTL_S = float(os.environ.get("UNKNOWN_FACE_TTL_S", str(6 * 3600)))
 
 
@@ -88,10 +90,14 @@ class UnknownFaceLog:
         return c / (np.linalg.norm(c) or 1.0)
 
     def _find_similar(self, camera_id: str, samples) -> Optional[dict]:
+        if samples[0][3] < UNKNOWN_FACE_MERGE_MIN_WIDTH:
+            return None
         probe = self._centroid(samples)
         best, best_sim = None, self.merge_sim
         for it in self._items.values():
             if it["camera_id"] != camera_id or it.get("centroid") is None:
+                continue
+            if it["samples"][0][3] < UNKNOWN_FACE_MERGE_MIN_WIDTH:
                 continue
             sim = float(it["centroid"] @ probe)
             if sim >= best_sim:
