@@ -1479,7 +1479,7 @@ async function loadUnknownFaces() {
         return `
             <div class="unknown-face" data-id="${it.id}">
                 <div class="unknown-face-imgs">${imgs}</div>
-                <div class="unknown-face-meta">${esc(it.camera_id)} · ${when} · mặt ${it.face_width}px</div>
+                <div class="unknown-face-meta">${esc(it.camera_id)} · ${when} · mặt ${it.face_width}px${it.tracks > 1 ? ` · ${it.tracks} lượt xuất hiện` : ''}</div>
                 <div class="unknown-face-actions">
                     <select aria-label="Chọn quân nhân"><option value="">— Là ai? —</option>${options}</select>
                     <button type="button" class="btn-primary-green btn-sm" onclick="assignUnknownFace('${it.id}', this)">Gán</button>

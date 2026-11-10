@@ -173,9 +173,22 @@ with tempfile.TemporaryDirectory() as tmp:
 
     print("\n[7] UnknownFaceLog: hết hạn + giới hạn kích thước")
     log = UnknownFaceLog(size=2, ttl_s=100)
-    for t in range(3):
-        log.upsert("cam", t, [(0.5, A, b"\xff\xd8x", 30)])
+    for t, base in enumerate((A, B, C)):
+        log.upsert("cam", t, [(0.5, base, b"\xff\xd8x", 30)])
     check("giới hạn 2 mục, bỏ mục cũ nhất", sorted(u["track_id"] for u in log.list()) == [1, 2])
+
+    print("\n[8] Cùng một người bị tracker cấp nhiều id -> gộp chung một thẻ")
+    log2 = UnknownFaceLog(size=10, ttl_s=100)
+    for t in range(4):
+        log2.upsert("cam", 100 + t, [(0.5 + t / 10, noisy(A, 0.8), b"\xff\xd8x", 30)])
+    log2.upsert("cam", 200, [(0.5, B, b"\xff\xd8y", 30)])
+    rows = log2.list()
+    check("4 track của A -> 1 thẻ (4 track), người khác -> thẻ riêng",
+          sorted(r["tracks"] for r in rows) == [1, 4], str(rows))
+    a_item = next(r for r in rows if r["tracks"] == 4)
+    log2.drop_track("cam", 100)
+    check("1 track của cụm được nhận ra -> cụm còn 3 track",
+          log2.list() and next(r for r in log2.list() if r["id"] == a_item["id"])["tracks"] == 3)
     uid = log.list()[0]["id"]
     check("pop lấy ra và xoá", log.pop(uid) is not None and log.get(uid) is None)
 

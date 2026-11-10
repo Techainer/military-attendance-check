@@ -26,6 +26,9 @@ FACE_MAX_AUTO_SAMPLES = int(os.environ.get("FACE_MAX_AUTO_SAMPLES", "10"))
 # thêm thông tin, chỉ làm phình ma trận.
 FACE_SAMPLE_DEDUP_SIM = 0.95
 UNKNOWN_FACE_LOG_SIZE = int(os.environ.get("UNKNOWN_FACE_LOG_SIZE", "60"))
+# Hai track (cùng camera) có mặt trung bình giống nhau từ ngưỡng này -> coi là
+# cùng một người, gộp chung một thẻ "mặt chưa xác định".
+UNKNOWN_FACE_MERGE_SIM = float(os.environ.get("UNKNOWN_FACE_MERGE_SIM", "0.55"))
 UNKNOWN_FACE_TTL_S = float(os.environ.get("UNKNOWN_FACE_TTL_S", str(6 * 3600)))
 
 
@@ -37,16 +40,24 @@ class UnknownFaceLog:
     lạ lâu dài). Mỗi track một mục, giữ tối đa ``top_k`` khung tốt nhất.
     """
 
-    def __init__(self, size: int = UNKNOWN_FACE_LOG_SIZE, ttl_s: float = UNKNOWN_FACE_TTL_S, top_k: int = 3):
+    def __init__(self, size: int = UNKNOWN_FACE_LOG_SIZE, ttl_s: float = UNKNOWN_FACE_TTL_S, top_k: int = 3,
+                 max_samples: int = 5, merge_sim: float = UNKNOWN_FACE_MERGE_SIM):
         self.size = size
         self.ttl_s = ttl_s
         self.top_k = top_k
+        self.max_samples = max_samples
+        self.merge_sim = merge_sim
         self._items: "OrderedDict[str, dict]" = OrderedDict()
         self._by_track: Dict[Tuple[str, int], str] = {}
         self._lock = threading.Lock()
 
     def upsert(self, camera_id: str, track_id: int, samples: List[Tuple[float, np.ndarray, bytes, int]]) -> None:
-        """``samples`` = [(quality, norm_emb, jpeg, face_width)], tốt nhất trước."""
+        """``samples`` = [(quality, norm_emb, jpeg, face_width)], tốt nhất trước.
+
+        Tracker hay cấp id mới cho CÙNG một người (bị che, đi qua lại) -> track
+        mới mà mặt giống hẳn một mục đã có (cùng camera) thì GỘP vào mục đó, để
+        cán bộ gán một lần cho cả cụm thay vì thấy cùng một người lặp lại chục thẻ.
+        """
         if not samples:
             return
         now = time.time()
@@ -55,20 +66,53 @@ class UnknownFaceLog:
             uid = self._by_track.get(key)
             item = self._items.get(uid) if uid else None
             if item is None:
-                uid = uuid.uuid4().hex[:12]
-                item = {"id": uid, "camera_id": camera_id, "track_id": int(track_id), "first_seen": now}
+                item = self._find_similar(camera_id, samples)
+                if item is None:
+                    item = {"id": uuid.uuid4().hex[:12], "camera_id": camera_id, "track_id": int(track_id),
+                            "first_seen": now, "tracks": {}}
+                uid = item["id"]
                 self._by_track[key] = uid
-            item["samples"] = list(samples[: self.top_k])
+            item["tracks"][int(track_id)] = list(samples[: self.top_k])
+            merged = [smp for rows in item["tracks"].values() for smp in rows]
+            merged.sort(key=lambda t: -t[0])
+            item["samples"] = merged[: self.max_samples]
+            item["centroid"] = self._centroid(item["samples"])
             item["last_seen"] = now
             self._items[uid] = item
             self._items.move_to_end(uid)
             self._evict(now)
 
+    @staticmethod
+    def _centroid(samples) -> np.ndarray:
+        c = np.sum([smp[1] for smp in samples], axis=0).astype(np.float32)
+        return c / (np.linalg.norm(c) or 1.0)
+
+    def _find_similar(self, camera_id: str, samples) -> Optional[dict]:
+        probe = self._centroid(samples)
+        best, best_sim = None, self.merge_sim
+        for it in self._items.values():
+            if it["camera_id"] != camera_id or it.get("centroid") is None:
+                continue
+            sim = float(it["centroid"] @ probe)
+            if sim >= best_sim:
+                best, best_sim = it, sim
+        return best
+
     def drop_track(self, camera_id: str, track_id: int) -> None:
+        """Track đã được nhận ra -> bỏ phần đóng góp của track đó (mục chỉ còn
+        track này thì bỏ cả mục)."""
         with self._lock:
             uid = self._by_track.pop((camera_id, int(track_id)), None)
-            if uid:
+            item = self._items.get(uid) if uid else None
+            if item is None:
+                return
+            item["tracks"].pop(int(track_id), None)
+            if not item["tracks"]:
                 self._items.pop(uid, None)
+                return
+            merged = sorted((smp for rows in item["tracks"].values() for smp in rows), key=lambda t: -t[0])
+            item["samples"] = merged[: self.max_samples]
+            item["centroid"] = self._centroid(item["samples"])
 
     def _evict(self, now: float) -> None:
         for uid in [u for u, it in self._items.items() if now - it["last_seen"] > self.ttl_s]:
@@ -79,7 +123,8 @@ class UnknownFaceLog:
     def _drop(self, uid: str) -> None:
         item = self._items.pop(uid, None)
         if item:
-            self._by_track.pop((item["camera_id"], item["track_id"]), None)
+            for tid in list(item.get("tracks") or [item["track_id"]]):
+                self._by_track.pop((item["camera_id"], tid), None)
 
     def list(self) -> List[Dict]:
         with self._lock:
@@ -92,7 +137,7 @@ class UnknownFaceLog:
                     "first_seen": datetime.fromtimestamp(it["first_seen"]).isoformat(timespec="seconds"),
                     "last_seen": datetime.fromtimestamp(it["last_seen"]).isoformat(timespec="seconds"),
                     "face_width": int(width), "quality": round(float(q), 2),
-                    "samples": len(it["samples"]),
+                    "samples": len(it["samples"]), "tracks": len(it.get("tracks") or {}),
                 })
             return out
 
