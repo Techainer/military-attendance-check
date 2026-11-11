@@ -15,6 +15,7 @@ trong thư viện chuẩn và Hikvision ISAPI xác thực digest, khỏi phải 
 import asyncio
 import os
 import threading
+import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -36,9 +37,14 @@ DRIFT_THRESHOLD_S = 2.0
 # Chạy lại mỗi bấy nhiêu giây (mặc định 1 giờ — camera trôi giờ rất chậm,
 # không cần dò liên tục).
 CAMERA_CLOCK_SYNC_S = float(os.environ.get("CAMERA_CLOCK_SYNC_S", "3600"))
+# Đo độ lệch mỗi bấy nhiêu giây (chỉ đọc, rẻ) — bù lệch luôn theo số đo mới nhất.
+CAMERA_CLOCK_READ_S = float(os.environ.get("CAMERA_CLOCK_READ_S", "60"))
+# Mặc định TẮT ghi: thực tế ở đơn vị có thiết bị khác (đầu ghi/phần mềm quản lý)
+# đẩy giờ sai xuống camera vài phút một lần, app ghi lại chỉ làm OSD nhảy qua
+# lại. Bật (=1) khi đã gỡ nguồn đẩy giờ đó. Nút "Đồng bộ giờ" vẫn ghi được.
 # =0 thì CHỈ đọc, không ghi xuống camera (môi trường demo/không muốn đụng
 # cấu hình camera thật).
-CAMERA_CLOCK_SYNC_ENABLED = os.environ.get("CAMERA_CLOCK_SYNC", "1").strip().lower() not in ("0", "false", "")
+CAMERA_CLOCK_SYNC_ENABLED = os.environ.get("CAMERA_CLOCK_SYNC", "0").strip().lower() not in ("0", "false", "")
 
 _NS = {"isapi": "http://www.hikvision.com/ver20/XMLSchema"}
 
@@ -71,7 +77,9 @@ def should_compensate(camera_id: Optional[str]) -> Optional[float]:
     if not camera_id:
         return None
     info = offset_for(camera_id)
-    if not info or info.get("sync_ok"):
+    # Không tin cờ ``sync_ok``: camera có thể bị thiết bị khác đặt lại giờ ngay
+    # sau khi app chỉnh — chỉ số đo MỚI NHẤT (đọc mỗi CAMERA_CLOCK_READ_S) mới đúng.
+    if not info:
         return None
     offset_s = info.get("offset_s")
     if offset_s is None or abs(offset_s) <= DRIFT_THRESHOLD_S:
@@ -233,15 +241,24 @@ async def start_background(get_cameras, data_dir: str = "data") -> None:
     """
     print(f"[CameraClock] Khởi động, chạy mỗi {CAMERA_CLOCK_SYNC_S:.0f}s"
           + ("" if CAMERA_CLOCK_SYNC_ENABLED else " (chỉ đọc, không ghi lại camera)"))
+    last_sync: Dict[str, float] = {}
     while True:
         for camera in get_cameras():
             camera_id = camera.get("id")
             if not camera_id or not _is_candidate(camera):
                 continue
             try:
-                result = await asyncio.to_thread(sync_camera_blocking, camera, data_dir)
+                now_mono = time.monotonic()
+                if CAMERA_CLOCK_SYNC_ENABLED and now_mono - last_sync.get(camera_id, -1e9) >= CAMERA_CLOCK_SYNC_S:
+                    last_sync[camera_id] = now_mono
+                    result = await asyncio.to_thread(sync_camera_blocking, camera, data_dir)
+                else:
+                    result = await asyncio.to_thread(read, camera)
+                    result["sync_ok"] = False
+                    result["synced_at"] = (offset_for(camera_id) or {}).get("synced_at")
+                result["measured_at"] = clock.iso()
             except Exception as e:
                 print(f"[CameraClock] Lỗi đo/chỉnh giờ camera {camera_id}: {e}")
                 continue
             record_offset(camera_id, result)
-        await asyncio.sleep(CAMERA_CLOCK_SYNC_S)
+        await asyncio.sleep(CAMERA_CLOCK_READ_S)

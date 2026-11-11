@@ -164,12 +164,16 @@ check("backup chứa đúng localTime CŨ (trước khi sync)",
 # ================================================================ [3] sync_camera_blocking + should_compensate
 
 print("\n[3] sync_camera_blocking(): gắn cờ sync_ok, should_compensate() theo ngưỡng lệch")
+camera_clock.CAMERA_CLOCK_SYNC_ENABLED = True   # mặc định tắt ghi, test bật lên
 blocking_result = camera_clock.sync_camera_blocking(CAMERA, data_dir=str(tmp_dir))
 check("sync_ok=True khi lệch đã về trong ngưỡng", blocking_result["sync_ok"] is True, str(blocking_result))
 
 camera_clock.record_offset(CAMERA["id"], blocking_result)
-check("should_compensate() == None khi camera đã tự đồng bộ ổn (sync_ok)",
+check("should_compensate() == None khi lệch đo được nằm trong ngưỡng",
       camera_clock.should_compensate(CAMERA["id"]) is None)
+camera_clock.record_offset(CAMERA["id"], {"offset_s": -419.0, "sync_ok": True, "synced_at": clock.iso()})
+check("camera bị thiết bị khác đặt lại giờ -> vẫn bù theo số đo mới nhất dù cờ sync_ok cũ",
+      camera_clock.should_compensate(CAMERA["id"]) == -419.0)
 
 # Giả lập: camera lệch nặng mà KHÔNG tự chỉnh được (ghi bị tắt / ghi rồi vẫn lệch)
 camera_clock.record_offset(CAMERA["id"], {"offset_s": 42.0, "sync_ok": False, "synced_at": clock.iso()})
