@@ -144,7 +144,8 @@ function switchNavTab(tabName) {
         'cameras': 'Thiết bị camera',
         'registration': 'Đăng ký khuôn mặt',
         'schedule': 'Cấu hình giám sát',
-        'logs': 'Nhật ký điểm danh'
+        'logs': 'Nhật ký điểm danh',
+        'violations': 'Lịch sử vi phạm'
     };
     if (currentPageTitle) currentPageTitle.textContent = titles[tabName] || 'Hệ thống Horus AI';
 
@@ -178,6 +179,11 @@ function switchNavTab(tabName) {
         loadAttendanceLogs();
     }
 
+    if (tabName === 'violations') {
+        fillViolationCameraSelect();
+        loadViolationHistory(1);
+    }
+
     if (safetyPollTimer) { clearInterval(safetyPollTimer); safetyPollTimer = null; }
     if (cameraWallPollTimer) { clearInterval(cameraWallPollTimer); cameraWallPollTimer = null; }
     currentSafetyType = null;
@@ -203,7 +209,6 @@ function switchNavTab(tabName) {
             loadCameras();
             break;
         case 'monitoring':
-            switchEventsFeedTab('live');
             loadCameraWall();
             // Quét nhẹ trạng thái bật/tắt mỗi 15s — KHÔNG gắn lại luồng camera
             // không đổi gì, xem pollCameraWallStatus()
@@ -954,7 +959,18 @@ function connectEventStream() {
 
     eventSource.onmessage = (msg) => {
         try {
-            handleAiEvent(JSON.parse(msg.data));
+            const payload = JSON.parse(msg.data);
+            // Cập nhật một sự kiện đã phát trước đó (gộp thêm người/đổi số liệu…)
+            // có hai dạng tuỳ nơi bắn: chính sự kiện kèm cờ ``updated``, hoặc một
+            // bản tin bọc riêng ``{type:'event_update', event:{...}}`` — xử lý cả
+            // hai, KHÔNG tạo thẻ mới / không kêu chuông lần nữa.
+            if (payload && payload.type === 'event_update' && payload.event) {
+                handleEventUpdate(payload.event);
+            } else if (payload && payload.updated) {
+                handleEventUpdate(payload);
+            } else {
+                handleAiEvent(payload);
+            }
         } catch (e) {
             console.error('Bản tin sự kiện không hợp lệ:', e);
         }
@@ -1003,6 +1019,36 @@ function handleAiEvent(event) {
     }
 }
 
+// Cập nhật một sự kiện ĐÃ phát trước đó (ví dụ gộp thêm người vào cùng một
+// cảnh báo vùng cấm) — chỉ sửa chữ trong thẻ/dòng đang có, không tạo thẻ mới,
+// không tăng số đếm cảnh báo / không kêu chuông hay bật toast lần nữa.
+function handleEventUpdate(event) {
+    if (!event || !event.id) return;
+
+    const detail = event.detail || {};
+    const names = (detail.identified || []).map(p => p.person_name).filter(Boolean);
+    const personText = names.length ? names.join(', ') : 'Không xác định';
+
+    // Dòng trực tiếp ở màn giám sát
+    const liveCard = document.getElementById(`evt-${event.id}`);
+    if (liveCard) {
+        const desc = liveCard.querySelector('.event-desc');
+        if (desc) desc.textContent = event.message;
+    }
+
+    // Trang "Lịch sử vi phạm", nếu dòng đó đang hiển thị trên trang hiện tại
+    const histRow = document.getElementById(`vh-${event.id}`);
+    if (histRow) {
+        const zoneCell = histRow.children[2];
+        const personCell = histRow.children[3];
+        if (personCell) personCell.textContent = personText;
+        if (zoneCell) {
+            const zoneKindLabel = ZONE_RULE_LABELS[detail.zone_rule] || '';
+            zoneCell.textContent = [detail.zone_name, zoneKindLabel].filter(Boolean).join(' · ') || event.area_name || '—';
+        }
+    }
+}
+
 function renderEventCard(container, event, prepend) {
     if (!container) return;
 
@@ -1041,126 +1087,161 @@ function renderEventCard(container, event, prepend) {
 }
 window.renderEventCard = renderEventCard;
 
-// ---------- tab "Lịch sử vi phạm" bên cạnh dòng sự kiện trực tiếp ----------
-// Dòng trực tiếp chỉ hiện sự kiện CHƯA xử lý (xem renderEventCard ở trên) và
-// mất đi ngay khi xác nhận — tab này tra lại toàn bộ qua /api/v1/events, lọc
-// đúng loại vi phạm an toàn mà dòng trực tiếp đang dùng (EVENT_CLASS.INTRUSION
-// = 'event-safety'), có phân trang + lọc theo trạng thái xử lý.
+// ---------- trang riêng "Lịch sử vi phạm" ----------
+// Dòng trực tiếp (events-list-container, ở màn giám sát) chỉ hiện sự kiện
+// CHƯA xử lý và mất đi ngay khi xác nhận — trang này tra lại toàn bộ qua
+// /api/v1/events, lọc đúng loại vi phạm an toàn (INTRUSION), có phân trang
+// server-side + lọc theo khoảng ngày / trạng thái / camera / loại vùng.
 const VIOLATION_EVENT_TYPES = ['INTRUSION'];
-const EVH_PAGE_SIZE = 20;
-let evhPage = 1;
-let evhTotalPages = 1;
-
-function switchEventsFeedTab(tab) {
-    const liveTab = document.getElementById('tab-events-live');
-    const histTab = document.getElementById('tab-events-history');
-    const liveList = document.getElementById('events-list-container');
-    const histBox = document.getElementById('events-history-container');
-    if (!liveTab || !histTab || !liveList || !histBox) return;
-
-    const isHistory = tab === 'history';
-    liveTab.classList.toggle('active', !isHistory);
-    histTab.classList.toggle('active', isHistory);
-    liveList.style.display = isHistory ? 'none' : '';
-    histBox.style.display = isHistory ? 'flex' : 'none';
-
-    if (isHistory) loadViolationHistory(1);
-}
-window.switchEventsFeedTab = switchEventsFeedTab;
+const VH_PAGE_SIZE = 20;
+let vhPage = 1;
+let vhTotalPages = 1;
+let vhCameras = [];
 
 function violationHistoryVisible() {
-    const box = document.getElementById('events-history-container');
-    return !!box && box.style.display !== 'none';
+    const view = document.getElementById('view-violations');
+    return !!view && view.classList.contains('active');
 }
 
+async function fillViolationCameraSelect() {
+    const select = document.getElementById('vh-filter-camera');
+    if (!select) return;
+    try {
+        vhCameras = (await getJson('/api/v1/cameras')).items || [];
+    } catch (e) {
+        vhCameras = [];
+    }
+    const current = select.value;
+    select.innerHTML = '<option value="">Tất cả camera</option>'
+        + vhCameras.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
+    select.value = vhCameras.some(c => c.id === current) ? current : '';
+}
+window.fillViolationCameraSelect = fillViolationCameraSelect;
+
+// Mặc định từ ngày = hôm nay - 7, đến ngày = hôm nay — chỉ áp khi ô ngày
+// đang trống (không ghi đè lựa chọn người dùng mỗi lần vào lại trang).
+function defaultViolationHistoryDates() {
+    const fromEl = document.getElementById('vh-date-from');
+    const toEl = document.getElementById('vh-date-to');
+    const fmt = (d) => d.toISOString().slice(0, 10);
+    const today = serverNow();
+    if (toEl && !toEl.value) toEl.value = fmt(today);
+    if (fromEl && !fromEl.value) {
+        const from = new Date(today);
+        from.setDate(from.getDate() - 7);
+        fromEl.value = fmt(from);
+    }
+}
+
+function resetViolationHistoryFilters() {
+    const ids = ['vh-filter-status', 'vh-filter-camera', 'vh-filter-kind'];
+    ids.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    const fromEl = document.getElementById('vh-date-from');
+    const toEl = document.getElementById('vh-date-to');
+    if (fromEl) fromEl.value = '';
+    if (toEl) toEl.value = '';
+    defaultViolationHistoryDates();
+    loadViolationHistory(1);
+}
+window.resetViolationHistoryFilters = resetViolationHistoryFilters;
+
 async function loadViolationHistory(page) {
-    const list = document.getElementById('events-history-list');
-    if (!list) return;
-    evhPage = page || evhPage || 1;
+    const tbody = document.getElementById('violations-tbody');
+    if (!tbody) return;
+    vhPage = page || vhPage || 1;
+    defaultViolationHistoryDates();
 
-    const statusSelect = document.getElementById('evh-filter-status');
-    const ackedVal = statusSelect ? statusSelect.value : '';
-
+    const val = (id) => ((document.getElementById(id) || {}).value || '').trim();
     const params = new URLSearchParams();
     params.set('type', VIOLATION_EVENT_TYPES.join(','));
-    if (ackedVal) params.set('acked', ackedVal);
-    params.set('page', String(evhPage));
-    params.set('page_size', String(EVH_PAGE_SIZE));
+    if (val('vh-filter-status')) params.set('acked', val('vh-filter-status'));
+    if (val('vh-filter-camera')) params.set('camera_id', val('vh-filter-camera'));
+    if (val('vh-filter-kind')) params.set('zone_rule', val('vh-filter-kind'));
+    if (val('vh-date-from')) params.set('date_from', val('vh-date-from'));
+    if (val('vh-date-to')) params.set('date_to', val('vh-date-to'));
+    params.set('page', String(vhPage));
+    params.set('page_size', String(VH_PAGE_SIZE));
 
-    list.innerHTML = '<p class="empty-hint">Đang tải lịch sử vi phạm…</p>';
+    tbody.innerHTML = '<tr><td colspan="10" class="empty-row">Đang tải lịch sử vi phạm…</td></tr>';
     try {
         const res = await fetch(`/api/v1/events?${params.toString()}`);
         if (!res.ok) throw new Error(res.statusText);
         const data = await res.json();
+        vhTotalPages = Math.max(1, Math.ceil((data.total || 0) / (data.page_size || VH_PAGE_SIZE)));
+        if (vhPage > vhTotalPages) { vhPage = vhTotalPages; return loadViolationHistory(vhPage); }
         renderViolationHistory(data.items || []);
-        evhTotalPages = Math.max(1, Math.ceil((data.total || 0) / (data.page_size || EVH_PAGE_SIZE)));
-        if (evhPage > evhTotalPages) evhPage = evhTotalPages;
         renderViolationHistoryPager();
     } catch (e) {
-        list.innerHTML = `<p class="empty-hint">Không tải được lịch sử vi phạm: ${esc(e.message)}</p>`;
+        tbody.innerHTML = `<tr><td colspan="10" class="empty-row">Không tải được lịch sử vi phạm: ${esc(e.message)}</td></tr>`;
     }
 }
 window.loadViolationHistory = loadViolationHistory;
 
 function renderViolationHistoryPager() {
-    const pager = document.getElementById('evh-pager');
+    const pager = document.getElementById('vh-pager');
     if (!pager) return;
-    pager.style.display = evhTotalPages > 1 ? 'flex' : 'none';
-    const info = document.getElementById('evh-page-info');
-    if (info) info.textContent = `Trang ${evhPage}/${evhTotalPages}`;
-    const prev = document.getElementById('evh-prev-btn');
-    const next = document.getElementById('evh-next-btn');
-    if (prev) prev.disabled = evhPage <= 1;
-    if (next) next.disabled = evhPage >= evhTotalPages;
+    pager.style.display = vhTotalPages > 1 ? 'flex' : 'none';
+    const info = document.getElementById('vh-page-info');
+    if (info) info.textContent = `Trang ${vhPage}/${vhTotalPages}`;
+    const prev = document.getElementById('vh-prev-btn');
+    const next = document.getElementById('vh-next-btn');
+    if (prev) prev.disabled = vhPage <= 1;
+    if (next) next.disabled = vhPage >= vhTotalPages;
 }
 
 function goViolationHistoryPage(delta) {
-    const next = Math.min(evhTotalPages, Math.max(1, evhPage + delta));
-    if (next === evhPage) return;
+    const next = Math.min(vhTotalPages, Math.max(1, vhPage + delta));
+    if (next === vhPage) return;
     loadViolationHistory(next);
 }
 window.goViolationHistoryPage = goViolationHistoryPage;
 
+const ZONE_RULE_LABELS = { restricted_area: 'Vùng cấm', crossing_line: 'Vạch an toàn' };
+
 function renderViolationHistory(items) {
-    const list = document.getElementById('events-history-list');
-    if (!list) return;
+    const tbody = document.getElementById('violations-tbody');
+    if (!tbody) return;
     if (!items.length) {
-        list.innerHTML = '<p class="empty-hint">Không có vi phạm nào phù hợp.</p>';
+        tbody.innerHTML = '<tr><td colspan="10" class="empty-row">Không có vi phạm nào phù hợp.</td></tr>';
         return;
     }
 
-    list.innerHTML = '';
+    tbody.innerHTML = '';
     items.forEach(event => {
-        const card = document.createElement('div');
-        card.className = `event-card ${EVENT_CLASS[event.type] || 'event-system'}`;
-        card.id = `evh-${event.id}`;
+        const detail = event.detail || {};
+        const names = (detail.identified || []).map(p => p.person_name).filter(Boolean);
+        const personText = names.length ? names.join(', ') : 'Không xác định';
+        const zoneKindLabel = ZONE_RULE_LABELS[detail.zone_rule] || '';
+        const zoneText = [detail.zone_name, zoneKindLabel].filter(Boolean).join(' · ') || event.area_name || '—';
 
-        const time = new Date(event.occurred_at).toLocaleString('vi-VN');
-        const place = [event.camera_name, event.area_name].filter(Boolean).join(' · ');
-        const names = ((event.detail || {}).identified || []).map(p => p.person_name).filter(Boolean);
-        const clipBtn = event.clip_url
-            ? `<button class="btn-event-clip" onclick="viewEventClip('${event.id}')">▶️ Xem clip 10s</button>` : '';
+        const imgCell = event.snapshot_url
+            ? `<img class="evidence-thumb" loading="lazy" src="${event.snapshot_url}"
+                    onclick="openEvidence('${event.snapshot_url}','${esc(event.message).replace(/'/g, "\\'")}')" alt="Ảnh vi phạm">`
+            : '<span style="color:#94a3b8;">—</span>';
+        const clipCell = event.clip_url
+            ? `<button class="btn-event-clip" onclick="viewEventClip('${event.id}')">▶️ Xem clip</button>`
+            : '<span style="color:#94a3b8;">—</span>';
         const statusBadge = event.acked
             ? '<span class="event-history-badge acked">Đã xử lý</span>'
             : '<span class="event-history-badge unacked">Chưa xử lý</span>';
-        const ackAction = event.acked
-            ? `<span class="cell-subtext">${esc(event.acked_by || '')}`
-                + `${event.acked_at ? ' · ' + esc(new Date(event.acked_at).toLocaleString('vi-VN')) : ''}</span>`
+        const actionCell = event.acked ? '<span style="color:#94a3b8;">—</span>'
             : `<button class="btn-event-confirm" onclick="ackEvent('${event.id}')">Xác nhận xử lý</button>`;
 
-        card.innerHTML = `
-            <div class="event-card-header">
-                <span class="event-category cat-${(event.type || '').toLowerCase()}">${EVENT_LABELS[event.type] || event.type}</span>
-                <span class="event-time">${time}</span>
-            </div>
-            <p class="event-desc">${esc(event.message)}</p>
-            ${event.snapshot_url ? `<img class="event-thumb" src="${event.snapshot_url}" onclick="openEvidence('${event.snapshot_url}','${esc(event.message)}')" alt="Ảnh sự kiện">` : ''}
-            <div class="event-location">${esc(place)}</div>
-            ${names.length ? `<div class="event-history-names">Định danh: ${names.map(esc).join(', ')}</div>` : ''}
-            <div class="event-card-actions">${clipBtn}${statusBadge}</div>
-            <div class="event-card-actions">${ackAction}</div>
+        const row = document.createElement('tr');
+        row.id = `vh-${event.id}`;
+        row.innerHTML = `
+            <td class="font-mono">${esc(new Date(event.occurred_at).toLocaleString('vi-VN'))}</td>
+            <td>${esc(event.camera_name || '—')}</td>
+            <td>${esc(zoneText)}</td>
+            <td>${esc(personText)}</td>
+            <td>${imgCell}</td>
+            <td>${clipCell}</td>
+            <td>${statusBadge}</td>
+            <td>${esc(event.acked_by || '—')}</td>
+            <td class="font-mono">${event.acked_at ? esc(new Date(event.acked_at).toLocaleString('vi-VN')) : '—'}</td>
+            <td class="row-actions">${actionCell}</td>
         `;
-        list.appendChild(card);
+        tbody.appendChild(row);
     });
 }
 
@@ -1194,10 +1275,10 @@ async function ackEvent(eventId) {
         if (pendingEventsBadge) pendingEventsBadge.textContent = `${pendingEventsCount} chờ xử lý`;
         if (currentTabName === 'safety') loadSafetyDashboard();
         else if (currentTabName === 'safety-detail') loadSafetyDetail();
-        // Tab "Lịch sử vi phạm" dùng badge trạng thái riêng (không phải thẻ
+        // Trang "Lịch sử vi phạm" dùng badge trạng thái riêng (không phải thẻ
         // #evt-), và có thể đang lọc "Chưa xử lý" nên món vừa xử lý phải biến
         // mất khỏi danh sách — nạp lại trang hiện tại là chắc chắn nhất.
-        if (violationHistoryVisible()) loadViolationHistory(evhPage);
+        if (violationHistoryVisible()) loadViolationHistory(vhPage);
     } catch (e) {
         showToast('Không xác nhận được: ' + e.message, 'error');
     }
@@ -3736,7 +3817,7 @@ async function loadCameras() {
     try {
         const data = await getJson('/api/v1/cameras');
         tbody.innerHTML = data.items.length ? '' :
-            '<tr><td colspan="7" class="empty-row">Chưa có thiết bị camera nào</td></tr>';
+            '<tr><td colspan="8" class="empty-row">Chưa có thiết bị camera nào</td></tr>';
 
         data.items.forEach(c => {
             const running = c.status === 'online';
@@ -3748,6 +3829,7 @@ async function loadCameras() {
                 <td>${esc(c.area_name || '—')}</td>
                 <td>${c.target_fps || 5}</td>
                 <td>${CAMERA_STATUS_TAG[c.status] || c.status}</td>
+                <td class="cam-clock-cell" id="cam-clock-${c.id}">Đang kiểm tra…</td>
                 <td class="row-actions">
                     <button class="btn-event-clip" onclick="toggleCameraRun('${c.id}', ${running}, '${esc(c.name)}', this)">
                         ${running ? '⏹ Dừng' : '▶ Chạy'}</button>
@@ -3756,12 +3838,50 @@ async function loadCameras() {
                     <button class="btn-row-danger" onclick="deleteCamera('${c.id}','${esc(c.name)}')">Xoá</button>
                 </td>`;
             tbody.appendChild(tr);
+            refreshCameraClock(c.id);
         });
     } catch (e) {
-        tbody.innerHTML = `<tr><td colspan="7" class="empty-row">Lỗi tải danh sách: ${esc(e.message)}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="8" class="empty-row">Lỗi tải danh sách: ${esc(e.message)}</td></tr>`;
     }
 }
 window.loadCameras = loadCameras;
+
+// ---------- "Giờ camera" trong bảng quản lý thiết bị ----------
+// Backend đang được một agent khác dựng song song (/api/v1/cameras/{id}/clock
+// và .../clock/sync) nên phải chịu được 404/500 — hiện thông báo gọn, không
+// vỡ cả bảng.
+async function refreshCameraClock(cameraId) {
+    const cell = document.getElementById(`cam-clock-${cameraId}`);
+    if (!cell) return;
+    try {
+        const res = await fetch(`/api/v1/cameras/${cameraId}/clock`);
+        if (!res.ok) throw new Error(String(res.status));
+        const data = await res.json();
+        const offset = Math.round(data.offset_s || 0);
+        const sign = offset >= 0 ? '+' : '';
+        cell.innerHTML = `<span class="cell-subtext">lệch ${sign}${offset}s</span>
+            <button class="btn-event-clip" onclick="syncCameraClock('${cameraId}')">⏱ Đồng bộ giờ</button>`;
+    } catch (e) {
+        cell.innerHTML = `<span class="cell-subtext">Không đọc được giờ camera</span>
+            <button class="btn-event-clip" onclick="syncCameraClock('${cameraId}')">⏱ Đồng bộ giờ</button>`;
+    }
+}
+window.refreshCameraClock = refreshCameraClock;
+
+async function syncCameraClock(cameraId) {
+    const cell = document.getElementById(`cam-clock-${cameraId}`);
+    if (cell) cell.innerHTML = '<span class="cell-subtext">Đang đồng bộ…</span>';
+    try {
+        const res = await fetch(`/api/v1/cameras/${cameraId}/clock/sync`, { method: 'POST' });
+        if (!res.ok) throw new Error(String(res.status));
+        showToast('Đã đồng bộ giờ camera', 'success');
+    } catch (e) {
+        showToast('Không đồng bộ được giờ camera', 'error');
+    } finally {
+        refreshCameraClock(cameraId);
+    }
+}
+window.syncCameraClock = syncCameraClock;
 
 function openCameraModal(camera) {
     const modal = document.getElementById('camera-modal');

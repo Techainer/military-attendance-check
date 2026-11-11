@@ -161,20 +161,6 @@ function setBadge(state, kind) {
 function drawDetections(ctx, w, h, result, zonesMeta) {
     ctx.clearRect(0, 0, w, h);
 
-    (zonesMeta || []).filter((z) => z.enabled !== false).forEach((zone) => {
-        const pts = zone.points || [];
-        if (pts.length < 2) return;
-        ctx.beginPath();
-        ctx.moveTo(pts[0].x * w, pts[0].y * h);
-        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x * w, pts[i].y * h);
-        if (zone.rule !== 'crossing_line') ctx.closePath();
-        ctx.strokeStyle = zone.rule === 'restricted_area' ? '#ff3c3c' : '#22dc5a';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-    });
-
-    if (!result) return;
-
     // Khung camera nhỏ (lưới nhiều camera) thì chữ nhỏ lại; nhãn dài cắt theo
     // bề ngang box; nhãn đè lên nhãn đã vẽ thì thử đặt trong box, vẫn đè thì bỏ
     // (box và màu vẫn còn, chỉ mất chữ) — tránh mớ chữ chồng nhau không đọc nổi
@@ -190,6 +176,56 @@ function drawDetections(ctx, w, h, result, zonesMeta) {
         while (t.length > 1 && ctx.measureText(t + '…').width > maxW) t = t.slice(0, -1);
         return t + '…';
     };
+
+    // Nhãn tên vùng cấm (khớp draw_overlay() phía Python, "VÙNG CẤM · <tên>")
+    // được vẽ SAU nhãn người (xem dưới) để biết trước những ô người đã chiếm
+    // chỗ nào mà né, tránh đè chữ lên chữ như "VÙNG CẤM · Vùng ng..." lên
+    // "Ngoại vùng". Ở đây chỉ gom toạ độ, vẽ chữ thật để cuối hàm.
+    const pendingZoneLabels = [];
+    (zonesMeta || []).filter((z) => z.enabled !== false).forEach((zone) => {
+        const pts = zone.points || [];
+        if (pts.length < 2) return;
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x * w, pts[0].y * h);
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x * w, pts[i].y * h);
+        if (zone.rule !== 'crossing_line') ctx.closePath();
+        ctx.strokeStyle = zone.rule === 'restricted_area' ? '#ff3c3c' : '#22dc5a';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        if (zone.rule === 'restricted_area' && zone.name) {
+            // Góc trên-trái của hình chữ nhật bao polygon — vị trí neo nhãn
+            pendingZoneLabels.push({
+                text: `VÙNG CẤM · ${zone.name}`,
+                x: Math.min(...pts.map((p) => p.x * w)),
+                y: Math.min(...pts.map((p) => p.y * h)),
+            });
+        }
+    });
+
+    const drawZoneLabels = () => {
+        if (!pendingZoneLabels.length) return;
+        ctx.font = `${fontPx}px "Segoe UI", sans-serif`;
+        ctx.textBaseline = 'alphabetic';
+        const padding = 3;
+        pendingZoneLabels.forEach(({ text, x, y }) => {
+            const textW = ctx.measureText(text).width;
+            const boxW = textW + padding * 2;
+            // Thử ngay sát đỉnh trên-trái polygon trước; đè nhãn người thì đẩy
+            // lên cao hơn (ra ngoài polygon); vẫn đè thì đặt vào trong polygon
+            const near = { x, y: y - labelH, w: boxW, h: labelH };
+            const above = { x, y: y - labelH * 2.2, w: boxW, h: labelH };
+            const inside = { x, y: y + 4, w: boxW, h: labelH };
+            const r = !overlaps(near) ? near : (!overlaps(above) ? above : inside);
+            placed.push(r);
+            ctx.fillStyle = 'rgba(160, 20, 20, 0.88)';
+            ctx.fillRect(r.x, r.y, r.w, r.h);
+            ctx.fillStyle = '#fff';
+            ctx.fillText(text, r.x + padding, r.y + labelH - 5);
+        });
+    };
+
+    if (!result) { drawZoneLabels(); return; }
 
     (result.tracks || []).forEach((t) => {
         const [x1, y1, x2, y2] = t.box;
@@ -221,6 +257,8 @@ function drawDetections(ctx, w, h, result, zonesMeta) {
             ctx.fillText(text, r.x + stripeW + padding, r.y + labelH - 5);
         }
     });
+
+    drawZoneLabels();
 
     const hud = result.hud || {};
     ctx.font = '13px "Segoe UI", sans-serif';

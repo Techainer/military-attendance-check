@@ -93,6 +93,10 @@
                     <span class="nav-icon nav-glyph" aria-hidden="true">📋</span>
                     <span>Nhật ký điểm danh</span>
                 </a>
+                <a href="#violations" class="nav-item" id="nav-violations" onclick="switchNavTab('violations')">
+                    <span class="nav-icon nav-glyph" aria-hidden="true">⚠️</span>
+                    <span>Lịch sử vi phạm</span>
+                </a>
             </nav>
 
             <div class="nav-section-title role-only" data-role="qtht">PHÂN HỆ III · QUẢN TRỊ HỆ THỐNG</div>
@@ -238,36 +242,16 @@
                             <div class="glass-card events-feed-card">
                                 <div class="events-feed-header">
                                     <div class="events-feed-tabs">
-                                        <button type="button" class="events-feed-tab active" id="tab-events-live"
-                                                onclick="switchEventsFeedTab('live')">Trực tiếp</button>
-                                        <button type="button" class="events-feed-tab" id="tab-events-history"
-                                                onclick="switchEventsFeedTab('history')">Lịch sử vi phạm</button>
+                                        <span class="events-feed-tab active">Trực tiếp</span>
                                     </div>
                                     <span class="pending-badge" id="pending-events-badge">0 chờ xử lý</span>
                                 </div>
                                 <div class="events-list" id="events-list-container">
                                     <p class="empty-hint">Chưa có sự kiện nào. Bắt đầu giám sát để nhận cảnh báo tự động.</p>
                                 </div>
-                                <div class="events-history" id="events-history-container" style="display: none;">
-                                    <div class="table-filters events-history-filters">
-                                        <select id="evh-filter-status" class="filter-select" aria-label="Lọc theo trạng thái xử lý"
-                                                onchange="loadViolationHistory(1)">
-                                            <option value="">Tất cả</option>
-                                            <option value="false">Chưa xử lý</option>
-                                            <option value="true">Đã xử lý</option>
-                                        </select>
-                                    </div>
-                                    <div class="events-history-list" id="events-history-list">
-                                        <p class="empty-hint">Đang tải lịch sử vi phạm…</p>
-                                    </div>
-                                    <div class="table-pager" id="evh-pager" style="display: none;">
-                                        <button type="button" class="pager-nav-btn" id="evh-prev-btn"
-                                                aria-label="Trang trước" onclick="goViolationHistoryPage(-1)">‹</button>
-                                        <span class="pager-info" id="evh-page-info">Trang 1/1</span>
-                                        <button type="button" class="pager-nav-btn" id="evh-next-btn"
-                                                aria-label="Trang sau" onclick="goViolationHistoryPage(1)">›</button>
-                                    </div>
-                                </div>
+                                <a href="#violations" class="events-feed-viewall-link" onclick="switchNavTab('violations')">
+                                    Xem tất cả lịch sử vi phạm →
+                                </a>
                             </div>
                         </div>
                     </div>
@@ -899,6 +883,7 @@
                                         <th>KHU VỰC</th>
                                         <th>FPS</th>
                                         <th>TRẠNG THÁI</th>
+                                        <th>GIỜ CAMERA</th>
                                         <th>THAO TÁC</th>
                                     </tr>
                                 </thead>
@@ -994,6 +979,69 @@
                             </table>
                         </div>
                         <div class="table-pager" id="attendance-logs-pager"></div>
+                    </div>
+                </section>
+
+                <!-- VIEW 6: LỊCH SỬ VI PHẠM (tách riêng khỏi màn giám sát trực tiếp) -->
+                <section id="view-violations" class="page-view">
+                    <div class="glass-card section-card">
+                        <div class="card-header">
+                            <h2>LỊCH SỬ VI PHẠM AN TOÀN</h2>
+                            <p class="card-subtitle">TRA LẠI TOÀN BỘ CẢNH BÁO XÂM NHẬP VÙNG CẤM &amp; VƯỢT VẠCH AN TOÀN</p>
+                        </div>
+
+                        <div class="table-filters" style="margin: 0 0 12px;">
+                            <label class="filter-inline">Từ ngày
+                                <input type="date" id="vh-date-from" class="filter-select">
+                            </label>
+                            <label class="filter-inline">Đến ngày
+                                <input type="date" id="vh-date-to" class="filter-select">
+                            </label>
+                            <select id="vh-filter-status" class="filter-select" aria-label="Lọc theo trạng thái xử lý">
+                                <option value="">Tất cả</option>
+                                <option value="false">Chưa xử lý</option>
+                                <option value="true">Đã xử lý</option>
+                            </select>
+                            <select id="vh-filter-camera" class="filter-select" aria-label="Lọc theo camera">
+                                <option value="">Tất cả camera</option>
+                            </select>
+                            <select id="vh-filter-kind" class="filter-select" aria-label="Lọc theo loại vi phạm">
+                                <option value="">Tất cả</option>
+                                <option value="restricted_area">Vùng cấm</option>
+                                <option value="crossing_line">Vạch an toàn</option>
+                            </select>
+                            <button type="button" class="btn-primary-green" onclick="loadViolationHistory(1)">Lọc</button>
+                            <button type="button" class="btn-toolbar-neutral" onclick="resetViolationHistoryFilters()">↻ Làm mới</button>
+                        </div>
+
+                        <div class="table-responsive table-scroll-tall">
+                            <table class="personnel-table">
+                                <thead>
+                                    <tr>
+                                        <th>THỜI GIAN</th>
+                                        <th>CAMERA</th>
+                                        <th>VÙNG</th>
+                                        <th>NGƯỜI VI PHẠM</th>
+                                        <th>ẢNH</th>
+                                        <th>CLIP</th>
+                                        <th>TRẠNG THÁI</th>
+                                        <th>NGƯỜI XỬ LÝ</th>
+                                        <th>GIỜ XỬ LÝ</th>
+                                        <th>THAO TÁC</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="violations-tbody">
+                                    <tr><td colspan="10" class="empty-row">Đang tải lịch sử vi phạm…</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="table-pager" id="vh-pager" style="display: none;">
+                            <button type="button" class="pager-nav-btn" id="vh-prev-btn"
+                                    aria-label="Trang trước" onclick="goViolationHistoryPage(-1)">‹</button>
+                            <span class="pager-info" id="vh-page-info">Trang 1/1</span>
+                            <button type="button" class="pager-nav-btn" id="vh-next-btn"
+                                    aria-label="Trang sau" onclick="goViolationHistoryPage(1)">›</button>
+                        </div>
                     </div>
                 </section>
             </div>
