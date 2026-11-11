@@ -33,6 +33,94 @@ UNKNOWN_FACE_MERGE_SIM = float(os.environ.get("UNKNOWN_FACE_MERGE_SIM", "0.62"))
 UNKNOWN_FACE_MERGE_MIN_WIDTH = int(os.environ.get("UNKNOWN_FACE_MERGE_MIN_WIDTH", "24"))
 UNKNOWN_FACE_TTL_S = float(os.environ.get("UNKNOWN_FACE_TTL_S", str(6 * 3600)))
 
+# Mặt nghiêng quá (ước lượng từ 5 điểm mốc, xem estimate_face_yaw) thì embedding
+# kém tin cậy hơn hẳn ảnh đăng ký (thường chụp thẳng) -> không gộp vào bản
+# trung bình của track, không dùng để tự học mẫu.
+FACE_YAW_FRONTAL_MAX_DEG = float(os.environ.get("FACE_YAW_FRONTAL_MAX_DEG", "45"))
+
+# Quét lại theo vùng ĐẦU (xem recognize_in_regions): chỉ lấy phần trên của
+# vùng người (đầu mặt nằm đó), phóng to lên trước khi đưa vào InsightFace —
+# mặt 16-45px trên camera giám sát vẫn nhỏ hơn det_size nhiều dù đã cắt cả
+# vùng người, phóng to thêm quanh đúng vùng đầu bắt được nhiều mặt hơn.
+FACE_RESCAN_HEAD_FRAC = float(os.environ.get("FACE_RESCAN_HEAD_FRAC", "0.35"))
+FACE_RESCAN_PAD_FRAC = float(os.environ.get("FACE_RESCAN_PAD_FRAC", "0.15"))
+FACE_RESCAN_MIN_SHORT_SIDE = int(os.environ.get("FACE_RESCAN_MIN_SHORT_SIDE", "160"))
+FACE_RESCAN_MAX_UPSCALE = float(os.environ.get("FACE_RESCAN_MAX_UPSCALE", "4.0"))
+
+# Model nhận diện thay thế (ONNX khác buffalo_l/ArcFace, vd. AdaFace) — xem
+# scripts/bench_face_models.py. Không đặt thì hành vi giữ nguyên như cũ.
+FACE_REC_MODEL_PATH = os.environ.get("FACE_REC_MODEL")
+FACE_REC_MODEL_PREPROCESS = os.environ.get("FACE_REC_MODEL_PREPROCESS", "arcface").strip().lower()
+
+
+def estimate_face_yaw(kps) -> Optional[float]:
+    """Ước lượng góc quay ngang (yaw, độ) từ 5 điểm mốc khuôn mặt (SCRFD/ArcFace:
+    mắt trái, mắt phải, mũi, miệng trái, miệng phải).
+
+    Không phải góc 3D thật — chỉ dựa trên độ lệch của mũi so với trung điểm hai
+    mắt, chuẩn hoá theo khoảng cách hai mắt (mặt nghiêng thì mũi dạt về một
+    phía, mặt thẳng thì mũi nằm giữa). Đủ để lọc mặt nghiêng quá, không cần độ
+    chính xác tuyệt đối. Trả ``None`` nếu không có mốc (model không bật kps,
+    hoặc mặt quá nhỏ/méo khiến hai mắt trùng nhau).
+    """
+    if kps is None:
+        return None
+    pts = np.asarray(kps, dtype=np.float32)
+    if pts.shape[0] < 3:
+        return None
+    left_eye, right_eye, nose = pts[0], pts[1], pts[2]
+    eye_dist = float(np.linalg.norm(right_eye - left_eye))
+    if eye_dist < 1e-3:
+        return None
+    eye_mid_x = (left_eye[0] + right_eye[0]) / 2.0
+    offset = float(nose[0] - eye_mid_x) / eye_dist
+    # Hệ số hiệu chỉnh thô (thực nghiệm): mũi dạt ra khỏi trung điểm hai mắt một
+    # khoảng ngang bằng khoảng cách hai mắt ứng với quay khoảng 90 độ.
+    return max(-90.0, min(90.0, offset * 90.0))
+
+
+def _blur_score(crop: Optional[np.ndarray]) -> Optional[float]:
+    """Phương sai Laplacian trên ảnh mặt đã cắt — thấp = mờ. Dùng để đánh giá
+    chất lượng mẫu (xem scripts/bench_face_models.py), không chặn nhận diện."""
+    if crop is None or crop.size == 0:
+        return None
+    try:
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+        return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    except Exception:
+        return None
+
+
+def _preprocess_for_model(crop_bgr: np.ndarray, kind: str) -> np.ndarray:
+    """Chuẩn bị ảnh mặt 112x112 (BGR, uint8) thành blob NCHW cho một model nhận
+    diện ONNX thay thế (xem FACE_REC_MODEL/scripts/bench_face_models.py).
+
+    - ``arcface`` (ArcFace/buffalo_l/antelopev2 — chuẩn InsightFace): đổi sang
+      RGB (swapRB) rồi chuẩn hoá (x-127.5)/127.5, như ``ArcFaceONNX.get_feat``.
+    - ``adaface`` (AdaFace IR-101, theo tài liệu checkpoint chính thức): GIỮ
+      BGR (không đổi RGB), chuẩn hoá (x/255-0.5)/0.5 — cùng công thức tuyến
+      tính (x-127.5)/127.5, chỉ khác thứ tự kênh màu.
+    """
+    img = crop_bgr.astype(np.float32)
+    if kind != "adaface":
+        img = img[:, :, ::-1]  # BGR -> RGB cho arcface
+    img = (img - 127.5) / 127.5
+    img = np.ascontiguousarray(np.transpose(img, (2, 0, 1))[None, ...], dtype=np.float32)
+    return img
+
+
+def _aligned_crop(frame: np.ndarray, kps) -> Optional[np.ndarray]:
+    """Ảnh mặt 112x112 đã canh thẳng (ArcFace norm_crop) từ 5 điểm mốc — dùng
+    làm mẫu lưu trữ (data/face_samples/...) và ảnh hiển thị cho "mặt chưa xác
+    định", nhất quán với ảnh recognition model dùng để tính embedding."""
+    if kps is None or frame is None:
+        return None
+    try:
+        from insightface.utils import face_align
+        return face_align.norm_crop(frame, landmark=np.asarray(kps, dtype=np.float32))
+    except Exception:
+        return None
+
 
 class UnknownFaceLog:
     """Các khuôn mặt CHƯA xác định gần đây (theo track), để cán bộ gán tay vào
@@ -204,6 +292,10 @@ class FaceEngine:
         self.det_thresh = float(os.environ.get("FACE_DET_THRESHOLD", "0.30"))
         self.data_dir = Path(data_dir)
         self.avatars_dir = self.data_dir / "face_avatars"
+        # Ảnh cắt (112x112, đã canh thẳng) của từng mẫu bổ sung — tách khỏi
+        # face_avatars (ảnh đại diện chính, 1 ảnh/người) để không lẫn, và để
+        # scripts/bench_face_models.py có bộ dữ liệu label sẵn theo person_id.
+        self.samples_dir = self.data_dir / "face_samples"
         self.db_file = self.data_dir / "registered_faces.json"
         self._last_db_mtime = 0
         self._matrix_cache = None
@@ -216,17 +308,32 @@ class FaceEngine:
 
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.avatars_dir.mkdir(parents=True, exist_ok=True)
+        self.samples_dir.mkdir(parents=True, exist_ok=True)
 
         self.registered_faces: List[Dict] = []
         self._load_database()
 
         # Initialize InsightFace App
         self.app = None
+        # Tên model DÙNG ĐỂ GHI VÀO CSDL (embedding_model) + so khớp "model đổi
+        # chưa" trong _gallery() — mặc định bằng self.model_name (model InsightFace
+        # thường dùng), nhưng tách riêng vì FACE_REC_MODEL (xem dưới) đổi phần tính
+        # embedding mà KHÔNG đổi self.model_name (vẫn cần tên model zoo hợp lệ để
+        # init detection qua FaceAnalysis).
+        self.embedding_model_name = self.model_name
+        self._alt_rec_session = None
+        self._alt_rec_input = None
+        self._alt_rec_output = None
         self._init_insightface(self.model_name, settings)
+        self._init_alt_recognizer()
 
     def _init_insightface(self, model_name: str, settings=None):
         """Initialize the InsightFace FaceAnalysis application."""
         settings = settings or hw.settings()
+        # FACE_REC_MODEL đặt -> tự tính embedding bằng model ONNX khác (xem
+        # _init_alt_recognizer/_alt_embed), không cần InsightFace tải sẵn
+        # recognition net (buffalo_l/...) nữa, chỉ cần detection + kps.
+        allowed_modules = ['detection'] if FACE_REC_MODEL_PATH else ['detection', 'recognition']
         try:
             # Wheel torch (cu128) đem theo libcudnn/libcublas riêng, không nằm trong
             # LD_LIBRARY_PATH hệ thống — nạp trước thì onnxruntime-gpu tìm thấy mà
@@ -242,7 +349,7 @@ class FaceEngine:
             self.app = FaceAnalysis(
                 name=model_name,
                 providers=list(settings.face_providers),
-                allowed_modules=['detection', 'recognition'],
+                allowed_modules=allowed_modules,
             )
             ctx_id = 0 if settings.device == "cuda" else -1
             self.app.prepare(ctx_id=ctx_id, det_size=self.det_size, det_thresh=self.det_thresh)
@@ -256,7 +363,7 @@ class FaceEngine:
                 self.app = FaceAnalysis(
                     name=model_name,
                     providers=['CPUExecutionProvider'],
-                    allowed_modules=['detection', 'recognition'],
+                    allowed_modules=allowed_modules,
                 )
                 self.app.prepare(ctx_id=-1, det_size=self.det_size, det_thresh=self.det_thresh)
                 self._rebuild_sessions(hw.settings())
@@ -264,6 +371,42 @@ class FaceEngine:
             except Exception as ex:
                 print(f"[FaceEngine] Error loading InsightFace model: {ex}")
                 self.app = None
+
+    def _init_alt_recognizer(self) -> None:
+        """Model nhận diện THAY THẾ (vd. AdaFace) qua ``FACE_REC_MODEL=<path.onnx>``
+        + ``FACE_REC_MODEL_PREPROCESS=arcface|adaface`` — xem scripts/bench_face_models.py
+        để so sánh với buffalo_l/antelopev2. Không đặt thì hành vi giữ nguyên
+        như cũ (dùng recognition net của InsightFace)."""
+        if not FACE_REC_MODEL_PATH:
+            return
+        try:
+            import onnxruntime as ort
+            so = hw.ort_session_options()
+            self._alt_rec_session = ort.InferenceSession(
+                FACE_REC_MODEL_PATH, sess_options=so, providers=['CPUExecutionProvider']
+            )
+            self._alt_rec_input = self._alt_rec_session.get_inputs()[0].name
+            self._alt_rec_output = self._alt_rec_session.get_outputs()[0].name
+            self.embedding_model_name = f"alt:{Path(FACE_REC_MODEL_PATH).stem}:{FACE_REC_MODEL_PREPROCESS}"
+            print(f"[FaceEngine] Dùng model nhận diện thay thế {FACE_REC_MODEL_PATH} "
+                  f"(preprocess={FACE_REC_MODEL_PREPROCESS}) -> embedding_model="
+                  f"'{self.embedding_model_name}'")
+        except Exception as e:
+            print(f"[FaceEngine] Không tải được FACE_REC_MODEL={FACE_REC_MODEL_PATH}: {e}")
+            self._alt_rec_session = None
+
+    def _alt_embed(self, aligned_crop: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        """Embedding (chưa chuẩn hoá) từ model thay thế, trên ảnh 112x112 đã
+        canh thẳng. Trả ``None`` nếu chưa cấu hình FACE_REC_MODEL hoặc thiếu ảnh."""
+        if getattr(self, "_alt_rec_session", None) is None or aligned_crop is None:
+            return None
+        try:
+            blob = _preprocess_for_model(aligned_crop, FACE_REC_MODEL_PREPROCESS)
+            out = self._alt_rec_session.run([self._alt_rec_output], {self._alt_rec_input: blob})[0]
+            return out.reshape(-1).astype(np.float32)
+        except Exception as e:
+            print(f"[FaceEngine] Lỗi tính embedding model thay thế: {e}")
+            return None
 
     def _rebuild_sessions(self, settings) -> None:
         """Dựng lại ORT session của từng model con (detection/recognition) với
@@ -340,7 +483,7 @@ class FaceEngine:
 
     def extract_face_and_embedding(
         self, frame: np.ndarray, enforce_quality: bool = False
-    ) -> Optional[Tuple[np.ndarray, np.ndarray, Tuple[int, int, int, int]]]:
+    ) -> Optional[Tuple[np.ndarray, np.ndarray, Tuple[int, int, int, int], Optional[np.ndarray]]]:
         """
         Extract the most prominent face embedding and bounding box from an image.
 
@@ -349,7 +492,9 @@ class FaceEngine:
         API đăng ký đã bắt sẵn (``except Exception`` -> HTTPException 400).
 
         Returns:
-            (norm_embedding, cropped_face_img, (x1, y1, x2, y2)) or None
+            (norm_embedding, cropped_face_img, (x1, y1, x2, y2), aligned_crop_112)
+            hoặc ``None``. ``aligned_crop_112`` là ``None`` nếu model không bật
+            landmark (kps).
         """
         if self.app is None or frame is None:
             return None
@@ -371,7 +516,14 @@ class FaceEngine:
                 max_area = area
                 largest_face = f
 
-        if largest_face is None or largest_face.embedding is None:
+        if largest_face is None:
+            return None
+
+        aligned = _aligned_crop(frame, getattr(largest_face, "kps", None))
+        # FACE_REC_MODEL đặt -> InsightFace chỉ chạy detection (xem _init_insightface),
+        # embedding tính riêng bằng model thay thế trên ảnh đã canh thẳng.
+        emb = self._alt_embed(aligned) if getattr(self, "_alt_rec_session", None) is not None else largest_face.embedding
+        if emb is None:
             return None
 
         if enforce_quality:
@@ -386,7 +538,6 @@ class FaceEngine:
                 )
 
         # Normalize embedding vector
-        emb = largest_face.embedding
         norm_emb = emb / np.linalg.norm(emb)
 
         # Crop face for avatar
@@ -401,7 +552,7 @@ class FaceEngine:
         y2 = min(h_img, by2 + pad_y)
 
         cropped_face = frame[y1:y2, x1:x2]
-        return norm_emb, cropped_face, (int(bx1), int(by1), int(bx2), int(by2))
+        return norm_emb, cropped_face, (int(bx1), int(by1), int(bx2), int(by2)), aligned
 
     def register_person(
         self,
@@ -419,7 +570,7 @@ class FaceEngine:
         if extracted is None:
             raise ValueError("Không phát hiện được khuôn mặt trong ảnh. Vui lòng căn chỉnh góc chụp rõ nét và đủ ánh sáng.")
 
-        norm_emb, cropped_face, _ = extracted
+        norm_emb, cropped_face, _bbox, _aligned = extracted
 
         # Check if military ID already exists
         for idx, person in enumerate(self.registered_faces):
@@ -435,7 +586,7 @@ class FaceEngine:
                     "status": status,
                     "avatar_path": f"/data/face_avatars/{avatar_filename}",
                     "embedding": norm_emb.tolist(),
-                    "embedding_model": self.model_name,
+                    "embedding_model": self.embedding_model_name,
                     "updated_at": datetime.now().isoformat()
                 })
                 self._save_database()
@@ -456,7 +607,7 @@ class FaceEngine:
             "status": status,
             "avatar_path": f"/data/face_avatars/{avatar_filename}",
             "embedding": norm_emb.tolist(),
-            "embedding_model": self.model_name,
+            "embedding_model": self.embedding_model_name,
             "created_at": datetime.now().strftime("%d/%m/%Y"),
             "timestamp": datetime.now().isoformat()
         }
@@ -496,9 +647,16 @@ class FaceEngine:
         """Delete a registered person by ID."""
         self._load_database()
         initial_len = len(self.registered_faces)
+        removed = [p for p in self.registered_faces if p.get("id") == person_id or p.get("military_id") == person_id]
         self.registered_faces = [p for p in self.registered_faces if p.get("id") != person_id and p.get("military_id") != person_id]
         if len(self.registered_faces) < initial_len:
             self._save_database()
+            for p in removed:
+                try:
+                    import shutil
+                    shutil.rmtree(self.samples_dir / str(p.get("id")), ignore_errors=True)
+                except Exception:
+                    pass
             return True
         return False
 
@@ -557,7 +715,7 @@ class FaceEngine:
                     # Mỗi model sinh ra một không gian vector riêng. Đem embedding của
                     # model cũ so với model đang chạy chỉ cho ra số ngẫu nhiên, dễ nhận
                     # nhầm người, nên phải loại ra thay vì dùng bừa.
-                    if p.get("embedding_model") != self.model_name:
+                    if p.get("embedding_model") != self.embedding_model_name:
                         stale.append(p.get("name") or p.get("military_id") or "?")
                         continue
                     pidx = len(persons)
@@ -565,13 +723,13 @@ class FaceEngine:
                     rows.append(p["embedding"])
                     owners.append(pidx)
                     for smp in p.get("samples") or []:
-                        if smp.get("embedding") and smp.get("model", self.model_name) == self.model_name:
+                        if smp.get("embedding") and smp.get("model", self.embedding_model_name) == self.embedding_model_name:
                             rows.append(smp["embedding"])
                             owners.append(pidx)
 
                 if stale:
                     print(f"[FaceEngine] BỎ QUA {len(stale)} quân nhân đăng ký bằng model khác "
-                          f"'{self.model_name}': {', '.join(stale[:10])}"
+                          f"'{self.embedding_model_name}': {', '.join(stale[:10])}"
                           f"{'...' if len(stale) > 10 else ''}. Cần đăng ký lại khuôn mặt "
                           f"(hoặc đặt FACE_MODEL về model cũ).")
                 if not rows:
@@ -607,10 +765,61 @@ class FaceEngine:
         person, best, margin = self._match(np.asarray(norm_emb, dtype=np.float32), gallery, threshold, margin_req)
         return (self._person_ref(person) if person is not None else None), best, margin
 
-    def add_samples(self, person_id: str, embeddings: List[np.ndarray], source: str) -> int:
+    @staticmethod
+    def _normalize_sample_input(item) -> Tuple[np.ndarray, Optional[np.ndarray], Optional[int]]:
+        """Một phần tử của ``embeddings`` truyền vào ``add_samples`` có thể là
+        embedding trần (tương thích ngược — mọi lời gọi cũ), hoặc
+        ``(embedding, crop)`` / ``(embedding, crop, width)`` để kèm ảnh cắt đã
+        canh thẳng + bề ngang mặt gốc (xem ``sample_from_image``)."""
+        if isinstance(item, tuple):
+            emb = item[0]
+            crop = item[1] if len(item) > 1 else None
+            width = item[2] if len(item) > 2 else None
+            return emb, crop, width
+        return item, None, None
+
+    def _save_sample_crop(self, person_folder: str, sample_id: str, crop) -> Optional[str]:
+        """Lưu ảnh cắt (ndarray BGR hoặc jpeg bytes đã mã hoá) của một mẫu xuống
+        ``data/face_samples/<person_folder>/<sample_id>.jpg``. Trả đường dẫn
+        TƯƠNG ĐỐI theo ``data_dir`` để ghi vào CSDL JSON (``crop``), hoặc
+        ``None`` nếu không có ảnh hay lưu lỗi (không chặn việc thêm mẫu)."""
+        if crop is None:
+            return None
+        try:
+            person_dir = self.samples_dir / str(person_folder)
+            person_dir.mkdir(parents=True, exist_ok=True)
+            path = person_dir / f"{sample_id}.jpg"
+            if isinstance(crop, (bytes, bytearray)):
+                path.write_bytes(bytes(crop))
+            else:
+                cv2.imwrite(str(path), crop)
+            return f"{self.samples_dir.name}/{person_folder}/{sample_id}.jpg"
+        except Exception as e:
+            print(f"[FaceEngine] Không lưu được ảnh mẫu {sample_id}: {e}")
+            return None
+
+    def _delete_sample_crop(self, sample: Dict) -> None:
+        """Xoá file ảnh cắt của một mẫu (nếu có) khi mẫu bị loại/xoá — tránh để
+        lại file "ma" không ai tham chiếu."""
+        rel = sample.get("crop")
+        if not rel:
+            return
+        try:
+            (self.data_dir / rel).unlink(missing_ok=True)
+        except Exception as e:
+            print(f"[FaceEngine] Không xoá được ảnh mẫu {rel}: {e}")
+
+    def add_samples(self, person_id: str, embeddings: List, source: str) -> int:
         """Thêm mẫu bổ sung cho một quân nhân. ``source``: "camera" (gán tay từ
         mặt chưa xác định), "upload" (ảnh thêm), "auto" (tự học). Mẫu "auto" bị
         giới hạn riêng (FIFO) để tự học sai không lấn át mẫu do người gán.
+
+        Mỗi phần tử ``embeddings`` là embedding trần HOẶC ``(embedding, crop[,
+        width])`` — có ``crop`` thì lưu ảnh 112x112 đã canh thẳng xuống
+        ``data/face_samples/<person_id>/<sample_id>.jpg`` và ghi đường dẫn vào
+        mẫu (``crop``), làm dữ liệu gắn nhãn sẵn cho scripts/bench_face_models.py.
+        Không có ``crop`` thì mẫu vẫn được thêm như trước (tương thích JSON cũ).
+
         Trả số mẫu thực sự được thêm."""
         self._load_database()
         added = 0
@@ -619,52 +828,72 @@ class FaceEngine:
                            if p.get("id") == person_id or p.get("military_id") == person_id), None)
             if person is None:
                 raise KeyError(person_id)
+            folder = person.get("id") or person_id
             samples = person.setdefault("samples", [])
             existing = [np.asarray(x["embedding"], dtype=np.float32) for x in samples if x.get("embedding")]
             if person.get("embedding"):
                 existing.append(np.asarray(person["embedding"], dtype=np.float32))
-            for emb in embeddings:
+            for item in embeddings:
+                emb, crop, width = self._normalize_sample_input(item)
                 e = np.asarray(emb, dtype=np.float32)
                 e = e / (np.linalg.norm(e) or 1.0)
                 if existing and max(float(x @ e) for x in existing) >= FACE_SAMPLE_DEDUP_SIM:
                     continue
-                samples.append({"embedding": [round(float(v), 6) for v in e], "source": source,
-                                "model": self.model_name, "created_at": datetime.now().isoformat(timespec="seconds")})
+                sample_id = uuid.uuid4().hex[:12]
+                rec = {"id": sample_id, "embedding": [round(float(v), 6) for v in e], "source": source,
+                       "model": self.embedding_model_name, "created_at": datetime.now().isoformat(timespec="seconds")}
+                if width:
+                    rec["width"] = int(width)
+                crop_rel = self._save_sample_crop(folder, sample_id, crop)
+                if crop_rel:
+                    rec["crop"] = crop_rel
+                samples.append(rec)
                 existing.append(e)
                 added += 1
             auto = [x for x in samples if x.get("source") == "auto"]
             while len(auto) > FACE_MAX_AUTO_SAMPLES:
-                samples.remove(auto.pop(0))
+                victim = auto.pop(0)
+                samples.remove(victim)
+                self._delete_sample_crop(victim)
             while len(samples) > FACE_MAX_SAMPLES:
                 # Bỏ mẫu cũ nhất, ưu tiên bỏ mẫu tự học trước
                 victim = next((x for x in samples if x.get("source") == "auto"), samples[0])
                 samples.remove(victim)
+                self._delete_sample_crop(victim)
         if added:
             self._save_database()
         return added
 
     def clear_samples(self, person_id: str, source: Optional[str] = None) -> int:
-        """Xoá mẫu bổ sung (tất cả, hoặc chỉ một nguồn). Trả số mẫu đã xoá."""
+        """Xoá mẫu bổ sung (tất cả, hoặc chỉ một nguồn) + file ảnh cắt tương ứng.
+        Trả số mẫu đã xoá."""
         self._load_database()
         with self._db_lock:
             person = next((p for p in self.registered_faces
                            if p.get("id") == person_id or p.get("military_id") == person_id), None)
             if person is None:
                 raise KeyError(person_id)
-            before = len(person.get("samples") or [])
-            person["samples"] = [x for x in person.get("samples") or []
-                                 if source is not None and x.get("source") != source]
-            removed = before - len(person["samples"])
+            before = person.get("samples") or []
+            keep, dropped = [], []
+            for x in before:
+                (keep if source is not None and x.get("source") != source else dropped).append(x)
+            person["samples"] = keep
+            removed = len(dropped)
+            for x in dropped:
+                self._delete_sample_crop(x)
         if removed:
             self._save_database()
         return removed
 
-    def sample_from_image(self, image: np.ndarray) -> np.ndarray:
-        """Embedding mặt lớn nhất trong ảnh tải lên (để thêm mẫu)."""
+    def sample_from_image(self, image: np.ndarray) -> Tuple[np.ndarray, Optional[np.ndarray], int]:
+        """Embedding + ảnh cắt đã canh thẳng (112x112) + bề ngang mặt gốc, của mặt
+        lớn nhất trong ảnh tải lên (để thêm mẫu — ``add_samples`` lưu ảnh cắt này
+        xuống đĩa làm dữ liệu bench, xem scripts/bench_face_models.py)."""
         extracted = self.extract_face_and_embedding(image, enforce_quality=False)
         if extracted is None:
             raise ValueError("Không phát hiện được khuôn mặt trong ảnh.")
-        return extracted[0]
+        norm_emb, _cropped, bbox, aligned = extracted
+        return norm_emb, aligned, int(bbox[2] - bbox[0])
 
     def recognize_faces_in_frame(self, frame: np.ndarray) -> List[Dict]:
         """
@@ -685,13 +914,22 @@ class FaceEngine:
             return []
 
         all_detected_faces = []
+        use_alt = getattr(self, "_alt_rec_session", None) is not None
 
         try:
             for f in self.app.get(frame):
+                kps = getattr(f, "kps", None)
+                # FACE_REC_MODEL đặt -> InsightFace chỉ chạy detection (xem
+                # _init_insightface), f.embedding luôn None -> tính riêng bằng
+                # model thay thế trên ảnh đã canh thẳng (cũng dùng luôn làm "_crop").
+                aligned = _aligned_crop(frame, kps)
+                emb = self._alt_embed(aligned) if use_alt else f.embedding
                 all_detected_faces.append({
                     "bbox": f.bbox.astype(int),
-                    "embedding": f.embedding,
-                    "det_score": float(f.det_score) if hasattr(f, 'det_score') else 1.0
+                    "embedding": emb,
+                    "det_score": float(f.det_score) if hasattr(f, 'det_score') else 1.0,
+                    "kps": kps,
+                    "aligned": aligned,
                 })
         except Exception as e:
             print(f"[FaceEngine] Lỗi quét khuôn mặt: {e}")
@@ -713,6 +951,9 @@ class FaceEngine:
                 threshold += self.SMALL_FACE_PENALTY
 
             matched_person, best_sim, margin = self._match(norm_emb, gallery, threshold, self.AMBIGUITY_MARGIN)
+            kps = face_dict.get("kps")
+            yaw = estimate_face_yaw(kps)
+            frontal = True if yaw is None else abs(yaw) < FACE_YAW_FRONTAL_MAX_DEG
             row = {
                 "bbox": [int(bx1), int(by1), int(bx2), int(by2)],
                 "is_recognized": matched_person is not None,
@@ -720,9 +961,13 @@ class FaceEngine:
                 "margin": round(margin, 3),
                 "det_score": face_dict["det_score"],
                 "width": width,
+                "yaw": None if yaw is None else round(yaw, 1),
+                "frontal": frontal,
                 # Embedding đã chuẩn hoá — để phía gọi gộp theo track/bổ sung mẫu.
-                # KHÔNG đưa ra API/SSE (mảng numpy, và là dữ liệu sinh trắc).
+                # Ảnh cắt 112x112 đã canh thẳng — để lưu làm mẫu khi gán tay/tự học.
+                # KHÔNG đưa ra API/SSE (mảng numpy/ảnh thô, và là dữ liệu sinh trắc).
                 "_emb": norm_emb,
+                "_crop": face_dict.get("aligned"),
                 "person": None,
             }
             if matched_person is not None:
@@ -734,9 +979,16 @@ class FaceEngine:
     def recognize_in_regions(self, frame: np.ndarray, regions: List[Tuple[int, int, int, int]]) -> List[Dict]:
         """Quét lại khuôn mặt bên trong từng vùng ảnh nhỏ rồi quy chiếu về toạ độ gốc.
 
-        Camera độ phân giải thấp cho khuôn mặt chỉ vài chục pixel trên khung hình
-        đầy đủ, quét cả khung thường bỏ sót. Cắt riêng vùng người rồi đưa vào
-        InsightFace sẽ được phóng to lên det_size nên bắt được nhiều mặt hơn.
+        Camera độ phân giải thấp cho khuôn mặt chỉ vài chục pixel (16-45px) trên
+        khung hình đầy đủ, quét cả khung thường bỏ sót. ``regions`` (do phía gọi
+        — ``video_processor._rescan_regions`` — chọn ra, xấp xỉ phần thân trên
+        của từng người) vẫn còn RỘNG hơn cần thiết: chỉ phần ĐẦU mới có mặt, nên
+        cắt tiếp lấy khoảng ``FACE_RESCAN_HEAD_FRAC`` chiều cao từ trên xuống
+        (nới ngang ``FACE_RESCAN_PAD_FRAC`` để không hụt tai/má khi quay đầu),
+        rồi phóng to lên tới khi cạnh ngắn đạt ``FACE_RESCAN_MIN_SHORT_SIDE``
+        (tối đa ``FACE_RESCAN_MAX_UPSCALE`` lần) trước khi đưa vào InsightFace —
+        chỉ phóng to CẢ vùng người (như trước) vẫn cho mặt bé hơn det_size nhiều,
+        thu hẹp đúng vùng đầu rồi phóng to thêm bắt được nhiều mặt nhỏ hơn hẳn.
         """
         if self.app is None or frame is None or not regions:
             return []
@@ -748,13 +1000,34 @@ class FaceEngine:
             y1 = max(0, int(ry1))
             x2 = min(w_img, int(rx2))
             y2 = min(h_img, int(ry2))
-            if x2 - x1 < 20 or y2 - y1 < 20:
+            width, height = x2 - x1, y2 - y1
+            if width < 10 or height < 10:
                 continue
 
-            crop = frame[y1:y2, x1:x2]
+            head_h = max(1, int(height * FACE_RESCAN_HEAD_FRAC))
+            pad_x = int(width * FACE_RESCAN_PAD_FRAC)
+            hx1 = max(0, x1 - pad_x)
+            hx2 = min(w_img, x2 + pad_x)
+            hy1 = y1
+            hy2 = min(h_img, y1 + head_h)
+            if hx2 - hx1 < 10 or hy2 - hy1 < 10:
+                continue
+
+            crop = frame[hy1:hy2, hx1:hx2]
+            short_side = min(crop.shape[0], crop.shape[1])
+            scale = 1.0
+            if 0 < short_side < FACE_RESCAN_MIN_SHORT_SIDE:
+                scale = min(FACE_RESCAN_MAX_UPSCALE, FACE_RESCAN_MIN_SHORT_SIDE / short_side)
+            if scale > 1.0:
+                crop = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+
             for face in self.recognize_faces_in_frame(crop):
                 fb = face["bbox"]
-                face["bbox"] = [fb[0] + x1, fb[1] + y1, fb[2] + x1, fb[3] + y1]
+                face["bbox"] = [
+                    int(fb[0] / scale) + hx1, int(fb[1] / scale) + hy1,
+                    int(fb[2] / scale) + hx1, int(fb[3] / scale) + hy1,
+                ]
+                face["width"] = face["bbox"][2] - face["bbox"][0]
                 results.append(face)
 
         return results

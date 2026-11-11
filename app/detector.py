@@ -75,7 +75,41 @@ _BYTETRACK_DEFAULTS = {
     "match_thresh": 0.8,
     "fuse_score": True,
 }
+# Mặc định của ultralytics/cfg/trackers/botsort.yaml — chép lại cùng lý do.
+# gmc_method "none" (mặc định gốc là sparseOptFlow, dùng bù chuyển động NỀN cho
+# camera DI ĐỘNG): camera giám sát ở đây đứng yên, bù chuyển động chỉ tốn CPU
+# vô ích mà không cải thiện gì -> tắt để BoT-SORT không chậm hơn ByteTrack một
+# cách không cần thiết. with_reid False (mặc định gốc) vì cần tải thêm model
+# ReID + chạy suy luận thêm mỗi khung — chỉ bật qua YOLO_TRACKER_REID=1 khi đã
+# chấp nhận đổi tốc độ lấy độ chính xác track cao hơn.
+_BOTSORT_DEFAULTS = {
+    "tracker_type": "botsort",
+    "track_high_thresh": 0.25,
+    "track_low_thresh": 0.1,
+    "new_track_thresh": 0.25,
+    "track_buffer": 30,
+    "match_thresh": 0.8,
+    "fuse_score": True,
+    "gmc_method": "none",
+    "proximity_thresh": 0.5,
+    "appearance_thresh": 0.8,
+    "with_reid": False,
+    "model": "auto",
+}
 _DEFAULT_TRACKER_FPS = 30  # fps mà bộ mặc định trên giả định
+
+# Chọn thuật toán theo dõi: "bytetrack" (mặc định, nhẹ) hoặc "botsort" (có thêm
+# bù chuyển động + ReID tuỳ chọn, nặng hơn). Sai giá trị -> rơi về bytetrack,
+# không chết tiến trình vì một biến môi trường gõ nhầm.
+YOLO_TRACKER = os.environ.get("YOLO_TRACKER", "bytetrack").strip().lower()
+if YOLO_TRACKER not in ("bytetrack", "botsort"):
+    print(f"[PersonDetector] YOLO_TRACKER='{YOLO_TRACKER}' không hợp lệ (chỉ nhận "
+          f"bytetrack|botsort), dùng bytetrack.")
+    YOLO_TRACKER = "bytetrack"
+# BoT-SORT + ReID: so khớp track còn dựa thêm vào đặc trưng hình ảnh (không chỉ
+# IoU/chuyển động) — chính xác hơn khi nhiều người đi ngang nhau, nhưng tốn
+# thêm một lượt suy luận mỗi khung nên mặc định tắt.
+YOLO_TRACKER_REID = os.environ.get("YOLO_TRACKER_REID", "0").strip() == "1"
 
 
 class PersonDetector:
@@ -173,20 +207,26 @@ class PersonDetector:
         thời gian thực (30 lượt gọi ở 4fps = 7.5s thay vì ý định ~1s). Scale lại
         track_buffer theo đúng AI_FPS để bù việc frame_rate bị khoá cứng ở 30.
         """
-        cfg = dict(_BYTETRACK_DEFAULTS)
+        if YOLO_TRACKER == "botsort":
+            cfg = dict(_BOTSORT_DEFAULTS)
+            if YOLO_TRACKER_REID:
+                cfg["with_reid"] = True
+                cfg["model"] = "auto"
+        else:
+            cfg = dict(_BYTETRACK_DEFAULTS)
         cfg["frame_rate"] = ai_fps  # chỉ để tham khảo/log, ultralytics không đọc field này
-        cfg["track_buffer"] = max(1, round(_BYTETRACK_DEFAULTS["track_buffer"] * ai_fps / _DEFAULT_TRACKER_FPS))
+        cfg["track_buffer"] = max(1, round(cfg["track_buffer"] * ai_fps / _DEFAULT_TRACKER_FPS))
 
         out_dir = Path("data")
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
-            cfg_path = out_dir / f"bytetrack_{ai_fps}fps.yaml"
+            cfg_path = out_dir / f"{YOLO_TRACKER}_{ai_fps}fps.yaml"
             cfg_path.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
             return str(cfg_path.resolve())
         except OSError:
             # Không ghi được file (quyền, đĩa đầy...) thì dùng bộ mặc định của ultralytics
             # thay vì làm hỏng cả detector.
-            return "bytetrack.yaml"
+            return f"{YOLO_TRACKER}.yaml"
 
     def reset(self) -> None:
         """Xoá trạng thái tracking khi bắt đầu một luồng video mới."""

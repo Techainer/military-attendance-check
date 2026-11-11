@@ -45,8 +45,11 @@ def noisy(base, sim):
 def bare_engine(persons, tmp):
     fe = object.__new__(FaceEngine)
     fe.model_name = "buffalo_l"
+    fe.embedding_model_name = "buffalo_l"
+    fe._alt_rec_session = None
     fe.similarity_threshold = 0.40
     fe.data_dir = Path(tmp)
+    fe.samples_dir = Path(tmp) / "face_samples"
     fe.db_file = Path(tmp) / "registered_faces.json"
     fe._last_db_mtime = 0
     fe._matrix_cache = None
@@ -191,6 +194,69 @@ with tempfile.TemporaryDirectory() as tmp:
           log2.list() and next(r for r in log2.list() if r["id"] == a_item["id"])["tracks"] == 3)
     uid = log.list()[0]["id"]
     check("pop lấy ra và xoá", log.pop(uid) is not None and log.get(uid) is None)
+
+    print("\n[9] Ước lượng yaw từ 5 điểm mốc (mắt trái, mắt phải, mũi, miệng trái, miệng phải)")
+    from app.face_engine import estimate_face_yaw
+    frontal_kps = np.array([[40, 50], [70, 50], [55, 70], [42, 90], [68, 90]], dtype=np.float32)
+    check("mũi nằm giữa hai mắt -> yaw ~ 0", abs(estimate_face_yaw(frontal_kps)) < 5,
+          str(estimate_face_yaw(frontal_kps)))
+    turned_right_kps = np.array([[40, 50], [70, 50], [68, 70], [42, 90], [68, 90]], dtype=np.float32)
+    yaw_right = estimate_face_yaw(turned_right_kps)
+    check("mũi dạt về bên mắt phải -> yaw > 0, cùng dấu với độ lệch", yaw_right > 20, str(yaw_right))
+    turned_left_kps = np.array([[40, 50], [70, 50], [42, 70], [42, 90], [68, 90]], dtype=np.float32)
+    yaw_left = estimate_face_yaw(turned_left_kps)
+    check("mũi dạt về bên mắt trái -> yaw < 0 (ngược dấu với quay phải)",
+          yaw_left < 0 and yaw_left == -yaw_right, f"{yaw_left} vs {-yaw_right}")
+    check("không có mốc -> None", estimate_face_yaw(None) is None)
+    degenerate_kps = np.array([[50, 50], [50, 50], [50, 70], [42, 90], [68, 90]], dtype=np.float32)
+    check("hai mắt trùng nhau (méo) -> None, không chia cho 0",
+          estimate_face_yaw(degenerate_kps) is None)
+
+    print("\n[10] Mặt nghiêng (frontal=False) không gộp vào track, không tự học")
+    fe3 = bare_engine([
+        {"id": "a", "name": "A", "embedding": A.tolist(), "embedding_model": "buffalo_l"},
+    ], tmp)
+    proc3 = _Proc()
+    proc3.face_engine = fe3
+    proc3.camera_id = "cam_frontal_test"
+    proc3.track_identity = {}
+    proc3._track_faces = {}
+    proc3._last_auto_enroll = {}
+    for name in ("_faces_to_people", "_face_jpeg"):
+        setattr(proc3, name, getattr(VideoProcessor, name))
+    for name in ("_pool_track_face", "_update_face_pools", "_remember_identity", "_auto_enroll_candidates"):
+        setattr(proc3, name, getattr(VideoProcessor, name).__get__(proc3))
+    sideways_face = {"bbox": [130, 110, 160, 145], "_emb": noisy(A, 0.30), "det_score": 0.7,
+                      "width": 30, "frontal": False}
+    entry = proc3._pool_track_face(7, sideways_face, frame, 0.0)
+    check("_pool_track_face trả None cho mặt nghiêng (trọng số 0, không gộp)", entry is None)
+    for i in range(12):
+        proc3._update_face_pools([dict(sideways_face)], box, [7], frame, float(i))
+    check("12 khung nghiêng liên tiếp vẫn KHÔNG đủ để khoá danh tính",
+          (proc3.track_identity.get(7) or {}).get("person") is None)
+    proc3.track_identity = {8: {"person": {"id": "a"}}}
+    sideways_good = {"_emb": A, "similarity": 0.7, "margin": 0.3, "width": 40, "frontal": False}
+    cands = proc3._auto_enroll_candidates(
+        {0: {"person": {"id": "a"}, "face": sideways_good}}, [8], 1000.0)
+    check("mặt nghiêng không được đưa vào danh sách tự học dù mọi điều kiện khác đạt", cands == [])
+
+    print("\n[11] add_samples lưu ảnh cắt (crop) xuống data/face_samples/<id>/, clear_samples xoá file")
+    fe4 = bare_engine([
+        {"id": "p_crop", "name": "D", "embedding": A.tolist(), "embedding_model": "buffalo_l"},
+    ], tmp)
+    fake_crop = np.full((112, 112, 3), 200, dtype=np.uint8)
+    added = fe4.add_samples("p_crop", [(noisy(A, 0.9), fake_crop, 42)], "upload")
+    check("thêm 1 mẫu kèm crop", added == 1)
+    rec = next(p for p in fe4.registered_faces if p["id"] == "p_crop")
+    smp = rec["samples"][0]
+    check("mẫu ghi lại đường dẫn crop + width", smp.get("crop") and smp.get("width") == 42, str(smp))
+    crop_path = fe4.data_dir / smp["crop"]
+    check("file ảnh crop tồn tại trên đĩa", crop_path.is_file())
+    added2 = fe4.add_samples("p_crop", [noisy(A, 0.5)], "upload")  # không kèm crop (tương thích cũ)
+    check("vẫn thêm được mẫu KHÔNG kèm crop (tương thích ngược)",
+          added2 == 1 and "crop" not in rec["samples"][1])
+    removed = fe4.clear_samples("p_crop")
+    check("clear_samples xoá cả file crop trên đĩa", removed == 2 and not crop_path.exists())
 
 print()
 if failures:
