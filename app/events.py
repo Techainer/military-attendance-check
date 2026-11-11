@@ -252,6 +252,56 @@ class EventStore:
         print(f"[Events] {event_type}: {message}")
         return event
 
+    # ---------- cập nhật sự kiện đang MỞ ----------
+    # Vi phạm vùng cấm được gộp vào MỘT sự kiện còn mở trong lúc vùng còn người
+    # (xem app/video_processor.py) — khác ``ack`` (người dùng xác nhận đã xử lý),
+    # đây là hệ thống tự cập nhật thêm thông tin (tên vừa định danh được, số
+    # người đổi) vào sự kiện đã bắn, KHÔNG tạo sự kiện mới.
+
+    def _update_locked(self, event_id: str, fields: dict) -> Optional[dict]:
+        """Đọc-sửa-ghi ``events.json``, KHÔNG publish (xem ``update``/``update_async``).
+        ``detail`` được GỘP vào detail cũ thay vì đè hẳn, để không mất các
+        trường không đổi (vd. ``zone_name``, ``dwell_seconds``)."""
+        events = read_json_list(self.events_file)
+        for event in events:
+            if event.get("id") != event_id:
+                continue
+            for key, value in fields.items():
+                if key == "detail" and isinstance(value, dict):
+                    event["detail"] = {**(event.get("detail") or {}), **value}
+                else:
+                    event[key] = value
+            write_json_list(self.events_file, events)
+            return event
+        return None
+
+    def update(self, event_id: str, **fields) -> Optional[dict]:
+        """Cập nhật một sự kiện đã có rồi đẩy lại cho client SSE. Trả về
+        ``None`` nếu không tìm thấy.
+
+        Đồng bộ — dùng ở mọi nơi KHÔNG phải vòng xử lý video (API, script vá
+        dữ liệu...). Vòng xử lý video dùng ``update_async`` để không chặn vòng
+        lặp khi ghi lại file JSON (xem docstring ``emit``/``emit_async``).
+
+        Payload đẩy cho SSE là CHÍNH sự kiện đã cập nhật, kèm thêm
+        ``"updated": True`` để phân biệt với một sự kiện MỚI (``emit`` không
+        có cờ này) — FE dò cờ này để sửa lại dòng đã hiện thay vì thêm dòng mới.
+        """
+        event = self._update_locked(event_id, fields)
+        if event is not None:
+            self._publish({**event, "updated": True})
+            print(f"[Events] cập nhật {event_id}: {fields.get('message', '')}")
+        return event
+
+    async def update_async(self, event_id: str, **fields) -> Optional[dict]:
+        """Bản không chặn vòng lặp sự kiện của ``update``, dùng trong vòng xử
+        lý video."""
+        event = await asyncio.to_thread(self._update_locked, event_id, fields)
+        if event is not None:
+            self._publish({**event, "updated": True})
+            print(f"[Events] cập nhật {event_id}: {fields.get('message', '')}")
+        return event
+
     # ---------- truy vấn ----------
 
     def list_events(
@@ -262,6 +312,7 @@ class EventStore:
         camera_id: Optional[str] = None,
         occurred_from: Optional[str] = None,
         occurred_to: Optional[str] = None,
+        zone_rule: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple:
@@ -281,6 +332,10 @@ class EventStore:
             events = [e for e in events if str(e.get("occurred_at", ""))[:19] >= occurred_from[:19]]
         if occurred_to:
             events = [e for e in events if str(e.get("occurred_at", ""))[:19] <= occurred_to[:19]]
+        # "Vùng cấm" (restricted_area) hay "Vạch an toàn" (crossing_line) — lưu
+        # trong detail.zone_rule lúc bắn sự kiện INTRUSION (xem video_processor.py)
+        if zone_rule:
+            events = [e for e in events if (e.get("detail") or {}).get("zone_rule") == zone_rule]
         return events[offset:offset + limit], len(events)
 
     def since(self, event_id: str, types=None, camera_id: Optional[str] = None) -> List[dict]:

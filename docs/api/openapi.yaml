@@ -203,6 +203,50 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Camera' }
 
+  /cameras/{camera_id}/clock:
+    parameters:
+      - $ref: '#/components/parameters/CameraId'
+    get:
+      tags: [Camera]
+      summary: Đọc giờ camera (ISAPI) và độ lệch so với giờ máy chủ
+      description: CHỈ ĐỌC — không chỉnh gì trên camera. QTHT.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CameraClock' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          description: Không đọc được giờ camera (mất mạng, sai mật khẩu, không phải Hikvision...).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /cameras/{camera_id}/clock/sync:
+    parameters:
+      - $ref: '#/components/parameters/CameraId'
+    post:
+      tags: [Camera]
+      summary: Chỉnh giờ camera theo giờ máy chủ (múi +07:00)
+      description: |
+        Lưu lại XML gốc của camera xuống `data/camera_backup/` trước khi ghi.
+        QTHT.
+      responses:
+        '200':
+          description: OK, kèm offset mới sau khi chỉnh
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CameraClock' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          description: Không ghi được giờ camera.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
   /cameras/{camera_id}/stream.mjpg:
     parameters:
       - $ref: '#/components/parameters/CameraId'
@@ -601,6 +645,25 @@ paths:
         - name: occurred_to
           in: query
           schema: { type: string, format: date-time }
+        - name: date_from
+          in: query
+          description: >-
+            Tiện ích cho ô lọc theo NGÀY (input `type=date`) — tương đương
+            `occurred_from` nhưng chỉ cần `YYYY-MM-DD`, quy về đầu ngày đó
+            theo giờ hệ thống.
+          schema: { type: string, format: date }
+        - name: date_to
+          in: query
+          description: >-
+            Tương tự `date_from`, quy về CUỐI ngày đó (`23:59:59`) để lọc theo
+            ngày bao gồm trọn ngày `date_to`.
+          schema: { type: string, format: date }
+        - name: zone_rule
+          in: query
+          description: >-
+            Lọc vi phạm theo loại vùng: `restricted_area` (vùng cấm) hoặc
+            `crossing_line` (vạch an toàn).
+          schema: { type: string, enum: [restricted_area, crossing_line] }
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
       responses:
@@ -1165,6 +1228,25 @@ components:
               description: Đường dẫn MJPEG dựng sẵn, dùng thẳng cho thẻ ảnh.
               example: /api/v1/cameras/cam_01/stream.mjpg?overlay=1
             snapshot_url: { type: string }
+    CameraClock:
+      type: object
+      description: |
+        Giờ camera đọc qua ISAPI (Hikvision) và độ lệch so với giờ máy chủ.
+        Chỉ áp dụng cho camera RTSP có user/mật khẩu trong `source_uri` — các
+        loại nguồn khác (tệp, webcam) trả 502.
+      properties:
+        camera_time: { type: string, description: localTime thô đọc từ camera. }
+        server_time: { type: string, format: date-time }
+        offset_s:
+          type: number
+          nullable: true
+          description: camera trừ máy chủ, giây. Dương = camera đang nhanh hơn.
+        time_mode: { type: string, example: manual }
+        timezone: { type: string, example: 'CST-7:00:00' }
+        synced_at: { type: string, format: date-time, nullable: true }
+        sync_ok:
+          type: boolean
+          description: Chỉ có ở `POST .../clock/sync` — lệch đã về trong ngưỡng sau khi ghi hay chưa.
     # ---------------- vùng ----------------
     ZoneInput:
       type: object

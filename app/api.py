@@ -20,6 +20,7 @@ from typing import Dict, List, Optional
 
 from pydantic import ValidationError
 
+from app import camera_clock
 from app import clock
 from app import go2rtc
 from app.video_processor import VideoProcessor, mask_credentials, subscribe_results, unsubscribe_results
@@ -386,6 +387,10 @@ async def startup_event():
     if os.environ.get("CAMERA_AUTOSTART", "1") == "1":
         asyncio.create_task(_resume_cameras())
 
+    # Đo (và tự chỉnh, nếu bật) giờ camera qua ISAPI — chạy ngay từ lúc service
+    # khởi động rồi lặp lại mỗi CAMERA_CLOCK_SYNC_S giây (xem app/camera_clock.py).
+    asyncio.create_task(camera_clock.start_background(_load_cameras, str(data_path)))
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -536,7 +541,8 @@ async def add_face_samples(
             samples = [smp for i, smp in enumerate(samples) if i in wanted]
         if not samples:
             raise HTTPException(status_code=400, detail="Chưa chọn ảnh nào")
-        embeddings = [smp[1] for smp in samples]
+        # (embedding, ảnh mặt, cỡ mặt): lưu kèm ảnh để sau đổi model còn tính lại được
+        embeddings = [(smp[1], smp[2], smp[3]) for smp in samples]
         source = "camera"
     elif image is not None:
         frame = cv2.imdecode(np.frombuffer(await image.read(), np.uint8), cv2.IMREAD_COLOR)
@@ -1119,14 +1125,25 @@ async def v1_list_events(
     camera_id: Optional[str] = None,
     occurred_from: Optional[str] = None,
     occurred_to: Optional[str] = None,
+    date_from: Optional[str] = Query(None, description="YYYY-MM-DD, so theo giờ hệ thống, bao gồm cả ngày"),
+    date_to: Optional[str] = Query(None, description="YYYY-MM-DD, so theo giờ hệ thống, bao gồm cả ngày"),
+    zone_rule: Optional[str] = Query(None, description="restricted_area (vùng cấm) | crossing_line (vạch an toàn)"),
     page: int = 1,
     page_size: int = 50,
 ):
-    """Lịch sử sự kiện, cũng là nguồn cho thư viện ảnh vi phạm an toàn."""
+    """Lịch sử sự kiện, cũng là nguồn cho thư viện ảnh vi phạm an toàn.
+
+    ``date_from``/``date_to`` là tiện ích cho bộ lọc theo NGÀY (input type=date
+    của trình duyệt) — quy về đúng dạng ``occurred_from``/``occurred_to`` mà
+    ``list_events`` đang so khớp theo chuỗi ISO, ``date_to`` phải kèm giờ cuối
+    ngày mới bao gồm được cả ngày đó (so chuỗi thì "2026-11-04" < "2026-11-04T10:00").
+    """
     types = [t.strip() for t in type.split(",")] if type else None
+    occurred_from = occurred_from or (f"{date_from}T00:00:00" if date_from else None)
+    occurred_to = occurred_to or (f"{date_to}T23:59:59" if date_to else None)
     items, total = events.list_events(
         types=types, acked=acked, session_id=session_id, camera_id=camera_id,
-        occurred_from=occurred_from, occurred_to=occurred_to,
+        occurred_from=occurred_from, occurred_to=occurred_to, zone_rule=zone_rule,
         limit=page_size, offset=(max(1, page) - 1) * page_size,
     )
     return {"items": items, "total": total, "page": page, "page_size": page_size}
@@ -1859,6 +1876,35 @@ async def v1_delete_camera(camera_id: str, _qtht=Depends(require_qtht)):
     return Response(status_code=204)
 
 
+@app.get("/api/v1/cameras/{camera_id}/clock")
+async def v1_camera_clock(camera_id: str, _qtht=Depends(require_qtht)):
+    """Đọc giờ camera qua ISAPI và độ lệch so với giờ máy chủ. CHỈ ĐỌC, không
+    chỉnh gì (xem ``POST .../clock/sync``)."""
+    cameras, index = _camera_or_404(camera_id)
+    try:
+        result = await asyncio.to_thread(camera_clock.read, cameras[index])
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Không đọc được giờ camera: {e}")
+    cached = camera_clock.offset_for(camera_id)
+    result["synced_at"] = cached.get("synced_at") if cached else None
+    return result
+
+
+@app.post("/api/v1/cameras/{camera_id}/clock/sync")
+async def v1_camera_clock_sync(camera_id: str, _qtht=Depends(require_qtht)):
+    """Chỉnh lại giờ camera theo giờ máy chủ (múi +07:00). Lưu XML gốc xuống
+    ``data/camera_backup/`` trước khi ghi (xem app/camera_clock.py)."""
+    cameras, index = _camera_or_404(camera_id)
+    try:
+        result = await asyncio.to_thread(camera_clock.sync, cameras[index], str(data_path))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Không đồng bộ được giờ camera: {e}")
+    result["synced_at"] = clock.iso()
+    result["sync_ok"] = result.get("offset_s") is not None and abs(result["offset_s"]) <= camera_clock.DRIFT_THRESHOLD_S
+    camera_clock.record_offset(camera_id, result)
+    return result
+
+
 @app.post("/api/v1/cameras/{camera_id}/start", status_code=202)
 async def v1_start_camera(camera_id: str, background_tasks: BackgroundTasks,
                           _qtht=Depends(require_qtht)):
@@ -2130,7 +2176,11 @@ async def v1_system_health():
     for camera in cameras:
         cam_id = camera["id"]
         runtime = runtimes.get(cam_id)
-        cam_metrics[cam_id] = runtime.processor.get_metrics() if runtime is not None else dict(empty_metrics)
+        metrics = runtime.processor.get_metrics() if runtime is not None else dict(empty_metrics)
+        clock_info = camera_clock.offset_for(cam_id)
+        metrics["clock_offset_s"] = clock_info.get("offset_s") if clock_info else None
+        metrics["clock_synced_at"] = clock_info.get("synced_at") if clock_info else None
+        cam_metrics[cam_id] = metrics
 
     return {
         "status": "ok",

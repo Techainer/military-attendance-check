@@ -57,6 +57,15 @@ def _load_font(size: int):
     return font
 
 
+def measure_label(text: str, font_size: int = 16) -> tuple:
+    """Kích thước ``(rộng, cao)`` của nhãn ``text`` ở cỡ ``font_size`` — dùng để
+    tính trước vị trí đặt nhãn (ví dụ tránh chồng lên nhãn khác) mà không phải
+    vẽ thử (xem ``_place_zone_label`` ở app/video_processor.py)."""
+    font = _load_font(font_size)
+    left, top, right, bottom = font.getbbox(text)
+    return right - left + 2 * PAD_X, bottom - top + 2 * PAD_Y
+
+
 def draw_label(frame: np.ndarray, text: str, origin, font_size: int = 16,
                text_color=(255, 255, 255), bg_color=LABEL_BG, anchor: str = "top",
                stripe_color=None) -> None:

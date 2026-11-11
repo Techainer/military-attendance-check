@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Tuple
 
 import cv2
 
-from app import clock
+from app import camera_clock, clock
 from app.events import TYPE_EARLY_LEAVE, TYPE_LATE
 from app.overlay import draw_label
 from app.presence import MIN_PRESENCE_SPAN_S, PresenceTracker, VIOLATION_EARLY_LEAVE
@@ -277,7 +277,8 @@ class AttendanceSession:
         started_at: datetime,
         window_mins: int,
         phase: str = PHASE_MANUAL,
-        ends_at: Optional[datetime] = None
+        ends_at: Optional[datetime] = None,
+        camera_offset_s: float = 0.0,
     ):
         self.schedule = schedule
         self.roster = roster
@@ -285,6 +286,11 @@ class AttendanceSession:
         self.window_mins = window_mins
         self.phase = phase
         self.ends_at = ends_at or (started_at + timedelta(minutes=window_mins))
+        # Lệch giờ camera − máy chủ (giây) đo lúc MỞ phiên, chỉ khác 0 khi camera
+        # lệch giờ thật mà chưa tự chỉnh được (xem app/camera_clock.py
+        # should_compensate) — dùng để dịch cửa sổ chụp ảnh bằng chứng cho khớp
+        # đúng mốc cuối giờ THEO GIỜ CAMERA, không phải giờ máy chủ.
+        self.camera_offset_s = camera_offset_s
         # person_id -> {"hits", "first", "last", "frame_seqs"} — thời điểm/số thứ
         # tự khung hình để lọc nhận nhầm dồn dập, không chỉ đếm số lượt quét thô
         self.sightings: Dict[str, dict] = {}
@@ -339,7 +345,10 @@ class AttendanceSession:
             # Không có 'now' (hành vi cũ, xem docstring) -> không phân biệt được
             # đoạn cuối cửa sổ, coi mọi khung đều "ở cuối" để giữ nguyên hành vi
             # trước đây (ảnh bằng chứng = khung tốt nhất, bất kể lúc nào).
-            in_tail = now is None or now >= self.ends_at - timedelta(seconds=ATTENDANCE_EVIDENCE_TAIL_S)
+            # ``camera_offset_s`` != 0: dịch mốc cuối cửa sổ theo giờ SERVER sao
+            # cho nó khớp đúng cuối giờ THEO GIỜ CAMERA (xem __init__).
+            camera_ends_at = self.ends_at - timedelta(seconds=self.camera_offset_s)
+            in_tail = now is None or now >= camera_ends_at - timedelta(seconds=ATTENDANCE_EVIDENCE_TAIL_S)
             if in_tail and quality > self.tail_evidence_quality:
                 self.tail_evidence_quality = quality
                 self.tail_evidence_frame = frame.copy()
@@ -478,13 +487,21 @@ class AttendanceManager:
         tại THỜI ĐIỂM GHI, không phải lúc khung hình được thu thập trong cửa sổ,
         vì bản thân khung đã có HUD/giờ của chính nó vẽ sẵn lúc xử lý; dấu thêm
         ở đây để chỉ huy biết rõ ảnh được CHỐT lúc nào.
+
+        Camera còn lệch giờ thật (chưa tự chỉnh được, xem app/camera_clock.py)
+        thì ghi thêm giờ camera bên cạnh — chỉ huy đối chiếu ảnh với đồng hồ
+        nhìn thấy TRÊN camera, không phải giờ máy chủ.
         """
         if frame is None:
             return None, None
         captured_at = clock.now()
         stamped = frame.copy()
-        draw_label(stamped, f"Chụp lúc {captured_at.strftime('%H:%M:%S %d/%m/%Y')}",
-                   (12, stamped.shape[0] - 10), font_size=16, anchor="bottom")
+        label = f"Chụp lúc {captured_at.strftime('%H:%M:%S %d/%m/%Y')}"
+        offset_s = camera_clock.should_compensate(self.camera_id)
+        if offset_s is not None:
+            camera_wall = captured_at + timedelta(seconds=offset_s)
+            label += f" (giờ camera {camera_wall.strftime('%H:%M:%S')})"
+        draw_label(stamped, label, (12, stamped.shape[0] - 10), font_size=16, anchor="bottom")
         filename = f"{log_id}_{phase}.jpg"
         try:
             cv2.imwrite(str(self.evidence_dir / filename), stamped, [cv2.IMWRITE_JPEG_QUALITY, 85])
@@ -714,7 +731,9 @@ class AttendanceManager:
     ) -> AttendanceSession:
         mins = window_mins if (window_mins and window_mins > 0) else _schedule_window_mins(schedule)
         roster = self._roster_for(schedule.get("unit"))
-        self.session = AttendanceSession(schedule, roster, now, mins, phase=phase, ends_at=ends_at)
+        offset_s = camera_clock.should_compensate(self.camera_id) or 0.0
+        self.session = AttendanceSession(schedule, roster, now, mins, phase=phase, ends_at=ends_at,
+                                         camera_offset_s=offset_s)
         print(f"[Attendance] Mở phiên điểm danh {self.session.phase_label.lower()} "
               f"'{schedule.get('name', 'thủ công')}' ({mins} phút, {len(roster)} quân nhân trong danh sách)")
         return self.session
