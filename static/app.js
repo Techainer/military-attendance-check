@@ -985,6 +985,24 @@ function connectEventStream() {
     };
 }
 
+// Định dạng tên quân nhân kèm số hiệu, dùng CHUNG cho mọi nơi hiển thị danh
+// sách người (thẻ sự kiện, lịch sử vi phạm, danh sách vắng điểm danh...).
+// Chấp nhận một chuỗi tên có sẵn (dữ liệu cũ hoặc server đã gộp sẵn), hoặc
+// một object — tên trường có thể là {name, rank, military_id} (điểm danh)
+// hoặc {person_name, person_rank, person_military_id} (sự kiện) — chấp nhận
+// cả hai vì backend đặt tên trường khác nhau tuỳ API.
+function formatPersonLabel(p) {
+    if (p == null) return '';
+    if (typeof p === 'string') return p;
+    const rank = p.rank || p.person_rank || '';
+    const name = p.name || p.person_name || '';
+    const militaryId = p.military_id || p.person_military_id || '';
+    const label = [rank, name].filter(Boolean).join(' ').trim() || militaryId;
+    if (!militaryId || label.includes(`(${militaryId})`)) return label;
+    return `${label} (${militaryId})`;
+}
+window.formatPersonLabel = formatPersonLabel;
+
 const EVENT_LABELS = {
     ABSENT: 'THIẾU QUÂN SỐ',
     LATE: 'ĐI CHẬM',
@@ -1026,7 +1044,8 @@ function handleEventUpdate(event) {
     if (!event || !event.id) return;
 
     const detail = event.detail || {};
-    const names = (detail.identified || []).map(p => p.person_name).filter(Boolean);
+    const names = (detail.identified || []).map(p => formatPersonLabel(p)).filter(Boolean);
+    if (!names.length && event.person_name) names.push(formatPersonLabel(event));
     const personText = names.length ? names.join(', ') : 'Không xác định';
 
     // Dòng trực tiếp ở màn giám sát
@@ -1209,7 +1228,8 @@ function renderViolationHistory(items) {
     tbody.innerHTML = '';
     items.forEach(event => {
         const detail = event.detail || {};
-        const names = (detail.identified || []).map(p => p.person_name).filter(Boolean);
+        const names = (detail.identified || []).map(p => formatPersonLabel(p)).filter(Boolean);
+        if (!names.length && event.person_name) names.push(formatPersonLabel(event));
         const personText = names.length ? names.join(', ') : 'Không xác định';
         const zoneKindLabel = ZONE_RULE_LABELS[detail.zone_rule] || '';
         const zoneText = [detail.zone_name, zoneKindLabel].filter(Boolean).join(' · ') || event.area_name || '—';
@@ -1597,6 +1617,145 @@ async function assignUnknownFace(uid, btn) {
 }
 window.assignUnknownFace = assignUnknownFace;
 
+// ----------------- C: LẤY MẪU KHUÔN MẶT TỪ CAMERA (hồ sơ quân nhân) -----------------
+// POST /api/faces/capture chặn ~seconds giây rồi trả về một item CÙNG hình
+// dạng với phần tử của GET /api/faces/unknown (id, samples, ...) — tái dùng
+// luôn cách hiển thị/loại ảnh của "Mặt chưa xác định từ camera" ở trên, rồi
+// "Lưu mẫu" gọi lại đúng POST /api/faces/{person_id}/samples đã có.
+let captureResultItem = null; // item vừa chụp, còn chờ bấm "Lưu mẫu"
+let captureCountdownTimer = null;
+// request /api/faces/capture chặn ~20s không huỷ được giữa đường — đổi hồ sơ
+// (hoặc gọi lại) trong lúc chờ thì tăng số này để bản trả về SAU không còn
+// khớp, tránh gán nhầm ảnh chụp cho hồ sơ cũ vào hồ sơ đang mở.
+let captureRequestSeq = 0;
+
+function resetPersonCapturePanel() {
+    captureRequestSeq += 1;
+    if (captureCountdownTimer) { clearInterval(captureCountdownTimer); captureCountdownTimer = null; }
+    captureResultItem = null;
+    const panel = document.getElementById('person-capture-panel');
+    if (panel) panel.style.display = 'none';
+    const status = document.getElementById('capture-status');
+    if (status) status.textContent = '';
+    const imgsBox = document.getElementById('capture-result-imgs');
+    if (imgsBox) imgsBox.innerHTML = '';
+    const saveBtn = document.getElementById('capture-save-btn');
+    if (saveBtn) saveBtn.style.display = 'none';
+}
+
+async function fillCaptureCameraSelect() {
+    const select = document.getElementById('capture-camera-select');
+    if (!select) return;
+    try {
+        select.innerHTML = ((await getJson('/api/v1/cameras')).items || [])
+            .map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
+    } catch (e) {
+        select.innerHTML = '<option value="">Không tải được danh sách camera</option>';
+    }
+}
+
+function togglePersonCapture() {
+    const panel = document.getElementById('person-capture-panel');
+    if (!panel) return;
+    const show = panel.style.display === 'none';
+    panel.style.display = show ? 'block' : 'none';
+    if (show) fillCaptureCameraSelect();
+}
+window.togglePersonCapture = togglePersonCapture;
+
+async function startPersonCapture() {
+    const cameraId = (document.getElementById('capture-camera-select') || {}).value;
+    const seconds = parseInt((document.getElementById('capture-seconds') || {}).value, 10) || 20;
+    const status = document.getElementById('capture-status');
+    const startBtn = document.getElementById('capture-start-btn');
+    const saveBtn = document.getElementById('capture-save-btn');
+    const imgsBox = document.getElementById('capture-result-imgs');
+    if (!cameraId) { showToast('Chọn camera trước khi chụp', 'warning'); return; }
+
+    const seq = ++captureRequestSeq;
+    captureResultItem = null;
+    if (saveBtn) saveBtn.style.display = 'none';
+    if (imgsBox) imgsBox.innerHTML = '';
+    if (startBtn) startBtn.disabled = true;
+
+    // Đếm ngược trong lúc chờ server chặn ~seconds giây để chụp — chỉ để báo
+    // tiến độ, không huỷ được request đang chạy (giống lúc chụp điểm danh).
+    let remaining = seconds;
+    const tick = () => {
+        if (status) {
+            status.textContent = remaining > 0
+                ? `Đang chụp… còn ${remaining}s — quân nhân đứng/đi chậm trong khung hình, nhìn về phía camera.`
+                : 'Đang xử lý ảnh vừa chụp…';
+        }
+        remaining -= 1;
+    };
+    tick();
+    const timerId = setInterval(tick, 1000);
+    captureCountdownTimer = timerId;
+
+    const form = new FormData();
+    form.append('camera_id', cameraId);
+    form.append('seconds', String(seconds));
+    try {
+        const res = await fetch('/api/faces/capture', { method: 'POST', body: form });
+        const data = await res.json();
+        if (seq !== captureRequestSeq) return; // hồ sơ đã đổi/đã reset trong lúc chờ — bỏ kết quả trễ này
+        if (!res.ok) throw new Error(data.detail || data.message || 'Không chụp được mẫu từ camera');
+
+        const item = data.data || {};
+        captureResultItem = item;
+        if (status) status.textContent = `✓ Đã chụp ${item.samples || 0} ảnh — bỏ ảnh sai rồi bấm "Lưu mẫu".`;
+        if (imgsBox) {
+            imgsBox.innerHTML = Array.from({ length: item.samples || 0 }, (_, i) =>
+                `<img src="/api/faces/unknown/${item.id}/image?i=${i}" data-i="${i}"
+                      alt="Ảnh mẫu vừa chụp" title="Bấm để bỏ/chọn ảnh này" loading="lazy"
+                      onclick="this.classList.toggle('excluded')">`).join('');
+        }
+        if (saveBtn) saveBtn.style.display = (item.samples || 0) ? 'inline-flex' : 'none';
+    } catch (e) {
+        if (seq === captureRequestSeq && status) status.textContent = `✗ ${e.message}`;
+    } finally {
+        clearInterval(timerId);
+        // Chỉ bỏ biến đếm giờ CHUNG nếu nó vẫn đang là của lần chụp này — một
+        // lần chụp mới hơn (đổi hồ sơ/bấm lại) có thể đã gán biến đếm khác.
+        if (captureCountdownTimer === timerId) captureCountdownTimer = null;
+        if (seq === captureRequestSeq && startBtn) startBtn.disabled = false;
+    }
+}
+window.startPersonCapture = startPersonCapture;
+
+async function savePersonCapture() {
+    const personId = (document.getElementById('person-id') || {}).value;
+    const imgsBox = document.getElementById('capture-result-imgs');
+    const saveBtn = document.getElementById('capture-save-btn');
+    const status = document.getElementById('capture-status');
+    if (!personId || !captureResultItem) return;
+
+    const chosen = [...(imgsBox ? imgsBox.querySelectorAll('img:not(.excluded)') : [])].map(img => img.dataset.i);
+    if (!chosen.length) { showToast('Đã bỏ hết ảnh — chọn lại ít nhất một ảnh', 'warning'); return; }
+
+    const form = new FormData();
+    form.append('unknown_id', captureResultItem.id);
+    form.append('indices', chosen.join(','));
+    if (saveBtn) saveBtn.disabled = true;
+    try {
+        const res = await fetch(`/api/faces/${encodeURIComponent(personId)}/samples`, { method: 'POST', body: form });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Không lưu được mẫu');
+        showToast(data.message, 'success');
+        if (status) status.textContent = '';
+        if (imgsBox) imgsBox.innerHTML = '';
+        if (saveBtn) saveBtn.style.display = 'none';
+        captureResultItem = null;
+        await loadRegisteredFaces(); // cập nhật lại số mẫu (+N mẫu) ở bảng danh sách
+    } catch (e) {
+        showToast(e.message, 'error');
+    } finally {
+        if (saveBtn) saveBtn.disabled = false;
+    }
+}
+window.savePersonCapture = savePersonCapture;
+
 // ----------------- REGISTERED PERSONNEL TABLE -----------------
 async function loadRegisteredFaces() {
     try {
@@ -1705,6 +1864,7 @@ function editPerson(personId) {
     document.getElementById('person-registered-at').textContent =
         `Đăng ký: ${p.created_at || p.registered_at || '—'}`;
     document.getElementById('person-form-status').textContent = '';
+    resetPersonCapturePanel(); // đổi hồ sơ thì bỏ dở kết quả chụp của hồ sơ trước
 
     document.getElementById('person-modal').style.display = 'flex';
 }
@@ -2569,8 +2729,10 @@ function renderEvidenceCell(check, log, phaseLabel) {
 
 // Tên quân nhân xếp hàng dọc, mỗi người một gạch đầu dòng: đọc nhanh hơn một
 // chuỗi dài nối bằng dấu phẩy, nhất là khi vắng nhiều người
+// Mỗi phần tử có thể là chuỗi tên đã gộp sẵn (dữ liệu cũ) hoặc object quân
+// nhân {name, rank, military_id} — formatPersonLabel() xử lý cả hai dạng.
 function absentNameList(names) {
-    return `<ul class="absent-name-list">${(names || []).map(n => `<li>${esc(n)}</li>`).join('')}</ul>`;
+    return `<ul class="absent-name-list">${(names || []).map(n => `<li>${esc(formatPersonLabel(n))}</li>`).join('')}</ul>`;
 }
 
 function renderAbsentList(log) {
@@ -3013,7 +3175,7 @@ function exportAttendanceLogsCsv() {
     attendanceLogsData.forEach(l => {
         const st = getCheck(l, 'start');
         const en = getCheck(l, 'end');
-        const absentStr = (l.absent_personnel || []).join('; ');
+        const absentStr = (l.absent_personnel || []).map(n => formatPersonLabel(n)).join('; ');
         csvContent += `"${l.date}","${l.shift}","${l.unit}",${l.required},`
             + `"${cell(st, 'time')}","${cell(st, 'present')}","${cell(st, 'absent')}","${evidenceUrl(st)}",`
             + `"${cell(en, 'time')}","${cell(en, 'present')}","${cell(en, 'absent')}","${evidenceUrl(en)}",`

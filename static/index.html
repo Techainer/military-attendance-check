@@ -1355,6 +1355,33 @@
                     <button type="submit" class="btn-primary-green">Lưu hồ sơ</button>
                 </div>
             </form>
+
+            <!-- C: lấy mẫu khuôn mặt nhanh từ một camera đang chạy (POST
+                 /api/faces/capture) — để NGOÀI <form> hồ sơ phía trên để Enter
+                 trong ô camera/giây không vô tình submit form lưu hồ sơ. -->
+            <div class="person-capture-section">
+                <div class="flex-between" style="align-items: center;">
+                    <span class="detail-key">Lấy mẫu khuôn mặt từ camera</span>
+                    <button type="button" class="btn-toolbar-neutral btn-sm" onclick="togglePersonCapture()">📷 Lấy mẫu từ camera</button>
+                </div>
+                <div id="person-capture-panel" class="person-capture-panel" style="display: none;">
+                    <div class="form-row-two">
+                        <div class="form-group">
+                            <label for="capture-camera-select">Camera</label>
+                            <select id="capture-camera-select" class="form-input form-select"></select>
+                        </div>
+                        <div class="form-group">
+                            <label for="capture-seconds">Thời gian chụp (giây)</label>
+                            <input type="number" id="capture-seconds" class="form-input" value="20" min="5" max="60">
+                        </div>
+                    </div>
+                    <p class="form-hint">Quân nhân đứng/đi chậm trong khung hình, nhìn về phía camera.</p>
+                    <button type="button" class="btn-primary-green btn-sm" id="capture-start-btn" onclick="startPersonCapture()">Bắt đầu chụp</button>
+                    <p id="capture-status" class="status-message"></p>
+                    <div id="capture-result-imgs" class="unknown-face-imgs"></div>
+                    <button type="button" class="btn-primary-green btn-sm" id="capture-save-btn" style="display: none;" onclick="savePersonCapture()">Lưu mẫu</button>
+                </div>
+            </div>
         </div>
     </div>
 

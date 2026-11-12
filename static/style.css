@@ -2630,8 +2630,8 @@ a.btn-clip-ctrl {
 
 .player-status-badge {
     position: absolute;
-    top: 8px;
-    right: 8px;
+    bottom: 8px;
+    left: 8px;
     padding: 2px 8px;
     border-radius: 10px;
     font-size: 12px;
@@ -2744,7 +2744,7 @@ a.btn-clip-ctrl {
 
 .zoom-fullscreen-btn {
     position: absolute;
-    top: 8px;
+    bottom: 8px;
     right: 8px;
     z-index: 5;
     width: 36px;
@@ -2761,7 +2761,7 @@ a.btn-clip-ctrl {
 /* Nút "1:1" (về vừa khung) — chỉ hiện khi đang zoom, nằm cạnh nút toàn màn hình */
 .zoom-reset-btn {
     position: absolute;
-    top: 8px;
+    bottom: 8px;
     right: 52px;
     z-index: 5;
     height: 36px;
@@ -3071,6 +3071,12 @@ a.btn-clip-ctrl {
 .unknown-face-actions select { flex: 1; min-width: 0; padding: 6px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; }
 .btn-sm { padding: 6px 12px !important; font-size: 13px !important; width: auto !important; margin: 0 !important; }
 .sample-count { color: #047857; font-weight: 600; }
+
+/* ---- Lấy mẫu khuôn mặt từ camera (hồ sơ quân nhân) ---- */
+.person-capture-section { margin-top: 18px; padding-top: 14px; border-top: 1px solid #e2e8f0; }
+.person-capture-panel { margin-top: 10px; padding: 12px; border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc; }
+.person-capture-panel .unknown-face-imgs { margin-top: 8px; }
+.person-capture-panel #capture-save-btn { margin-top: 8px; }
 
 @media (max-width: 600px) {
     .camera-wall {
