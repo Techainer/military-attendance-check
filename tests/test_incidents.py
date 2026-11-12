@@ -85,9 +85,15 @@ def _bare_proc():
     proc.camera_id = "cam_test"
     proc.camera_name = "Camera Test"
     proc._open_incidents = {}
+    proc._naming_watch = {}
+    proc.track_identity = {}
     proc._bg_tasks = set()
     proc._schedule_event_clip = lambda *a, **kw: None  # không cần dựng clip ở bài này
-    for name in ("_handle_restricted_violation", "_close_stale_incidents"):
+    # Staticmethod: gán thẳng hàm (không .__get__, không có 'self' để bind)
+    proc._render_incident_message = VideoProcessor._render_incident_message
+    proc._track_ids_of = VideoProcessor._track_ids_of
+    for name in ("_handle_restricted_violation", "_close_stale_incidents",
+                "_sync_incident_names", "_apply_incident_naming", "_recall_identity"):
         setattr(proc, name, getattr(VideoProcessor, name).__get__(proc))
     return proc
 
@@ -191,6 +197,108 @@ async def run():
         display_frame=None, dwell_seconds=0, now_mono=9999.0, on_update=on_update)
     check("không bắn thêm sự kiện", len(proc.events.emitted) == before_emit)
     check("không cập nhật gì", len(proc.events.updated) == before_update)
+
+    # ------------------------------------------------------ [7] tên MUỘN theo track
+    # Bug tester báo: chỉ ~3/142 biên bản có tên vì tên trước đây chỉ lấy được
+    # lúc người đó CÒN ĐỨNG TRONG vùng. Giờ biên bản nhớ track_ids đã vào vùng;
+    # mỗi khung, track nào VỪA có danh tính ở BẤT CỨ ĐÂU (self._recall_identity)
+    # mà biên bản chưa có tên đó -> _sync_incident_names tự cập nhật.
+    print("\n[7] Tên muộn theo track: định danh TRƯỚC khi vào vùng -> có tên ngay lúc mở")
+    proc2 = _bare_proc()
+    updates2 = []
+
+    async def on_update2(payload):
+        updates2.append(payload)
+
+    person_duy = {"id": "p_duy", "name": "Trần Văn Duy", "rank": "Đại tá", "military_id": "SQ001"}
+    # Track 42 đã khoá danh tính TỪ TRƯỚC (vd. lúc còn ở vùng điểm danh), rồi
+    # mới đi vào vùng cấm -> _collect_people/person_to_face_match thật đã trả
+    # về identity cho nó NGAY (mô phỏng ở đây bằng cách khoá track_identity
+    # trước, và truyền track_ids để biên bản nhớ track 42).
+    proc2.track_identity[42] = {"person": person_duy, "scores": {}, "hits": {}, "people": {},
+                                "last_seen": 0.0}
+    await proc2._handle_restricted_violation(
+        ZONE, inside_now=[0], identified=[{"person_id": "p_duy", "person_name": "Đại tá Trần Văn Duy (SQ001)",
+                                           "person_military_id": "SQ001"}],
+        boxes=[box("Đại tá Trần Văn Duy (SQ001)")], display_frame=None, dwell_seconds=1,
+        now_mono=0.0, on_update=on_update2, track_ids=[42])
+    check("biên bản mở CÓ TÊN ngay (danh tính đã khoá trước khi vào vùng)",
+          proc2.events.emitted[0]["person_name"] == "Đại tá Trần Văn Duy (SQ001)",
+          proc2.events.emitted[0])
+    check("event mang theo person_military_id", proc2.events.emitted[0]["person_military_id"] == "SQ001")
+    check("biên bản nhớ đúng track_ids đã vào vùng", proc2._open_incidents["zone_cam"]["track_ids"] == {42})
+
+    print("\n[7b] Định danh SAU khi đã RỜI vùng (track vẫn còn trong track_ids) -> vẫn được cập nhật")
+    proc3 = _bare_proc()
+    updates3 = []
+
+    async def on_update3(payload):
+        updates3.append(payload)
+
+    # Mở biên bản lúc CHƯA biết tên (track 7 vào vùng, chưa định danh được)
+    await proc3._handle_restricted_violation(
+        ZONE, inside_now=[0], identified=[], boxes=[box()],
+        display_frame=None, dwell_seconds=1, now_mono=0.0, on_update=on_update3, track_ids=[7])
+    check("mở biên bản chưa có tên", proc3.events.emitted[0]["person_name"] is None)
+
+    # Người đó RỜI vùng (không còn trong inside_now của khung sau), nhưng camera
+    # vẫn thấy track 7 ở nơi khác trong khung và NHẬN RA được lúc này (mô phỏng
+    # bằng cách khoá track_identity[7] trực tiếp, như _remember_identity sẽ làm
+    # khi priority_indices được nới rộng cho track theo dõi — xem _ai_loop).
+    person_an = {"id": "p_an", "name": "Nguyễn Văn An", "rank": "Thiếu tá", "military_id": "SQ042"}
+    proc3.track_identity[7] = {"person": person_an, "scores": {}, "hits": {}, "people": {}, "last_seen": 1.0}
+    await proc3._sync_incident_names(1.0, on_update3)
+    check("biên bản ĐANG MỞ được cập nhật tên dù người đã rời vùng",
+          proc3.events.updated and proc3.events.updated[-1]["person_name"] == "Thiếu tá Nguyễn Văn An (SQ042)",
+          proc3.events.updated)
+    check("đẩy on_update loại 'event_update'", any(u["type"] == "event_update" for u in updates3))
+
+    print("\n[7c] Sau khi biên bản ĐÃ ĐÓNG: vẫn cập nhật tên trong INTRUSION_NAMING_TAIL_S giây")
+    proc4 = _bare_proc()
+    updates4 = []
+
+    async def on_update4(payload):
+        updates4.append(payload)
+
+    t0 = 1000.0
+    await proc4._handle_restricted_violation(
+        ZONE, inside_now=[0], identified=[], boxes=[box()],
+        display_frame=None, dwell_seconds=1, now_mono=t0, on_update=on_update4, track_ids=[9])
+    close_at = t0 + _vp.INTRUSION_INCIDENT_GRACE_S + 1
+    proc4._close_stale_incidents(close_at)
+    check("biên bản đã ĐÓNG (không còn trong _open_incidents)", "zone_cam" not in proc4._open_incidents)
+    check("chuyển sang theo dõi đặt tên (_naming_watch)", len(proc4._naming_watch) == 1)
+
+    person_binh = {"id": "p_binh", "name": "Lê Văn Bình", "rank": "", "military_id": "SQ099"}
+    within_tail = close_at + _vp.INTRUSION_NAMING_TAIL_S - 1
+    # last_seen = NGAY lúc này: trong vòng xử lý thật, _remember_identity luôn
+    # cập nhật last_seen = now_mono của khung hiện tại TRƯỚC khi _sync_incident_names
+    # chạy (xem thứ tự các bước trong _ai_loop) — track còn SỐNG, không phải
+    # đứng yên từ lúc đóng biên bản.
+    proc4.track_identity[9] = {"person": person_binh, "scores": {}, "hits": {}, "people": {},
+                               "last_seen": within_tail}
+    await proc4._sync_incident_names(within_tail, on_update4)
+    check("trong thời gian theo dõi (TAIL) -> biên bản ĐÃ ĐÓNG vẫn được cập nhật tên",
+          proc4.events.updated and proc4.events.updated[-1]["person_name"] == "Lê Văn Bình (SQ099)",
+          proc4.events.updated)
+
+    print("\n[7d] Sau INTRUSION_NAMING_TAIL_S -> không còn theo dõi, không cập nhật nữa")
+    proc5 = _bare_proc()
+    updates5 = []
+
+    async def on_update5(payload):
+        updates5.append(payload)
+
+    await proc5._handle_restricted_violation(
+        ZONE, inside_now=[0], identified=[], boxes=[box()],
+        display_frame=None, dwell_seconds=1, now_mono=t0, on_update=on_update5, track_ids=[11])
+    proc5._close_stale_incidents(close_at)
+    person_chi = {"id": "p_chi", "name": "Phạm Thị Chi", "rank": "Trung úy", "military_id": "SQ077"}
+    proc5.track_identity[11] = {"person": person_chi, "scores": {}, "hits": {}, "people": {}, "last_seen": close_at}
+    after_tail = close_at + _vp.INTRUSION_NAMING_TAIL_S + 1
+    await proc5._sync_incident_names(after_tail, on_update5)
+    check("hết TAIL -> không còn theo dõi track này nữa", not proc5._naming_watch)
+    check("hết TAIL -> KHÔNG cập nhật tên nữa", not proc5.events.updated, proc5.events.updated)
 
 
 asyncio.run(run())

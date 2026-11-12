@@ -178,6 +178,11 @@ class EventStore:
             "schedule_id": fields.pop("schedule_id", None),
             "person_id": fields.pop("person_id", None),
             "person_name": fields.pop("person_name", None),
+            # Số hiệu (military_id) đi kèm người, để hiển thị không mập mờ khi
+            # trùng tên (xem app/attendance.py person_label) — có thể thiếu ở
+            # sự kiện cũ, FE/API đọc list đã enrich lại bằng person_id (xem
+            # app/api.py v1_list_events).
+            "person_military_id": fields.pop("person_military_id", None),
             "message": message,
             "snapshot_url": None,
             "clip_id": fields.pop("clip_id", None),

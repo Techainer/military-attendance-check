@@ -118,6 +118,7 @@ with tempfile.TemporaryDirectory() as tmp:
     proc.camera_id = "cam_test"
     proc.track_identity = {}
     proc._track_faces = {}
+    proc._capture_sessions = []
     proc._last_auto_enroll = {}
     for name in ("_faces_to_people", "_face_jpeg"):
         setattr(proc, name, getattr(VideoProcessor, name))
@@ -221,6 +222,7 @@ with tempfile.TemporaryDirectory() as tmp:
     proc3.camera_id = "cam_frontal_test"
     proc3.track_identity = {}
     proc3._track_faces = {}
+    proc3._capture_sessions = []
     proc3._last_auto_enroll = {}
     for name in ("_faces_to_people", "_face_jpeg"):
         setattr(proc3, name, getattr(VideoProcessor, name))

@@ -46,6 +46,17 @@ info:
 
     - `/api/faces` (GET/POST/PUT/DELETE) — đăng ký và quản lý hồ sơ khuôn mặt
       quân nhân. Chưa có bản v1; cứ dùng route này.
+    - `POST /api/faces/capture` (`qtht`, form `camera_id` bắt buộc, `seconds`
+      mặc định 20 giây, giới hạn 5–60) — chụp nhanh khuôn mặt từ một camera
+      đang chạy: gom ảnh mặt rõ nhất của người đứng trước camera trong
+      `seconds` giây rồi trả về MỘT mục có cùng hình dạng với từng phần tử của
+      `GET /api/faces/unknown` (`id`, `camera_id`, `track_id`, `first_seen`,
+      `last_seen`, `face_width`, `quality`, `samples`, `tracks`, `source`:
+      `"capture"`), đáp `{"status":"success","data": <mục đó>}`. Dùng NGAY
+      được với `GET /api/faces/unknown/{uid}/image?i=` và
+      `POST /api/faces/{person_id}/samples` (`unknown_id` + `indices`) — không
+      cần API riêng. 404 khi camera không có tiến trình đang chạy; 400 khi
+      không thu được mặt đủ rõ trong suốt phiên.
 
     API cũ bọc kết quả trong `{"status": "success", "data": ...}`; API v1 trả
     thẳng tài nguyên và dùng mã HTTP để báo trạng thái.
@@ -1655,6 +1666,14 @@ components:
         schedule_id: { type: string, nullable: true }
         person_id: { type: string, nullable: true }
         person_name: { type: string, nullable: true }
+        person_military_id:
+          type: string
+          nullable: true
+          description: |
+            Số hiệu (military_id) của `person_id`, nếu đã biết. Sự kiện cũ
+            (bắn trước khi có trường này) được API `GET /api/v1/events` tự vá
+            thêm bằng cách tra `person_id` trong CSDL khuôn mặt hiện tại —
+            không sửa file đã lưu.
         message:
           type: string
           description: Câu mô tả tiếng Việt dựng sẵn, giao diện hiển thị thẳng.

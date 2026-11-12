@@ -520,6 +520,38 @@ async def unknown_face_image(uid: str, i: int = 0, _qtht=Depends(require_qtht)):
     return Response(content=jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
+@app.post("/api/faces/capture")
+async def capture_face(
+    camera_id: str = Form(...),
+    seconds: int = Form(20),
+    _qtht=Depends(require_qtht),
+):
+    """Chụp nhanh khuôn mặt từ camera: gom ảnh mặt rõ nhất của người đang đứng
+    trước camera trong vài chục giây, dùng ngay làm mẫu bổ sung — thay vì phải
+    đợi hệ thống tự bắt được một khung đủ rõ (xem app/video_processor.py
+    ``capture_faces``).
+
+    Kết quả được đưa vào ``face_engine.unknown_log`` CÙNG HÌNH DẠNG với các
+    mục "mặt chưa xác định" khác, nên GET /api/faces/unknown/{uid}/image và
+    POST /api/faces/{person_id}/samples (``unknown_id`` + ``indices``) dùng lại
+    được ngay, không cần API riêng.
+    """
+    seconds = max(5, min(60, seconds))
+    runtime = runtimes.get(camera_id)
+    if runtime is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy camera đang chạy")
+
+    result = await runtime.processor.capture_faces(float(seconds))
+    if result is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Không thu được khuôn mặt đủ rõ, hãy đứng gần/nhìn về phía camera rồi thử lại",
+        )
+    uid = face_engine.unknown_log.add_capture(camera_id, result["track_id"], result["samples"])
+    item = face_engine.unknown_log.get_public(uid)
+    return {"status": "success", "data": item}
+
+
 @app.post("/api/faces/{person_id}/samples")
 async def add_face_samples(
     person_id: str,
@@ -811,7 +843,28 @@ async def get_attendance_logs(unit: Optional[str] = None, shift: Optional[str] =
             f"{l.get('lesson_name', '')} {l.get('schedule_name', '')} "
             f"{l.get('shift', '')} {l.get('unit', '')} {l.get('instructor', '')}").lower()]
 
+    _enrich_attendance_table_military_id(enriched)
     return {"status": "success", "data": enriched}
+
+
+def _enrich_attendance_table_military_id(logs: List[dict]) -> None:
+    """Ghi kèm ``military_id`` cho bảng điểm danh (``log["attendance"]``, mỗi
+    dòng ôm một bản sao ``person``) khi quân nhân đó đăng ký chưa có/thiếu số
+    hiệu LÚC buổi đó diễn ra — tra theo ``person_id`` trong CSDL khuôn mặt
+    HIỆN TẠI, KHÔNG viết lại file ``attendance_logs.json`` đã lưu."""
+    need_ids = {
+        item["person"]["id"] for log in logs for item in (log.get("attendance") or [])
+        if item.get("person", {}).get("id") and not item["person"].get("military_id")
+    }
+    if not need_ids:
+        return
+    lookup = {p["id"]: p.get("military_id") for p in face_engine.get_registered_faces()
+             if p.get("id") in need_ids}
+    for log in logs:
+        for item in log.get("attendance") or []:
+            person = item.get("person") or {}
+            if person.get("id") and not person.get("military_id") and person["id"] in lookup:
+                person["military_id"] = lookup[person["id"]]
 
 
 # ----------------- Roll-call (Điểm danh) Endpoints -----------------
@@ -1106,6 +1159,28 @@ async def websocket_endpoint(websocket: WebSocket):
 # cho giao diện hiện tại trong lúc chuyển tiếp.
 
 
+def _enrich_person_military_id(items: List[dict], field: str = "person_military_id",
+                                id_field: str = "person_id") -> List[dict]:
+    """Ghi kèm số hiệu (``military_id``) cho sự kiện/bản ghi CŨ thiếu trường
+    này, tra theo ``person_id`` trong CSDL khuôn mặt HIỆN TẠI — sửa trên bản
+    trả về cho client, KHÔNG viết lại file đã lưu (events.json/attendance_logs.json).
+    Sự kiện mới đã tự mang theo trường này rồi (xem app/events.py), đây chỉ vá
+    cho dữ liệu bắn trước khi có trường đó.
+    """
+    # Kèm cả từng người trong ``detail.identified`` (biên bản vùng cấm nhiều người)
+    nested = [p for i in items for p in ((i.get("detail") or {}).get("identified") or [])
+              if isinstance(p, dict)]
+    need_ids = {i.get(id_field) for i in items + nested if i.get(id_field) and not i.get(field)}
+    if not need_ids:
+        return items
+    lookup = {p["id"]: p.get("military_id") for p in face_engine.get_registered_faces()
+             if p.get("id") in need_ids}
+    for i in items + nested:
+        if not i.get(field) and i.get(id_field) in lookup:
+            i[field] = lookup[i[id_field]]
+    return items
+
+
 def _find_log(session_id: str) -> Optional[dict]:
     return next((l for l in read_json_list(data_path / "attendance_logs.json")
                  if l.get("id") == session_id), None)
@@ -1146,6 +1221,7 @@ async def v1_list_events(
         occurred_from=occurred_from, occurred_to=occurred_to, zone_rule=zone_rule,
         limit=page_size, offset=(max(1, page) - 1) * page_size,
     )
+    items = _enrich_person_military_id(items)
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
@@ -2180,6 +2256,7 @@ async def v1_system_health():
         clock_info = camera_clock.offset_for(cam_id)
         metrics["clock_offset_s"] = clock_info.get("offset_s") if clock_info else None
         metrics["clock_synced_at"] = clock_info.get("synced_at") if clock_info else None
+        metrics["clock_time_mode"] = clock_info.get("time_mode") if clock_info else None
         cam_metrics[cam_id] = metrics
 
     return {

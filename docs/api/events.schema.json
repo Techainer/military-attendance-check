@@ -55,6 +55,10 @@
         "schedule_id": { "type": ["string", "null"] },
         "person_id": { "type": ["string", "null"] },
         "person_name": { "type": ["string", "null"] },
+        "person_military_id": {
+          "type": ["string", "null"],
+          "description": "Số hiệu (military_id) của person_id, nếu đã biết."
+        },
 
         "message": {
           "type": "string",

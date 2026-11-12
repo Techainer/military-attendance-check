@@ -220,24 +220,35 @@ class UnknownFaceLog:
             for tid in list(item.get("tracks") or [item["track_id"]]):
                 self._by_track.pop((item["camera_id"], tid), None)
 
+    @staticmethod
+    def _public_item(it: dict) -> Dict:
+        q, _emb, _jpg, width = it["samples"][0]
+        return {
+            "id": it["id"], "camera_id": it["camera_id"], "track_id": it["track_id"],
+            "first_seen": datetime.fromtimestamp(it["first_seen"]).isoformat(timespec="seconds"),
+            "last_seen": datetime.fromtimestamp(it["last_seen"]).isoformat(timespec="seconds"),
+            "face_width": int(width), "quality": round(float(q), 2),
+            "samples": len(it["samples"]), "tracks": len(it.get("tracks") or {}),
+            # "camera" (nền tự bắt) | "capture" (cán bộ chủ động chụp qua
+            # POST /api/faces/capture, xem ``add_capture``)
+            "source": it.get("source", "camera"),
+        }
+
     def list(self) -> List[Dict]:
         with self._lock:
             self._evict(time.time())
-            out = []
-            for it in reversed(self._items.values()):
-                q, _emb, _jpg, width = it["samples"][0]
-                out.append({
-                    "id": it["id"], "camera_id": it["camera_id"], "track_id": it["track_id"],
-                    "first_seen": datetime.fromtimestamp(it["first_seen"]).isoformat(timespec="seconds"),
-                    "last_seen": datetime.fromtimestamp(it["last_seen"]).isoformat(timespec="seconds"),
-                    "face_width": int(width), "quality": round(float(q), 2),
-                    "samples": len(it["samples"]), "tracks": len(it.get("tracks") or {}),
-                })
-            return out
+            return [self._public_item(it) for it in reversed(self._items.values())]
 
     def get(self, uid: str) -> Optional[dict]:
         with self._lock:
             return self._items.get(uid)
+
+    def get_public(self, uid: str) -> Optional[Dict]:
+        """Hình dạng công khai (như trong ``list()``) của một mục, cho API trả
+        về sau khi tạo mới (xem ``add_capture``)."""
+        with self._lock:
+            item = self._items.get(uid)
+            return self._public_item(item) if item else None
 
     def pop(self, uid: str) -> Optional[dict]:
         with self._lock:
@@ -245,6 +256,30 @@ class UnknownFaceLog:
             if item:
                 self._drop(uid)
             return item
+
+    def add_capture(self, camera_id: str, track_id: int, samples: list) -> str:
+        """Thêm một mục MỚI cho ảnh mặt THU CHỦ ĐỘNG qua POST /api/faces/capture
+        — tách khỏi mục do luồng nền tạo (``upsert``): không gộp theo track/độ
+        giống (``_find_similar``), vì cán bộ đã CHỦ ĐỘNG chọn đúng người đứng
+        trước camera rồi, không cần đoán/gộp với ai khác. Trả về ``id`` mục mới.
+        """
+        now = time.time()
+        with self._lock:
+            uid = uuid.uuid4().hex[:12]
+            # Không ghi vào self._by_track: mục chủ động không nhận góp thêm từ
+            # vòng nền (upsert/drop_track) — cán bộ vừa chọn ảnh xong thì không
+            # muốn dữ liệu bị trộn lẫn thêm nữa.
+            item = {
+                "id": uid, "camera_id": camera_id, "track_id": int(track_id),
+                "first_seen": now, "last_seen": now,
+                "tracks": {int(track_id): list(samples)},
+                "samples": list(samples), "source": "capture",
+            }
+            item["centroid"] = self._centroid(item["samples"])
+            self._items[uid] = item
+            self._items.move_to_end(uid)
+            self._evict(now)
+            return uid
 
 
 class FaceEngine:
