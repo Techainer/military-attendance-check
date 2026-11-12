@@ -35,6 +35,7 @@ NONCE = "testnonce-horus"
 USER, PASSWORD = "admin", "Pass123!"
 
 _camera_state = {"local_time": "", "time_zone": "CST-8:00:00", "time_mode": "manual"}
+_ntp_state = {"host_name": "", "port_no": "123", "synchronize_interval": "60"}
 _requests = []
 
 
@@ -46,6 +47,21 @@ def _xml_for_state() -> bytes:
         f'<localTime>{_camera_state["local_time"]}</localTime>'
         f'<timeZone>{_camera_state["time_zone"]}</timeZone>'
         '</Time>'
+    ).encode("utf-8")
+
+
+def _xml_for_ntp() -> bytes:
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<NTPServerList xmlns="http://www.hikvision.com/ver20/XMLSchema">'
+        '<NTPServer>'
+        '<id>1</id>'
+        '<addressingFormatType>hostname</addressingFormatType>'
+        f'<hostName>{_ntp_state["host_name"]}</hostName>'
+        f'<portNo>{_ntp_state["port_no"]}</portNo>'
+        f'<synchronizeInterval>{_ntp_state["synchronize_interval"]}</synchronizeInterval>'
+        '</NTPServer>'
+        '</NTPServerList>'
     ).encode("utf-8")
 
 
@@ -81,9 +97,16 @@ class ISAPIHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         _requests.append(("GET", self.path))
-        if self.path != "/ISAPI/System/time" or not self._authed("GET"):
+        if self.path == "/ISAPI/System/time":
+            if not self._authed("GET"):
+                return self._challenge()
+            body = _xml_for_state()
+        elif self.path == "/ISAPI/System/time/ntpServers":
+            if not self._authed("GET"):
+                return self._challenge()
+            body = _xml_for_ntp()
+        else:
             return self._challenge()
-        body = _xml_for_state()
         self.send_response(200)
         self.send_header("Content-Type", "application/xml")
         self.send_header("Content-Length", str(len(body)))
@@ -92,17 +115,23 @@ class ISAPIHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         _requests.append(("PUT", self.path))
-        if self.path != "/ISAPI/System/time" or not self._authed("PUT"):
+        if self.path not in ("/ISAPI/System/time", "/ISAPI/System/time/ntpServers") or not self._authed("PUT"):
             return self._challenge()
         length = int(self.headers.get("Content-Length", "0"))
         payload = self.rfile.read(length).decode("utf-8")
-        # Bóc 3 trường đơn giản, khỏi kéo thêm thư viện XML ở phía "camera giả"
+        # Bóc vài trường đơn giản, khỏi kéo thêm thư viện XML ở phía "camera giả"
         import re
-        for tag, key in (("timeMode", "time_mode"), ("localTime", "local_time"), ("timeZone", "time_zone")):
-            m = re.search(f"<{tag}>(.*?)</{tag}>", payload)
-            if m:
-                _camera_state[key] = m.group(1)
-        body = b""
+        if self.path == "/ISAPI/System/time":
+            for tag, key in (("timeMode", "time_mode"), ("localTime", "local_time"), ("timeZone", "time_zone")):
+                m = re.search(f"<{tag}>(.*?)</{tag}>", payload)
+                if m:
+                    _camera_state[key] = m.group(1)
+        else:
+            for tag, key in (("hostName", "host_name"), ("ipAddress", "host_name"), ("portNo", "port_no"),
+                            ("synchronizeInterval", "synchronize_interval")):
+                m = re.search(f"<{tag}>(.*?)</{tag}>", payload)
+                if m:
+                    _ntp_state[key] = m.group(1)
         self.send_response(200)
         self.send_header("Content-Length", "0")
         self.end_headers()
@@ -161,10 +190,44 @@ check("backup chứa đúng localTime CŨ (trước khi sync)",
       b"+08:00" in backup_files[0].read_bytes())
 
 
+# ================================================================ [2b] ensure_ntp() chỉnh sang NTP
+
+print("\n[2b] ensure_ntp(): trỏ camera vào máy chủ NTP mong muốn, backup cả time + ntpServers")
+tmp_dir_ntp = Path(tempfile.mkdtemp())
+_requests.clear()
+# Camera đang ở chế độ manual, timeZone sai -> cần ghi lại cả hai XML
+_camera_state["time_mode"] = "manual"
+_camera_state["time_zone"] = "CST-8:00:00"
+_ntp_state["host_name"] = ""
+
+ntp_result = camera_clock.ensure_ntp(CAMERA, data_dir=str(tmp_dir_ntp))
+check("GET cả /System/time và /System/time/ntpServers trước khi quyết định ghi",
+      {"/ISAPI/System/time", "/ISAPI/System/time/ntpServers"} <= {p for _, p in _requests}, str(_requests))
+check("đã PUT /System/time/ntpServers với hostName = CAMERA_NTP_SERVER",
+      _ntp_state["host_name"] == camera_clock.CAMERA_NTP_SERVER, str(_ntp_state))
+check("portNo/synchronizeInterval đúng mặc định (123 / 60)",
+      _ntp_state["port_no"] == "123" and _ntp_state["synchronize_interval"] == "60", str(_ntp_state))
+check("đã PUT /System/time với timeMode=NTP, timeZone=CST-7:00:00",
+      _camera_state["time_mode"] == "NTP" and _camera_state["time_zone"] == "CST-7:00:00", str(_camera_state))
+check("time_mode trả về cho caller là NTP (expose qua read())", ntp_result["time_mode"] == "NTP", str(ntp_result))
+
+time_backups = list((tmp_dir_ntp / "camera_backup").glob("cam_isapi_test_time_*.xml"))
+ntp_backups = list((tmp_dir_ntp / "camera_backup").glob("cam_isapi_test_ntpServers_*.xml"))
+check("có backup XML gốc của /System/time trước khi ghi", len(time_backups) == 1, str(time_backups))
+check("có backup XML gốc của /System/time/ntpServers trước khi ghi", len(ntp_backups) == 1, str(ntp_backups))
+
+print("\n[2c] ensure_ntp(): đã đúng cấu hình rồi -> không ghi lại (tránh OSD nhảy qua lại vô ích)")
+_requests.clear()
+again = camera_clock.ensure_ntp(CAMERA, data_dir=str(tmp_dir_ntp))
+check("không PUT gì cả khi cấu hình đã đúng NTP mong muốn",
+      not any(m == "PUT" for m, _ in _requests), str(_requests))
+check("vẫn trả về số liệu đọc được (time_mode=NTP)", again["time_mode"] == "NTP", str(again))
+
+
 # ================================================================ [3] sync_camera_blocking + should_compensate
 
 print("\n[3] sync_camera_blocking(): gắn cờ sync_ok, should_compensate() theo ngưỡng lệch")
-camera_clock.CAMERA_CLOCK_SYNC_ENABLED = True   # mặc định tắt ghi, test bật lên
+camera_clock.CAMERA_CLOCK_MODE = "manual"   # mặc định "off" (không đổi camera thật), test bật lên
 blocking_result = camera_clock.sync_camera_blocking(CAMERA, data_dir=str(tmp_dir))
 check("sync_ok=True khi lệch đã về trong ngưỡng", blocking_result["sync_ok"] is True, str(blocking_result))
 

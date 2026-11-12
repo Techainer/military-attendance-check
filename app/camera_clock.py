@@ -14,6 +14,7 @@ trong thư viện chuẩn và Hikvision ISAPI xác thực digest, khỏi phải 
 
 import asyncio
 import os
+import re
 import threading
 import time
 import urllib.error
@@ -39,12 +40,46 @@ DRIFT_THRESHOLD_S = 2.0
 CAMERA_CLOCK_SYNC_S = float(os.environ.get("CAMERA_CLOCK_SYNC_S", "3600"))
 # Đo độ lệch mỗi bấy nhiêu giây (chỉ đọc, rẻ) — bù lệch luôn theo số đo mới nhất.
 CAMERA_CLOCK_READ_S = float(os.environ.get("CAMERA_CLOCK_READ_S", "60"))
-# Mặc định TẮT ghi: thực tế ở đơn vị có thiết bị khác (đầu ghi/phần mềm quản lý)
-# đẩy giờ sai xuống camera vài phút một lần, app ghi lại chỉ làm OSD nhảy qua
-# lại. Bật (=1) khi đã gỡ nguồn đẩy giờ đó. Nút "Đồng bộ giờ" vẫn ghi được.
-# =0 thì CHỈ đọc, không ghi xuống camera (môi trường demo/không muốn đụng
-# cấu hình camera thật).
+# Biến CŨ: mặc định TẮT ghi, vì thực tế ở đơn vị có thiết bị khác (đầu ghi/phần
+# mềm quản lý) đẩy giờ sai xuống camera vài phút một lần, app ghi lại (kiểu
+# "manual" bên dưới) chỉ làm OSD nhảy qua lại. Vẫn đọc được qua biến này cho
+# cấu hình CŨ chưa khai ``CAMERA_CLOCK_MODE`` (xem ngay dưới).
 CAMERA_CLOCK_SYNC_ENABLED = os.environ.get("CAMERA_CLOCK_SYNC", "0").strip().lower() not in ("0", "false", "")
+
+# Máy chủ NTP app CHỈNH cho camera lúc ``ensure_ntp`` ghi lại (mode "ntp").
+# Mặc định dùng IP (time.google.com = 216.239.35.0): camera ở đơn vị không khai
+# DNS (0.0.0.0) nên NTP theo tên miền báo "no dns", theo IP thì chạy được.
+CAMERA_NTP_SERVER = (os.environ.get("CAMERA_NTP_SERVER") or "216.239.35.0").strip() or "216.239.35.0"
+NTP_PORT = 123
+# 1 phút: đầu ghi NVR ở đơn vị (giờ chậm ~7 phút) đẩy giờ sai xuống camera
+# khoảng 12 phút một lần; NTP 1 phút kéo camera về đúng gần như ngay.
+NTP_SYNCHRONIZE_INTERVAL_MIN = int(os.environ.get("CAMERA_NTP_INTERVAL_MIN", "1"))
+
+
+def _default_clock_mode() -> str:
+    """``CAMERA_CLOCK_MODE`` (ntp | manual | off) quyết định cách vòng nền GHI
+    giờ camera (xem ``sync_camera_blocking``):
+
+    - ``ntp``: trỏ camera vào máy chủ NTP (``ensure_ntp``) — camera tự giữ giờ
+      đúng liên tục, không phải chỉnh tay mỗi lần lệch.
+    - ``manual``: hành vi CŨ, ghi thẳng giờ máy chủ xuống camera (``sync``).
+    - ``off``: chỉ đọc (``read``), không ghi gì — dùng khi có thiết bị khác
+      đang tự quản giờ camera (xem comment ``CAMERA_CLOCK_SYNC_ENABLED``).
+
+    Biến này THẮNG biến cũ ``CAMERA_CLOCK_SYNC`` khi được khai (dù để trống).
+    Không khai cả hai -> ``ntp``. Chỉ khai ``CAMERA_CLOCK_SYNC`` (cấu hình cũ)
+    -> giữ hành vi cũ: "1" = ``manual``, "0" = ``off``.
+    """
+    raw = os.environ.get("CAMERA_CLOCK_MODE")
+    if raw is not None:
+        mode = raw.strip().lower()
+        return mode if mode in ("ntp", "manual", "off") else "ntp"
+    if os.environ.get("CAMERA_CLOCK_SYNC") is None:
+        return "ntp"
+    return "manual" if CAMERA_CLOCK_SYNC_ENABLED else "off"
+
+
+CAMERA_CLOCK_MODE = _default_clock_mode()
 
 _NS = {"isapi": "http://www.hikvision.com/ver20/XMLSchema"}
 
@@ -212,6 +247,117 @@ def sync(camera: dict, data_dir: str = "data") -> dict:
     return read(camera)
 
 
+def _parse_ntp_xml(xml_bytes: bytes) -> dict:
+    """``<NTPServerList><NTPServer><hostName>time.google.com</hostName>
+    <portNo>123</portNo><synchronizeInterval>60</synchronizeInterval>
+    </NTPServer></NTPServerList>`` -> các trường đã tách (lấy máy chủ ĐẦU tiên,
+    dòng camera dân dụng chỉ có một)."""
+    root = ET.fromstring(xml_bytes)
+    node = root.find("isapi:NTPServer", _NS)
+    if node is None:
+        node = root.find("NTPServer")
+    if node is None:
+        node = root
+
+    def _find(tag):
+        el = node.find(f"isapi:{tag}", _NS)
+        if el is None:
+            el = node.find(tag)
+        return el.text if el is not None else None
+
+    return {
+        "host_name": _find("hostName") or _find("ipAddress"),
+        "port_no": _find("portNo"),
+        "synchronize_interval": _find("synchronizeInterval"),
+    }
+
+
+def _ntp_servers_payload(host_name: str) -> bytes:
+    if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", host_name):
+        address = ('<addressingFormatType>ipaddress</addressingFormatType>'
+                   f'<ipAddress>{host_name}</ipAddress>')
+    else:
+        address = ('<addressingFormatType>hostname</addressingFormatType>'
+                   f'<hostName>{host_name}</hostName>')
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<NTPServerList xmlns="http://www.hikvision.com/ver20/XMLSchema">'
+        '<NTPServer>'
+        '<id>1</id>'
+        + address
+        + f'<portNo>{NTP_PORT}</portNo>'
+        f'<synchronizeInterval>{NTP_SYNCHRONIZE_INTERVAL_MIN}</synchronizeInterval>'
+        '</NTPServer>'
+        '</NTPServerList>'
+    ).encode("utf-8")
+
+
+def ensure_ntp(camera: dict, data_dir: str = "data") -> dict:
+    """Trỏ camera dùng NTP (``CAMERA_NTP_SERVER``) để tự giữ giờ đúng liên tục,
+    thay vì phải chỉnh tay mỗi lần lệch (xem ``sync``, mode "manual").
+
+    Chỉ ĐỌC rồi GHI khi cấu hình THỰC SỰ khác mong muốn (``timeMode`` chưa là
+    NTP, hoặc máy chủ/múi giờ khác) — ghi lại dù không cần chỉ làm OSD nhảy qua
+    lại vô ích, giống tinh thần ``sync`` cũ. Backup CẢ HAI XML (``time`` và
+    ``ntpServers``) trước khi ghi, một bản mỗi ngày.
+    """
+    creds = _creds_from_source(camera)
+    if creds is None:
+        raise ValueError("Camera chưa có source_uri rtsp kèm user:mật khẩu để ghi ISAPI")
+    host, user, password = creds
+    port = int(camera.get("isapi_port") or ISAPI_PORT)
+    opener = _opener(host, port, user, password)
+    time_url = _isapi_url(host, port, "/ISAPI/System/time")
+    ntp_url = _isapi_url(host, port, "/ISAPI/System/time/ntpServers")
+
+    with opener.open(urllib.request.Request(time_url), timeout=HTTP_TIMEOUT_S) as resp:
+        time_xml = resp.read()
+    with opener.open(urllib.request.Request(ntp_url), timeout=HTTP_TIMEOUT_S) as resp:
+        ntp_xml = resp.read()
+
+    time_info = _parse_time_xml(time_xml)
+    ntp_info = _parse_ntp_xml(ntp_xml)
+    needs_write = (
+        (time_info.get("time_mode") or "").upper() != "NTP"
+        or (ntp_info.get("host_name") or "") != CAMERA_NTP_SERVER
+        or (time_info.get("time_zone") or "") != "CST-7:00:00"
+    )
+    if not needs_write:
+        return read(camera)
+
+    backup_dir = Path(data_dir) / "camera_backup"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    day = clock.now().strftime("%Y%m%d")
+    # Cùng tên file backup giờ với ``sync()`` -> dù vòng nền đổi mode qua lại,
+    # chỉ giữ đúng MỘT bản gốc mỗi ngày cho ``<Time>``.
+    time_backup = backup_dir / f"{camera.get('id', 'cam')}_time_{day}.xml"
+    ntp_backup = backup_dir / f"{camera.get('id', 'cam')}_ntpServers_{day}.xml"
+    if not time_backup.exists():
+        time_backup.write_bytes(time_xml)
+    if not ntp_backup.exists():
+        ntp_backup.write_bytes(ntp_xml)
+
+    ntp_put = urllib.request.Request(
+        ntp_url, data=_ntp_servers_payload(CAMERA_NTP_SERVER), method="PUT",
+        headers={"Content-Type": "application/xml"})
+    with opener.open(ntp_put, timeout=HTTP_TIMEOUT_S) as resp:
+        resp.read()
+
+    time_payload = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Time xmlns="http://www.hikvision.com/ver20/XMLSchema">'
+        '<timeMode>NTP</timeMode>'
+        '<timeZone>CST-7:00:00</timeZone>'
+        '</Time>'
+    ).encode("utf-8")
+    time_put = urllib.request.Request(time_url, data=time_payload, method="PUT",
+                                      headers={"Content-Type": "application/xml"})
+    with opener.open(time_put, timeout=HTTP_TIMEOUT_S) as resp:
+        resp.read()
+
+    return read(camera)
+
+
 # ---------------------------------------------------------------- vòng nền
 
 def _is_candidate(camera: dict) -> bool:
@@ -221,26 +367,37 @@ def _is_candidate(camera: dict) -> bool:
 
 
 def sync_camera_blocking(camera: dict, data_dir: str = "data") -> dict:
-    """Đọc (và ghi, nếu ``CAMERA_CLOCK_SYNC_ENABLED``) giờ một camera, trả về
-    số liệu kèm ``sync_ok``/``synced_at``. HÀM ĐỒNG BỘ — gọi qua
-    ``asyncio.to_thread``."""
-    result = sync(camera, data_dir=data_dir) if CAMERA_CLOCK_SYNC_ENABLED else read(camera)
+    """Đọc (và ghi, theo ``CAMERA_CLOCK_MODE``) giờ một camera, trả về số liệu
+    kèm ``sync_ok``/``synced_at``. HÀM ĐỒNG BỘ — gọi qua ``asyncio.to_thread``.
+
+    - ``ntp``: ``ensure_ntp`` (trỏ camera vào máy chủ NTP).
+    - ``manual``: ``sync`` (ghi thẳng giờ máy chủ, hành vi cũ).
+    - ``off``: chỉ ``read``.
+    """
+    if CAMERA_CLOCK_MODE == "ntp":
+        result = ensure_ntp(camera, data_dir=data_dir)
+    elif CAMERA_CLOCK_MODE == "manual":
+        result = sync(camera, data_dir=data_dir)
+    else:
+        result = read(camera)
     offset_s = result.get("offset_s")
     result["sync_ok"] = bool(
-        CAMERA_CLOCK_SYNC_ENABLED and offset_s is not None and abs(offset_s) <= DRIFT_THRESHOLD_S
+        CAMERA_CLOCK_MODE != "off" and offset_s is not None and abs(offset_s) <= DRIFT_THRESHOLD_S
     )
     result["synced_at"] = clock.iso()
     return result
 
 
 async def start_background(get_cameras, data_dir: str = "data") -> None:
-    """Đo (và chỉnh) giờ mọi camera lúc service khởi động, lặp lại mỗi
-    ``CAMERA_CLOCK_SYNC_S`` giây. Camera đọc/ghi lỗi (mất mạng, sai mật
-    khẩu...) thì GIỮ offset đo được gần nhất trong ``_state`` — chỉ huy cần
-    biết độ lệch cuối cùng biết được, thà cũ còn hơn mất trắng.
+    """Đo (và chỉnh, theo ``CAMERA_CLOCK_MODE``) giờ mọi camera lúc service
+    khởi động, lặp lại mỗi ``CAMERA_CLOCK_SYNC_S`` giây. Camera đọc/ghi lỗi
+    (mất mạng, sai mật khẩu...) thì GIỮ offset đo được gần nhất trong
+    ``_state`` — chỉ huy cần biết độ lệch cuối cùng biết được, thà cũ còn hơn
+    mất trắng.
     """
-    print(f"[CameraClock] Khởi động, chạy mỗi {CAMERA_CLOCK_SYNC_S:.0f}s"
-          + ("" if CAMERA_CLOCK_SYNC_ENABLED else " (chỉ đọc, không ghi lại camera)"))
+    print(f"[CameraClock] Khởi động mode={CAMERA_CLOCK_MODE}, đo mỗi {CAMERA_CLOCK_READ_S:.0f}s"
+          + (f", chỉnh mỗi {CAMERA_CLOCK_SYNC_S:.0f}s" if CAMERA_CLOCK_MODE != "off"
+             else " (chỉ đọc, không ghi lại camera)"))
     last_sync: Dict[str, float] = {}
     while True:
         for camera in get_cameras():
@@ -249,7 +406,7 @@ async def start_background(get_cameras, data_dir: str = "data") -> None:
                 continue
             try:
                 now_mono = time.monotonic()
-                if CAMERA_CLOCK_SYNC_ENABLED and now_mono - last_sync.get(camera_id, -1e9) >= CAMERA_CLOCK_SYNC_S:
+                if CAMERA_CLOCK_MODE != "off" and now_mono - last_sync.get(camera_id, -1e9) >= CAMERA_CLOCK_SYNC_S:
                     last_sync[camera_id] = now_mono
                     result = await asyncio.to_thread(sync_camera_blocking, camera, data_dir)
                 else:

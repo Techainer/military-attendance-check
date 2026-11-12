@@ -130,6 +130,35 @@ check("biên bản có đường dẫn ảnh bằng chứng", bool(manual_check.
 check("biên bản có 'evidence_captured_at' dạng ISO",
       bool(manual_check.get("evidence_captured_at")), str(manual_check))
 
+# -------------------------------------------- [5] bug cũ: tail bị dịch theo lệch giờ camera
+print("\n[5] Cửa sổ 'cuối' tính theo giờ MÁY CHỦ, không bị dịch theo lệch giờ camera")
+# Bug cũ: AttendanceSession.record() dịch mốc cuối cửa sổ theo camera_offset_s.
+# Camera CHẬM hơn máy chủ (offset âm) -> mốc cuối bị đẩy ra SAU khi phiên đã
+# chốt -> khung ở đoạn cuối cửa sổ THẬT không bao giờ được chọn làm bằng chứng.
+import app.camera_clock as camera_clock
+
+_orig_should_compensate = camera_clock.should_compensate
+camera_clock.should_compensate = lambda camera_id: -200.0  # camera chậm hơn máy chủ 200s
+try:
+    tmp_dir3 = Path(tempfile.mkdtemp())
+    mgr3 = AttendanceManager(data_dir=str(tmp_dir3), face_engine=_FakeFaceEngine(), camera_id="cam_test")
+    sched3 = {"id": "manual_evt2", "name": "Đột xuất", "unit": "Tất cả đơn vị"}
+    session3 = mgr3.open_session(dict(sched3), start, window_mins=WINDOW_MINS, phase="manual")
+    tail_start3 = session3.ends_at - timedelta(seconds=ATTENDANCE_EVIDENCE_TAIL_S)
+
+    frame_early5 = np.full((10, 10, 3), 3, dtype=np.uint8)
+    frame_tail5 = np.full((10, 10, 3), 4, dtype=np.uint8)
+    # Khung đầu, chất lượng CAO nhưng không ở đoạn cuối
+    mgr3.record([], frame=frame_early5, quality=100, now=start + timedelta(seconds=5))
+    # Khung ở đoạn CUỐI cửa sổ thật (theo giờ máy chủ), chất lượng thấp hơn
+    mgr3.record([], frame=frame_tail5, quality=1, now=tail_start3 + timedelta(seconds=1))
+
+    check("ảnh bằng chứng vẫn lấy khung ĐOẠN CUỐI thật dù camera lệch giờ nặng "
+          "(cửa sổ không bị dịch theo camera_offset_s)",
+          np.array_equal(session3.final_evidence_frame, frame_tail5))
+finally:
+    camera_clock.should_compensate = _orig_should_compensate
+
 # ---------------------------------------------------------------- kết luận
 print()
 if failures:

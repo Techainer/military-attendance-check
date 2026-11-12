@@ -82,8 +82,19 @@ def summarize_log(log: dict) -> dict:
 
 
 def person_label(person: dict) -> str:
-    """Chuỗi hiển thị 'cấp bậc + họ tên' của một quân nhân."""
-    return f"{person.get('rank', '')} {person.get('name', '')}".strip() or person.get("military_id", "?")
+    """Chuỗi hiển thị 'cấp bậc + họ tên (số hiệu)' của một quân nhân.
+
+    Kèm số hiệu (``military_id``) trong ngoặc khi có — chỉ huy cần phân biệt
+    hai quân nhân trùng tên; bỏ phần nào trống (vd. chưa khai cấp bậc) thay vì
+    để lại khoảng trắng/ngoặc rỗng xấu.
+    """
+    rank = (person.get("rank") or "").strip()
+    name = (person.get("name") or "").strip()
+    military_id = (person.get("military_id") or "").strip()
+    base = f"{rank} {name}".strip()
+    if military_id:
+        return f"{base} ({military_id})" if base else f"({military_id})"
+    return base or "?"
 
 
 def _tolerance_mins(schedule: dict, field: str, default: int = 5) -> int:
@@ -278,7 +289,6 @@ class AttendanceSession:
         window_mins: int,
         phase: str = PHASE_MANUAL,
         ends_at: Optional[datetime] = None,
-        camera_offset_s: float = 0.0,
     ):
         self.schedule = schedule
         self.roster = roster
@@ -286,11 +296,6 @@ class AttendanceSession:
         self.window_mins = window_mins
         self.phase = phase
         self.ends_at = ends_at or (started_at + timedelta(minutes=window_mins))
-        # Lệch giờ camera − máy chủ (giây) đo lúc MỞ phiên, chỉ khác 0 khi camera
-        # lệch giờ thật mà chưa tự chỉnh được (xem app/camera_clock.py
-        # should_compensate) — dùng để dịch cửa sổ chụp ảnh bằng chứng cho khớp
-        # đúng mốc cuối giờ THEO GIỜ CAMERA, không phải giờ máy chủ.
-        self.camera_offset_s = camera_offset_s
         # person_id -> {"hits", "first", "last", "frame_seqs"} — thời điểm/số thứ
         # tự khung hình để lọc nhận nhầm dồn dập, không chỉ đếm số lượt quét thô
         self.sightings: Dict[str, dict] = {}
@@ -345,10 +350,15 @@ class AttendanceSession:
             # Không có 'now' (hành vi cũ, xem docstring) -> không phân biệt được
             # đoạn cuối cửa sổ, coi mọi khung đều "ở cuối" để giữ nguyên hành vi
             # trước đây (ảnh bằng chứng = khung tốt nhất, bất kể lúc nào).
-            # ``camera_offset_s`` != 0: dịch mốc cuối cửa sổ theo giờ SERVER sao
-            # cho nó khớp đúng cuối giờ THEO GIỜ CAMERA (xem __init__).
-            camera_ends_at = self.ends_at - timedelta(seconds=self.camera_offset_s)
-            in_tail = now is None or now >= camera_ends_at - timedelta(seconds=ATTENDANCE_EVIDENCE_TAIL_S)
+            #
+            # Cửa sổ "cuối" tính theo ĐÚNG giờ máy chủ (``self.ends_at``, vốn đã
+            # là giờ máy chủ thật) — KHÔNG dịch theo lệch giờ camera nữa (bug cũ:
+            # camera CHẬM hơn máy chủ -> ``camera_offset_s`` âm -> mốc cuối bị
+            # ĐẨY RA SAU khi phiên đã chốt, cửa sổ tail không bao giờ khớp được
+            # khung nào, ảnh bằng chứng luôn rơi về khung tốt nhất toàn cửa sổ).
+            # Giờ hiển thị trên camera (OSD) vẫn được ghi riêng vào nhãn ảnh lúc
+            # LƯU (xem AttendanceManager._save_evidence), không cần dịch ở đây.
+            in_tail = now is None or now >= self.ends_at - timedelta(seconds=ATTENDANCE_EVIDENCE_TAIL_S)
             if in_tail and quality > self.tail_evidence_quality:
                 self.tail_evidence_quality = quality
                 self.tail_evidence_frame = frame.copy()
@@ -731,9 +741,7 @@ class AttendanceManager:
     ) -> AttendanceSession:
         mins = window_mins if (window_mins and window_mins > 0) else _schedule_window_mins(schedule)
         roster = self._roster_for(schedule.get("unit"))
-        offset_s = camera_clock.should_compensate(self.camera_id) or 0.0
-        self.session = AttendanceSession(schedule, roster, now, mins, phase=phase, ends_at=ends_at,
-                                         camera_offset_s=offset_s)
+        self.session = AttendanceSession(schedule, roster, now, mins, phase=phase, ends_at=ends_at)
         print(f"[Attendance] Mở phiên điểm danh {self.session.phase_label.lower()} "
               f"'{schedule.get('name', 'thủ công')}' ({mins} phút, {len(roster)} quân nhân trong danh sách)")
         return self.session
